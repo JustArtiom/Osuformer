@@ -1,7 +1,7 @@
 # BMG!osu - Beatmap Generator For Osu
 
-> [!WARNING]  
-> This is the development branch and it might have bugs or even unfinished code. Please check the releases or main branch for more stable version
+<!-- > [!WARNING]
+> This is the development branch and it might have bugs or even unfinished code. Please check the releases or main branch for more stable version -->
 
 BMG!osu is a python project that lets you train and use models different models that help for creating/generating !osu beatmaps.
 
