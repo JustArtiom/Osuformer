@@ -1,10 +1,14 @@
 from argparse import ArgumentParser
 from dataclasses import dataclass
+from dotenv import load_dotenv
+import os
 
+if not load_dotenv(): 
+    print("[ENV] WARN: No envronment variables file has been found")
 
 @dataclass
-class Args:
-    train_path: str
+class TrainArgs:
+    dataset_path: str
     out_path: str
     epochs: int
     batch_size: int
@@ -18,7 +22,7 @@ class Args:
     frame_ms: int
 
 
-def parse() -> Args:
+def train() -> TrainArgs:
     parser = ArgumentParser(
         prog="osu_bmg",
         description="Osu Beatmap Generator AI Training Script",
@@ -26,37 +30,37 @@ def parse() -> Args:
     )
 
     parser.add_argument(
-        '-tp', '--train-path',
-        help="Path to the training folder",
-        default="train",
+        '-p', '--dataset-path',
+        help="Path to the dataset folder",
+        default=(os.getenv("DATASET_PATH") or "dataset"),
         type=str
     )
 
     parser.add_argument(
         '-op', '--out-path',
         help="The path where the files are going to be emitted",
-        default="out",
+        default=(os.getenv("TRAIN_OUTPUT_PATH") or "models"),
         type=str
     )
 
     parser.add_argument(
         '-e', '--epochs',
         help="Number of training epochs",
-        default=50,
+        default=int(os.getenv("EPOCS") or 50),
         type=int
     )
 
     parser.add_argument(
         '-bs', '--batch-size',
         help="Batch size for training",
-        default=32,
+        default=int(os.getenv("BATCH_SIZE") or 32),
         type=int
     )
 
     parser.add_argument(
         '-lr', '--learning-rate',
         help="Learning rate for optimization",
-        default=0.001,
+        default=float(os.getenv("LEARNING_RATE") or 0.001),
         type=float
     )
 
@@ -64,13 +68,13 @@ def parse() -> Args:
         '-d', '--device',
         help="Device to use for training (cpu or cuda)",
         choices=['cpu', 'cuda'],
-        default='cuda'
+        default=(os.getenv("DEVICE") or 'cuda')
     )
 
     parser.add_argument(
         '-mp', '--model-path',
         help="Path to a pre-trained model to continue training",
-        default=None,
+        default=(os.getenv("MODEL_PATH") or None),
         type=str
     )
 
@@ -78,13 +82,13 @@ def parse() -> Args:
         '-ll', '--log-level',
         help="Logging level (debug, info, warning, error, critical)",
         choices=['debug', 'info', 'warning', 'error', 'critical'],
-        default="info"
+        default=(os.getenv("LOG_LEVEL") or "info")
     )
 
     parser.add_argument(
         '-s', '--seed',
         help="Random seed for reproducibility",
-        default=42,
+        default=int(os.getenv("SEED") or 42),
         type=int
     )
 
@@ -92,28 +96,28 @@ def parse() -> Args:
     parser.add_argument(
         '-sr', '--sample-rate',
         help="Audio sample rate (Hz)",
-        default=22050,
+        default=int(os.getenv("SAMPLE_RATE") or 22050),
         type=int
     )
 
     parser.add_argument(
         '-nm', '--n-mels',
         help="Number of Mel filters used in feature extraction",
-        default=128,
+        default=int(os.getenv("N_MELS") or 128),
         type=int
     )
 
     parser.add_argument(
         '-fm', '--frame-ms',
         help="Duration of each training sample in milliseconds",
-        default=1000,
+        default=int(os.getenv("FRAME_MS") or 1000),
         type=int
     )
 
     parsed_args, _ = parser.parse_known_args()
 
-    return Args(
-        train_path=parsed_args.train_path,
+    return TrainArgs(
+        dataset_path=parsed_args.dataset_path,
         out_path=parsed_args.out_path,
         epochs=parsed_args.epochs,
         batch_size=parsed_args.batch_size,
@@ -127,7 +131,44 @@ def parse() -> Args:
         frame_ms=parsed_args.frame_ms
     )
 
+@dataclass
+class GenerateTraindataArgs:
+    songs_path: str
+    api_key: str
+    out_path: str
 
-if __name__ == "__main__":
-    args = parse()
-    print(args)
+
+def generate_dataset() -> GenerateTraindataArgs:
+    parser = ArgumentParser(
+        prog="osu_bmg",
+        description="Osu dataset generator. Takes in a osu songs folder and outputs a dataset",
+        epilog="© 2024 Artiom Cebotari. All rights reserved"
+    )
+
+    parser.add_argument(
+        '-sp', '--songs-path',
+        help="Path to the osu songs folder",
+        default=os.getenv("OSU_SONGS_PATH"),
+        type=str
+    )
+
+    parser.add_argument(
+        '-t', "--token",
+        help="Your osu v1 api token which you can get from https://osu.ppy.sh/p/api",
+        default=os.getenv("OSU_API_KEY"),
+        type=str
+    )
+
+    parser.add_argument(
+        '-o', '--out',
+        help="Output path for the dataset",
+        default=(os.getenv("DATASET_OUTPUT_PATH") or "dataset")
+    )
+
+    parsed_args, _ = parser.parse_known_args()
+
+    return GenerateTraindataArgs(
+        songs_path=parsed_args.songs_path,
+        api_key=parsed_args.token,
+        out_path=parsed_args.out
+    )

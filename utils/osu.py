@@ -1,4 +1,5 @@
 from . import tools
+from typing import Union
 
 class General:
     AudioFilename: str
@@ -143,7 +144,7 @@ class Osu:
     Metadata = Metadata()
     Difficulty = Difficulty()
     TimingPoints = []
-    HitObjects: list[Slider | Circle | Spinner] = []
+    HitObjects: list[Union[Slider, Circle, Spinner]] = []
 
     def __init__(self, file_data: str):
         current_header = ""

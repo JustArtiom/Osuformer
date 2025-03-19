@@ -1,9 +1,9 @@
 import tensorflow as tf
 import numpy as np
-from utils import args, dataset
+from utils import args
+from utils.dataset import Dataset
 
-config = args.parse()
-print(config)
+config = args.train()
 
 np.random.seed(config.seed)
 tf.random.set_seed(config.seed)
@@ -15,5 +15,5 @@ else:
     print("Using CPU for training...")
     device = "/CPU:0"
 
-config = args.parse()
-osu_maps, audio_maps = dataset.load(config)
+dataset = Dataset(config)
+osu_maps, audio_maps = dataset.load()

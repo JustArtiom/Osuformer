@@ -5,9 +5,8 @@ from .osu import Osu
 from . import audio, args
 
 class Dataset:
-    def __init__(self, config: args.Args):
+    def __init__(self, config: args.TrainArgs):
         self.config = config
-        
 
     def find_file_type(self, files: list[str], fileType: str) -> str:
         for file in files:
@@ -16,6 +15,9 @@ class Dataset:
         return None
 
     def loop_trough_train_files(self, train_path, cb: Callable[[str, str], None]) -> None:
+        if not os.path.exists(train_path):
+            raise Exception("No dataset was found in the path "+train_path)
+
         folders = [item for item in os.listdir(
             train_path) if os.path.isdir(os.path.join(train_path, item))]
         
@@ -42,7 +44,7 @@ class Dataset:
         return osus, mp3s
 
     def load(self):
-        osus, mp3s = self.getFiles(self.config.train_path)
+        osus, mp3s = self.getFiles(self.config.dataset_path)
 
         osu_maps: list[Osu] = []
         audio_maps: list[np.ndarray] = []
