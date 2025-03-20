@@ -8,6 +8,11 @@ config = args.generate_dataset()
 OSU_SONGS_PATH = config.songs_path
 OSU_API_KEY = config.api_key
 OUTPUT = config.out_path
+MIN = config.min
+MAX = config.max
+MINUR = config.min_ur
+
+print(config)
 
 if not OSU_API_KEY: raise Exception("You do not have a osu api key set.")
 
@@ -74,6 +79,9 @@ def doMap(mapid: int):
 
     for diff in diffs:
       if diff["mode"] != "0": continue
+      dr = float(diff["difficultyrating"])
+      ur = float(diff["rating"])
+      if dr < MIN or dr > MAX or ur < MINUR: continue
       version = diff["version"]
       bmid = diff["beatmap_id"]
       if(not savedaud):

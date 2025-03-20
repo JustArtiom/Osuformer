@@ -136,6 +136,9 @@ class GenerateTraindataArgs:
     songs_path: str
     api_key: str
     out_path: str
+    min: float
+    max: float
+    min_ur: float
 
 
 def generate_dataset() -> GenerateTraindataArgs:
@@ -162,7 +165,29 @@ def generate_dataset() -> GenerateTraindataArgs:
     parser.add_argument(
         '-o', '--out',
         help="Output path for the dataset",
-        default=(os.getenv("DATASET_OUTPUT_PATH") or "dataset")
+        default=(os.getenv("DATASET_OUTPUT_PATH") or "dataset"),
+        type=str
+    )
+
+    parser.add_argument(
+        '-min', '--minimum',
+        help="Minimum star rating for maps to be filtered out",
+        default=float(os.getenv("DATASET_STAR_RATING_MIN") or 0),
+        type=float
+    )
+
+    parser.add_argument(
+        '-max', '--maximum',
+        help="Maximum star rating for maps to be filtered out",
+        default=float(os.getenv("DATASET_STAR_RATING_MAX") or 999),
+        type=float
+    )
+
+    parser.add_argument(
+        '-minur', '--minimum-user-rating',
+        help="The minimum user rating feedback for a map diffuclty",
+        default=float(os.getenv("DATASET_USER_RATING_MIN") or 0),
+        type=float
     )
 
     parsed_args, _ = parser.parse_known_args()
@@ -170,5 +195,8 @@ def generate_dataset() -> GenerateTraindataArgs:
     return GenerateTraindataArgs(
         songs_path=parsed_args.songs_path,
         api_key=parsed_args.token,
-        out_path=parsed_args.out
+        out_path=parsed_args.out,
+        min=parsed_args.minimum,
+        max=parsed_args.maximum,
+        min_ur=parsed_args.minimum_user_rating
     )

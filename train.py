@@ -4,6 +4,7 @@ from utils import args
 from utils.dataset import Dataset
 
 config = args.train()
+dataset = Dataset(config)
 
 np.random.seed(config.seed)
 tf.random.set_seed(config.seed)
@@ -15,5 +16,10 @@ else:
     print("Using CPU for training...")
     device = "/CPU:0"
 
-dataset = Dataset(config)
-osu_maps, audio_maps = dataset.load()
+dataset.read_dataset_info()
+dataset.filter_dataset_info()
+dataset.parse_dataset_info()
+print(dataset.dataset_info_df)
+
+
+
