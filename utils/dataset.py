@@ -32,12 +32,15 @@ class Dataset:
         self.dataset_info_df = pd.read_csv(self.info_path)
         return self.dataset_info_df
         
-    def filter_dataset_info(self):
-        self.dataset_info_df = self.dataset_info_df[
-            (self.dataset_info_df["DIFFICULTY RATING"] > self.config.sr_min) &
-            (self.dataset_info_df["DIFFICULTY RATING"] < self.config.sr_max) &
-            (self.dataset_info_df["USER RATING"] > self.config.ur_min)
+    def filter_dataset_info(self, df: pd.DataFrame = None):
+        df = df or self.dataset_info_df
+        self.dataset_info_df = df[
+            (df["DIFFICULTY RATING"] > self.config.sr_min) &
+            (df["DIFFICULTY RATING"] < self.config.sr_max) &
+            (df["USER RATING"] > self.config.ur_min)
         ]
+
+        return self.dataset_info_df
 
     def parse_dataset_info(self, df: pd.DataFrame = None):
         df = df or self.dataset_info_df
