@@ -4,7 +4,6 @@ from utils import args
 from utils.dataset import Dataset
 
 config = args.train()
-print(config)
 dataset = Dataset(config)
 
 np.random.seed(config.seed)
