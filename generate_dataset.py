@@ -12,8 +12,6 @@ MIN = config.min
 MAX = config.max
 MINUR = config.min_ur
 
-print(config)
-
 if not OSU_API_KEY: raise Exception("You do not have a osu api key set.")
 
 folders = [f for f in os.listdir(OSU_SONGS_PATH) if os.path.isdir(os.path.join(OSU_SONGS_PATH, f))][::-1]

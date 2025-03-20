@@ -33,7 +33,11 @@ class Dataset:
         return self.dataset_info_df
         
     def filter_dataset_info(self):
-        pass
+        self.dataset_info_df = self.dataset_info_df[
+            (self.dataset_info_df["DIFFICULTY RATING"] > self.config.sr_min) &
+            (self.dataset_info_df["DIFFICULTY RATING"] < self.config.sr_max) &
+            (self.dataset_info_df["USER RATING"] > self.config.ur_min)
+        ]
 
     def parse_dataset_info(self, df: pd.DataFrame = None):
         df = df or self.dataset_info_df

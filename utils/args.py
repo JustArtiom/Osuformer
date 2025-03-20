@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 import os
 
-if not load_dotenv(): 
+if not load_dotenv(override=True): 
     print("[ENV] WARN: No envronment variables file has been found")
 
 @dataclass
@@ -20,6 +20,9 @@ class TrainArgs:
     sample_rate: int
     n_mels: int
     frame_ms: int
+    sr_min: float
+    sr_max: float
+    ur_min: float
 
 
 def train() -> TrainArgs:
@@ -114,7 +117,31 @@ def train() -> TrainArgs:
         type=int
     )
 
+    parser.add_argument(
+        '-min', '--minimum',
+        help="Minimum star rating for maps to be filtered out",
+        default=float(os.getenv("DATASET_STAR_RATING_MIN") or 0),
+        type=float
+    )
+
+    parser.add_argument(
+        '-max', '--maximum',
+        help="Maximum star rating for maps to be filtered out",
+        default=float(os.getenv("DATASET_STAR_RATING_MAX") or 999),
+        type=float
+    )
+
+
+    parser.add_argument(
+        '-minur', '--minimum-user-rating',
+        help="The minimum user rating feedback for a map diffuclty",
+        default=float(os.getenv("DATASET_USER_RATING_MIN") or 0),
+        type=float
+    )
+
     parsed_args, _ = parser.parse_known_args()
+
+    print(parsed_args)
 
     return TrainArgs(
         dataset_path=parsed_args.dataset_path,
@@ -128,7 +155,10 @@ def train() -> TrainArgs:
         seed=parsed_args.seed,
         sample_rate=parsed_args.sample_rate,
         n_mels=parsed_args.n_mels,
-        frame_ms=parsed_args.frame_ms
+        frame_ms=parsed_args.frame_ms,
+        sr_min=parsed_args.minimum,
+        sr_max=parsed_args.maximum,
+        ur_min=parsed_args.minimum_user_rating,
     )
 
 @dataclass
