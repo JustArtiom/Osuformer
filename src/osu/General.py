@@ -48,8 +48,6 @@ class General:
             setattr(self, attr, type(current_value)(v))
           except (TypeError, ValueError):
             setattr(self, attr, v)
-        else:
-          raise AttributeError(f"Unknown attribute '{k}' for General")
 
   def key_value(self, raw: str) -> dict[str, str]:
     rows = raw.splitlines()
@@ -68,8 +66,7 @@ class General:
     return key.lower()
 
   def __str__(self) -> str:
-    return f"[General]\n" \
-      f"AudioFilename: {self.audio_filename}\n" \
+    return f"AudioFilename: {self.audio_filename}\n" \
       f"AudioLeadIn: {self.audio_lead_in}\n" \
       f"PreviewTime: {self.preview_time}\n" \
       f"Countdown: {self.countdown}\n" \
