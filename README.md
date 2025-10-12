@@ -5,4 +5,4 @@
 
 osu!BMG is a python project that lets you train and use models different models that help for creating/generating osu! beatmaps.
 
-Py: 3.9
+Py: 3.9+
