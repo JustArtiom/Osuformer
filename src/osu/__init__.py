@@ -2,7 +2,7 @@ from .general import General
 from .timing_point import TimingPoint
 from .hit_sample import HitSample
 from .hit_object import Circle, Slider, Spinner, HitObject, SliderObjectParams, SpinnerObjectParams
-from .parser import Beatmap
+from .beatmap import Beatmap
 
 
 __all__ = [
