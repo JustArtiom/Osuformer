@@ -254,7 +254,6 @@ def _generate_difficulty_objects(beatmap: Beatmap, radius: float, hit_window_gre
 
 
 def calculate_performance(
-    beatmap: Beatmap,
     difficulty: DifficultyAttributes,
     *,
     accuracy: float = 1.0,
