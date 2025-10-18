@@ -1,4 +1,5 @@
-from .general import General
+from .head_general import General
+from .head_difficulty import Difficulty
 from .timing_point import TimingPoint
 from .hit_object import Circle, Slider, Spinner, HitObject
 from typing import Optional, Union, List
@@ -27,6 +28,8 @@ class Beatmap():
       for section, content in self.split_sections(raw).items():
         if section == "General":
           self.general = General(raw=content)
+        if section == "Difficulty":
+          self.difficulty = Difficulty(raw=content)
         elif section == "TimingPoints":
           self.timing_points = [TimingPoint(raw=line) for line in content.splitlines()]
         elif section == "HitObjects":
@@ -72,7 +75,7 @@ class Beatmap():
       previous_tp = tp
 
     return previous_tp
-  
+
   def get_bpm_at(self, time: int) -> float:
     tp = self.get_previous_timing_point(time, filter=lambda t: t.uninherited == 1)
     if tp:
@@ -80,7 +83,7 @@ class Beatmap():
     return 0.0
   
   def get_slider_velocity_multiplier_at(self, time: int) -> float:
-    tp = self.get_previous_timing_point(time)
+    tp = self.get_previous_timing_point(time, filter=lambda t: t.uninherited == 0)
     if tp:
       return tp.get_slider_velocity_multiplier()
     return 1.0
@@ -89,7 +92,10 @@ class Beatmap():
     for ho in self.hit_objects:
       if isinstance(ho, Slider):
         sv_multiplier = self.get_slider_velocity_multiplier_at(ho.time)
-        ho.object_params._load_duration(sv_multiplier)
+        inherited_tp = self.get_previous_timing_point(ho.time, filter=lambda t: t.uninherited == 1)
+        if(not inherited_tp):
+          inherited_tp = TimingPoint(time=0, beat_length=500, uninherited=1)
+        ho.object_params._load_duration(sv_multiplier * self.difficulty.slider_multiplier, inherited_tp.beat_length)
 
   def hit_object_type(self, raw: str, type_id: int) -> Union[type[Circle], type[Slider], type[Spinner], type[HitObject]]:
     if not type_id:

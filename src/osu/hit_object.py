@@ -111,10 +111,8 @@ class SliderObjectParams:
     else:
       self.edge_sets = [(0, 0)] * (self.slides + 1)
 
-  def _load_duration(self, slider_velocity_multiplier: float):
-    base_px_per_s = 100.0 * slider_velocity_multiplier
-    repeats = max(1, int(self.slides))
-    dur_ms = (self.length / max(1e-6, base_px_per_s)) * 1000.0 * repeats
+  def _load_duration(self, slider_velocity_multiplier: float, beat_length: float):
+    dur_ms = self.length * self.slides / (100.0 * slider_velocity_multiplier) * beat_length
     self.duration = dur_ms
 
   def __str__(self) -> str:
