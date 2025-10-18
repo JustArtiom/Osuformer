@@ -5,6 +5,12 @@ from .hit_sample import HitSample
 from .hit_object import Circle, Slider, Spinner, HitObject, SliderObjectParams, SpinnerObjectParams
 from .beatmap import Beatmap
 from .mods import Mods
+from .difficulty import (
+  DifficultyAttributes,
+  PerformanceAttributes,
+  calculate_difficulty,
+  calculate_performance,
+)
 
 __all__ = [
   "General", 
@@ -19,4 +25,8 @@ __all__ = [
   "SpinnerObjectParams",
   "Beatmap", 
   "Mods",
+  "DifficultyAttributes",
+  "PerformanceAttributes",
+  "calculate_difficulty",
+  "calculate_performance",
 ]

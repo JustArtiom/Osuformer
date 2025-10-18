@@ -190,7 +190,7 @@ class Spinner(HitObject):
   ):
     super().__init__(raw=raw, x=x, y=y, time=time, type=type, hit_sound=hit_sound, object_params=object_params, hit_sample=hit_sample)
 
-  def load_raw(self, raw: str):
+  def _load_raw(self, raw: str):
     segments = [segment.strip() for segment in raw.split(",")]
     [x, y, time, type, hit_sound, *object_params_str, hit_sample] = segments
     if(":" not in hit_sample):
