@@ -1,8 +1,19 @@
-from .General import General
-from .TimingPoint import TimingPoint
-from .HitSample import HitSample
-from .HitObject import Circle, Slider, Spinner, HitObject, SliderObjectParams, SpinnerObjectParams
-from .Parser import Beatmap
+from .general import General
+from .timing_point import TimingPoint
+from .hit_sample import HitSample
+from .hit_object import Circle, Slider, Spinner, HitObject, SliderObjectParams, SpinnerObjectParams
+from .parser import Beatmap
 
 
-__all__ = ["General", "TimingPoint", "HitSample", "Circle", "Slider", "Spinner", "HitObject", "Beatmap", "SliderObjectParams", "SpinnerObjectParams"]
+__all__ = [
+  "general", 
+  "timing_point",
+  "hit_sample", 
+  "Circle",
+  "HitObject", 
+  "Slider", 
+  "Spinner", 
+  "SliderObjectParams", 
+  "SpinnerObjectParams"
+  "Beatmap", 
+]
