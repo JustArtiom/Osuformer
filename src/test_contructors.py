@@ -14,8 +14,6 @@ WidescreenStoryboard: 1
 SamplesMatchPlaybackRate: 1"""
 
 g = General(raw=general)
-print(g.__dict__)
-print(str(g))
 
 timing_point = "-28,461.538461538462,4,1,0,100,1,0"
 t = TimingPoint(raw=timing_point)

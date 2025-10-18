@@ -21,9 +21,9 @@ class TimingPoint:
     self.effects = effects
 
     if(raw):
-      self.load_raw(raw)
+      self._load_raw(raw)
 
-  def load_raw(self, raw: str):
+  def _load_raw(self, raw: str):
     segments = [segment.strip() for segment in raw.split(",")]
 
     self.time=int(segments[0])

@@ -23,9 +23,9 @@ class HitObject:
     self.hit_sample = hit_sample
 
     if raw:
-      self.load_raw(raw)
+      self._load_raw(raw)
 
-  def load_raw(self, raw: str):
+  def _load_raw(self, raw: str):
     segments = [segment.strip() for segment in raw.split(",")]
     if len(segments) != 7:
       raise ValueError(f"Invalid HitObject format, expected 6 segments but got {len(segments)}")
@@ -54,7 +54,7 @@ class Circle(HitObject):
   ):
     super().__init__(raw=raw, x=x, y=y, time=time, type=type, hit_sound=hit_sound, object_params=None, hit_sample=hit_sample)
 
-  def load_raw(self, raw: str):
+  def _load_raw(self, raw: str):
     segments = [segment.strip() for segment in raw.split(",")]
     self.x = int(segments[0])
     self.y = int(segments[1])
@@ -90,9 +90,9 @@ class SliderObjectParams:
     self.edge_sets = edge_sets
 
     if raw:
-      self.load_raw(raw)
+      self._load_raw(raw)
 
-  def load_raw(self, raw: str):
+  def _load_raw(self, raw: str):
     segments = [segment.strip() for segment in raw.split(",")]
     [curve_type, *curve_points_str] = segments[0].split("|")
 
@@ -111,6 +111,12 @@ class SliderObjectParams:
     else:
       self.edge_sets = [(0, 0)] * (self.slides + 1)
 
+  def _load_duration(self, slider_velocity_multiplier: float):
+    base_px_per_s = 100.0 * slider_velocity_multiplier
+    repeats = max(1, int(self.slides))
+    dur_ms = (self.length / max(1e-6, base_px_per_s)) * 1000.0 * repeats
+    self.duration = dur_ms
+
   def __str__(self) -> str:
     curve_points_str = "|".join([f"{x}:{y}" for x, y in self.curve_points])
     edge_sounds_str = "|".join(map(str, self.edge_sounds))
@@ -125,7 +131,6 @@ class Slider(HitObject):
     x: int = 0,
     y: int = 0,
     time: int = 0,
-    duration: float = 0.0,
     type: int = 0,
     hit_sound: int = 0,
     object_params: SliderObjectParams = SliderObjectParams(),
@@ -133,8 +138,7 @@ class Slider(HitObject):
   ):
     super().__init__(raw=raw, x=x, y=y, time=time, type=type, hit_sound=hit_sound, object_params=object_params, hit_sample=hit_sample)
 
-  def load_raw(self, raw: str):
-    print(raw)
+  def _load_raw(self, raw: str):
     segments = [segment.strip() for segment in raw.split(",")]
     [x, y, time, type, hit_sound, *object_params_str, hit_sample] = segments
 
@@ -164,9 +168,9 @@ class SpinnerObjectParams:
     self.end_time = end_time
 
     if raw:
-      self.load_raw(raw)
+      self._load_raw(raw)
 
-  def load_raw(self, raw: str):
+  def _load_raw(self, raw: str):
     self.end_time = int(raw)
 
   def __str__(self) -> str:

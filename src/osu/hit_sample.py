@@ -7,9 +7,9 @@ class HitSample:
     self.custom = custom
 
     if raw:
-      self.load_raw(raw)
+      self._load_raw(raw)
 
-  def load_raw(self, raw: str):
+  def _load_raw(self, raw: str):
     sample = [segment.strip() for segment in raw.split(":")]
     self.normal_set = int(sample[0])
     self.addition_set = int(sample[1])

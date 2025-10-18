@@ -1,7 +1,7 @@
 from .general import General
 from .timing_point import TimingPoint
 from .hit_object import Circle, Slider, Spinner, HitObject
-from typing import Union, List
+from typing import Optional, Union, List
 
 class Beatmap():
   def __init__(
@@ -35,8 +35,9 @@ class Beatmap():
             hit_object_class = self.hit_object_type(line, 0)
             self.hit_objects.append(hit_object_class(raw=line))
 
+      self._recalculate_slider_durations()
 
-  def load_raw(self, raw: str):
+  def _load_raw(self, raw: str):
     self.sections = self.split_sections(raw)
     pass
 
@@ -60,6 +61,35 @@ class Beatmap():
       sections[current_section] = "\n".join(section_lines).strip()
 
     return sections
+
+  def get_previous_timing_point(self, time: int, filter: Optional[callable] = None) -> Union[TimingPoint, None]:
+    previous_tp = None
+    for tp in self.timing_points:
+      if tp.time > time:
+        break
+      if filter and not filter(tp):
+        continue
+      previous_tp = tp
+
+    return previous_tp
+  
+  def get_bpm_at(self, time: int) -> float:
+    tp = self.get_previous_timing_point(time, filter=lambda t: t.uninherited == 1)
+    if tp:
+      return tp.get_bpm()
+    return 0.0
+  
+  def get_slider_velocity_multiplier_at(self, time: int) -> float:
+    tp = self.get_previous_timing_point(time)
+    if tp:
+      return tp.get_slider_velocity_multiplier()
+    return 1.0
+  
+  def _recalculate_slider_durations(self):
+    for ho in self.hit_objects:
+      if isinstance(ho, Slider):
+        sv_multiplier = self.get_slider_velocity_multiplier_at(ho.time)
+        ho.object_params._load_duration(sv_multiplier)
 
   def hit_object_type(self, raw: str, type_id: int) -> Union[type[Circle], type[Slider], type[Spinner], type[HitObject]]:
     if not type_id:
