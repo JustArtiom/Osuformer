@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import List, Sequence
+from typing import List, Sequence, Tuple
 
 from ..beatmap import Beatmap
 from ..hit_object import Circle, Slider, Spinner
@@ -20,7 +20,7 @@ from .rating import (
     calculate_star_rating_from_performance,
     difficulty_to_performance,
 )
-from .skills import Aim, Speed
+from .skills import Aim, Speed, Flashlight
 
 
 PREEMPT_MAX = 1800.0
@@ -64,11 +64,17 @@ def calculate_difficulty(beatmap: Beatmap, mods: Sequence[Mods | str] | None = N
     hit_windows = OsuHitWindows()
     hit_windows.set_difficulty(overall_difficulty)
     hit_window_great = hit_windows.window_for(HitResult.Great)
-    per_object_hit_window = 2.0 * hit_window_great / clock_rate
+    per_object_hit_window = hit_window_great
 
     radius = 64.0 * calculate_scale_from_circle_size(circle_size, apply_fudge=True)
 
-    difficulty_objects = _generate_difficulty_objects(beatmap, radius, per_object_hit_window)
+    difficulty_objects = _generate_difficulty_objects(
+        beatmap,
+        radius,
+        per_object_hit_window,
+        approach_rate=approach_rate,
+        stack_leniency=getattr(getattr(beatmap, "general", None), "stack_leniency", 0.7),
+    )
 
     if len(difficulty_objects) <= 1:
         return DifficultyAttributes(
@@ -109,15 +115,21 @@ def calculate_difficulty(beatmap: Beatmap, mods: Sequence[Mods | str] | None = N
     aim_skill = Aim(mods_list, include_sliders=True)
     aim_no_sliders_skill = Aim(mods_list, include_sliders=False)
     speed_skill = Speed(mods_list)
+    flashlight_skill = None
+    if any(mod.lower() == "flashlight" for mod in mods_list):
+        flashlight_skill = Flashlight(mods_list, has_hidden=any(mod.lower() == "hidden" for mod in mods_list))
 
     for diff_obj in difficulty_hit_objects:
         aim_skill.process(diff_obj)
         aim_no_sliders_skill.process(diff_obj)
         speed_skill.process(diff_obj)
+        if flashlight_skill is not None:
+            flashlight_skill.process(diff_obj)
 
     aim_difficulty_value = aim_skill.difficulty_value()
     aim_no_slider_difficulty_value = aim_no_sliders_skill.difficulty_value()
     speed_difficulty_value = speed_skill.difficulty_value()
+    flashlight_difficulty_value = flashlight_skill.difficulty_value() if flashlight_skill is not None else 0.0
 
     difficult_sliders = aim_skill.get_difficult_sliders()
     speed_notes = speed_skill.relevant_note_count()
@@ -144,7 +156,7 @@ def calculate_difficulty(beatmap: Beatmap, mods: Sequence[Mods | str] | None = N
 
     aim_rating = rating_calculator.compute_aim_rating(aim_difficulty_value)
     speed_rating = rating_calculator.compute_speed_rating(speed_difficulty_value)
-    flashlight_rating = rating_calculator.compute_flashlight_rating(0.0)
+    flashlight_rating = rating_calculator.compute_flashlight_rating(flashlight_difficulty_value)
 
     base_aim_performance = difficulty_to_performance(aim_rating)
     base_speed_performance = difficulty_to_performance(speed_rating)
@@ -186,12 +198,23 @@ def calculate_difficulty(beatmap: Beatmap, mods: Sequence[Mods | str] | None = N
     )
 
 
-def _generate_difficulty_objects(beatmap: Beatmap, radius: float, hit_window_great: float) -> List[DifficultyObject]:
+def _generate_difficulty_objects(
+    beatmap: Beatmap,
+    radius: float,
+    hit_window_great: float,
+    *,
+    approach_rate: float,
+    stack_leniency: float,
+) -> List[DifficultyObject]:
     objects: List[DifficultyObject] = []
 
-    for ho in sorted(beatmap.hit_objects, key=lambda obj: obj.time):
+    sorted_objects = sorted(beatmap.hit_objects, key=lambda obj: obj.time)
+    stack_offsets = _compute_stack_offsets(sorted_objects, radius, approach_rate, stack_leniency)
+
+    for idx, ho in enumerate(sorted_objects):
+        stack_offset = stack_offsets[idx]
         if isinstance(ho, Circle):
-            pos = (float(ho.x), float(ho.y))
+            pos = _apply_stack_offset((float(ho.x), float(ho.y)), stack_offset)
             start_time = float(ho.time)
             objects.append(
                 DifficultyObject(
@@ -205,16 +228,11 @@ def _generate_difficulty_objects(beatmap: Beatmap, radius: float, hit_window_gre
                 )
             )
         elif isinstance(ho, Slider):
-            pos = (float(ho.x), float(ho.y))
+            pos = _apply_stack_offset((float(ho.x), float(ho.y)), stack_offset)
             start_time = float(ho.time)
             duration = float(getattr(ho.object_params, "duration", 0.0) or 0.0)
             end_time = start_time + duration
-            curve_points = getattr(ho.object_params, "curve_points", []) or []
-            if curve_points:
-                tail_x, tail_y = curve_points[-1]
-            else:
-                tail_x, tail_y = ho.x, ho.y
-            end_pos = (float(tail_x), float(tail_y))
+            end_pos = _apply_stack_offset(_get_slider_end_position(ho), stack_offset)
             slider_length = float(getattr(ho.object_params, "length", 0.0) or 0.0)
             repeat_count = int(getattr(ho.object_params, "slides", 1) or 1)
             objects.append(
@@ -232,7 +250,7 @@ def _generate_difficulty_objects(beatmap: Beatmap, radius: float, hit_window_gre
                 )
             )
         elif isinstance(ho, Spinner):
-            pos = (float(ho.x), float(ho.y))
+            pos = _apply_stack_offset((float(ho.x), float(ho.y)), stack_offset)
             start_time = float(ho.time)
             end_time = float(getattr(ho.object_params, "end_time", ho.time))
             objects.append(
@@ -248,6 +266,87 @@ def _generate_difficulty_objects(beatmap: Beatmap, radius: float, hit_window_gre
             )
 
     return objects
+
+
+def _compute_stack_offsets(
+    hit_objects: Sequence[Circle | Slider | Spinner],
+    radius: float,
+    approach_rate: float,
+    stack_leniency: float,
+) -> List[float]:
+    if not hit_objects:
+        return []
+
+    scale = radius / 64.0 if radius > 0 else 1.0
+    stack_distance = 3.0
+    stack_threshold = difficulty_range(approach_rate, DifficultyRange(PREEMPT_MAX, PREEMPT_MID, PREEMPT_MIN)) * stack_leniency
+    stack_threshold = max(stack_threshold, 0.0)
+
+    stack_heights: List[int] = [0 for _ in hit_objects]
+
+    for i, base in enumerate(hit_objects):
+        if isinstance(base, Spinner):
+            continue
+
+        base_start = float(base.time)
+        base_end = _get_end_time(base)
+        base_pos = (float(base.x), float(base.y))
+        base_tail_pos = _get_slider_end_position(base) if isinstance(base, Slider) else None
+        current_end_time = base_end if base_end >= base_start else base_start
+
+        for j in range(i + 1, len(hit_objects)):
+            other = hit_objects[j]
+            if isinstance(other, Spinner):
+                continue
+
+            other_start = float(other.time)
+            if other_start - stack_threshold > current_end_time:
+                break
+
+            other_pos = (float(other.x), float(other.y))
+            stacked = False
+
+            if _distance(base_pos, other_pos) < stack_distance:
+                stacked = True
+            elif base_tail_pos is not None and _distance(base_tail_pos, other_pos) < stack_distance:
+                stacked = True
+
+            if stacked:
+                stack_heights[i] += 1
+                current_end_time = other_start
+
+    offset_per_stack = -6.4 * scale
+    return [height * offset_per_stack for height in stack_heights]
+
+
+def _apply_stack_offset(position: Tuple[float, float], offset: float) -> Tuple[float, float]:
+    if offset == 0.0:
+        return position
+    return position[0] + offset, position[1] + offset
+
+
+def _get_slider_end_position(hit_object: Circle | Slider | Spinner) -> Tuple[float, float]:
+    if not isinstance(hit_object, Slider):
+        return float(hit_object.x), float(hit_object.y)
+
+    curve_points = getattr(hit_object.object_params, "curve_points", []) or []
+    if curve_points:
+        tail_x, tail_y = curve_points[-1]
+        return float(tail_x), float(tail_y)
+    return float(hit_object.x), float(hit_object.y)
+
+
+def _get_end_time(hit_object: Circle | Slider | Spinner) -> float:
+    if isinstance(hit_object, Slider):
+        duration = float(getattr(hit_object.object_params, "duration", 0.0) or 0.0)
+        return float(hit_object.time) + duration
+    if isinstance(hit_object, Spinner):
+        return float(getattr(hit_object.object_params, "end_time", hit_object.time))
+    return float(hit_object.time)
+
+
+def _distance(a: Tuple[float, float], b: Tuple[float, float]) -> float:
+    return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
 def calculate_performance(

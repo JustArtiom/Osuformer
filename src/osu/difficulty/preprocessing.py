@@ -85,13 +85,16 @@ class OsuDifficultyHitObject(DifficultyHitObject):
         if base.object_type != "Slider":
             return
 
-        self.lazy_travel_time = base.slider_duration / self.clock_rate
+        self.lazy_travel_time = base.slider_duration
         scaling_factor = self.NORMALISED_RADIUS / base.object_radius
-        distance = base.slider_length * max(1, base.slider_repeat_count) * scaling_factor / 100.0
+        span_count = max(1, base.slider_repeat_count)
+        distance = base.slider_length * span_count * scaling_factor / 100.0
 
         self.lazy_travel_distance = distance
-        self.travel_distance = distance
-        self.travel_time = max(self.lazy_travel_time, self.MIN_DELTA_TIME)
+        repeat_count = max(base.slider_repeat_count - 1, 0)
+        repeat_bonus = math.pow(1.0 + repeat_count / 2.5, 1.0 / 2.5)
+        self.travel_distance = distance * repeat_bonus
+        self.travel_time = max(self.lazy_travel_time / self.clock_rate, self.MIN_DELTA_TIME)
         self.lazy_end_position = base.end_position
 
     def _set_distances(self, last: Optional[OsuDifficultyHitObject]) -> None:
@@ -101,7 +104,7 @@ class OsuDifficultyHitObject(DifficultyHitObject):
             if self.travel_distance == 0.0:
                 self.travel_distance = self.lazy_travel_distance
             if self.travel_time == 0.0:
-                self.travel_time = max(self.lazy_travel_time, self.MIN_DELTA_TIME)
+                self.travel_time = max(self.lazy_travel_time / self.clock_rate, self.MIN_DELTA_TIME)
 
         if base.object_type == "Spinner" or (last and last.base_object.object_type == "Spinner"):
             self.lazy_jump_distance = 0.0
