@@ -2,7 +2,14 @@ from .head_general import General
 from .head_difficulty import Difficulty
 from .timing_point import TimingPoint
 from .hit_sample import HitSample
-from .hit_object import Circle, Slider, Spinner, HitObject, SliderObjectParams, SpinnerObjectParams
+from .hit_object import (
+  Circle, 
+  Slider, 
+  Spinner, 
+  HitObject, 
+  SliderObjectParams, 
+  SpinnerObjectParams
+)
 from .beatmap import Beatmap
 from .mods import Mods
 from .difficulty import (
@@ -15,8 +22,8 @@ from .difficulty import (
 __all__ = [
   "General", 
   "Difficulty",
-  "timing_point",
-  "hit_sample", 
+  "TimingPoint",
+  "HitSample",
   "Circle",
   "HitObject", 
   "Slider", 

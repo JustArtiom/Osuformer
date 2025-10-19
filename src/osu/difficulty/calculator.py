@@ -41,9 +41,6 @@ def calculate_rate_adjusted_overall_difficulty(overall_difficulty: float, clock_
 
 
 def calculate_difficulty(beatmap: Beatmap, mods: Sequence[Mods | str] | None = None) -> DifficultyAttributes:
-    if not hasattr(beatmap, "difficulty"):
-        raise AttributeError("Beatmap is missing difficulty information.")
-
     mods_list = normalise_mods(mods)
     clock_rate = clock_rate_for_mods(mods_list)
 
