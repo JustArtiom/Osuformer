@@ -9,7 +9,7 @@ from .strain_utils import count_top_weighted_sliders
 
 
 class Aim(OsuStrainSkill):
-    skill_multiplier: float = 26.0
+    skill_multiplier: float = 25.6
     strain_decay_base: float = 0.15
 
     def __init__(self, mods: Sequence[str], include_sliders: bool) -> None:
@@ -60,7 +60,7 @@ class Aim(OsuStrainSkill):
 
 
 class Speed(OsuStrainSkill):
-    skill_multiplier: float = 1.47
+    skill_multiplier: float = 1.46
     strain_decay_base: float = 0.3
     reduced_section_count: int = 5
 
@@ -68,7 +68,6 @@ class Speed(OsuStrainSkill):
         super().__init__(list(mods))
         self._current_strain = 0.0
         self._current_rhythm = 0.0
-        self._slider_strains: List[float] = []
         self._mods = list(mods)
 
     def _strain_decay(self, ms: float) -> float:
@@ -85,16 +84,13 @@ class Speed(OsuStrainSkill):
         if prev is None:
             return 0.0
 
-        delta_time = getattr(current, "adjusted_delta_time", current.delta_time)
-        self._current_strain *= self._strain_decay(delta_time)
+        strain_time = getattr(current, "strain_time", current.delta_time)
+        self._current_strain *= self._strain_decay(strain_time)
         difficulty = SpeedEvaluator.evaluate(current, self._mods)
         self._current_strain += difficulty * self.skill_multiplier
 
         self._current_rhythm = RhythmEvaluator.evaluate(current)
         total_strain = self._current_strain * self._current_rhythm
-
-        if current.base_object.object_type == "Slider":
-            self._slider_strains.append(total_strain)
 
         return total_strain
 
@@ -107,17 +103,17 @@ class Speed(OsuStrainSkill):
         return sum(1.0 / (1.0 + math.exp(-(strain / max_strain * 12.0 - 6.0))) for strain in self.object_strains)
 
     def count_top_weighted_sliders(self) -> float:
-        return count_top_weighted_sliders(self._slider_strains, self.difficulty_value())
+        return 0.0
 
 
 class Flashlight(OsuStrainSkill):
     skill_multiplier: float = 0.05512
     strain_decay_base: float = 0.15
 
-    def __init__(self, mods: Sequence[str], has_hidden: bool) -> None:
+    def __init__(self, mods: Sequence[str]) -> None:
         super().__init__(list(mods))
         self._current_strain = 0.0
-        self._has_hidden = has_hidden
+        self._has_hidden = any(mod.lower() == "hidden" for mod in mods)
 
     def _strain_decay(self, ms: float) -> float:
         return math.pow(self.strain_decay_base, ms / 1000.0)
@@ -136,9 +132,8 @@ class Flashlight(OsuStrainSkill):
         return self._current_strain
 
     def difficulty_value(self) -> float:
-        return 0.0
+        return sum(self.get_current_strain_peaks())
 
     @staticmethod
     def difficulty_to_performance(difficulty: float) -> float:
         return 25.0 * math.pow(difficulty, 2)
-

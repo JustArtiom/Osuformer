@@ -143,7 +143,9 @@ class DifficultyObject:
     start_time: float
     end_time: float
     position: tuple[float, float]
+    stacked_position: tuple[float, float]
     end_position: tuple[float, float]
+    stacked_end_position: tuple[float, float]
     object_radius: float
     object_type: str
     slider_length: float = 0.0
@@ -151,4 +153,5 @@ class DifficultyObject:
     slider_repeat_count: int = 0
     nested_count: int = 0
     hit_window_great: float = 0.0
-
+    lazy_travel_distance: float = 0.0
+    lazy_travel_time: float = 0.0

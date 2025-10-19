@@ -4,30 +4,43 @@ from dataclasses import dataclass
 from typing import Sequence
 
 
-@dataclass(slots=True)
+@dataclass
 class DifficultyAttributes:
     star_rating: float
-    aim: float
-    speed: float
-    aim_difficulty_value: float
-    speed_difficulty_value: float
-    flashlight_rating: float
+    aim_difficulty: float
+    speed_difficulty: float
+    flashlight_difficulty: float
+    slider_factor: float
+    aim_difficult_slider_count: float
+    speed_note_count: float
+    aim_difficult_strain_count: float
+    speed_difficult_strain_count: float
     approach_rate: float
     overall_difficulty: float
+    drain_rate: float
     circle_size: float
     clock_rate: float
     max_combo: int
     hit_circle_count: int
     slider_count: int
     spinner_count: int
-    strains: Sequence[float]
     mods: Sequence[str]
-    slider_factor: float
-    aim_difficult_slider_count: float
-    speed_note_count: float
+    strains: Sequence[float]
+
+    @property
+    def aim(self) -> float:
+        return self.aim_difficulty
+
+    @property
+    def speed(self) -> float:
+        return self.speed_difficulty
+
+    @property
+    def flashlight_rating(self) -> float:
+        return self.flashlight_difficulty
 
 
-@dataclass(slots=True)
+@dataclass
 class PerformanceAttributes:
     pp: float
     aim_pp: float

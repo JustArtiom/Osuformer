@@ -13,13 +13,7 @@ from .legacy import calculate_scale_from_circle_size
 from .math_utils import clamp
 from .mods import clock_rate_for_mods, normalise_mods
 from .preprocessing import OsuDifficultyHitObject
-from .rating import (
-    OsuRatingCalculator,
-    calculate_difficulty_rating,
-    calculate_mechanical_difficulty_rating,
-    calculate_star_rating_from_performance,
-    difficulty_to_performance,
-)
+from .rating import calculate_difficulty_rating, calculate_star_rating_from_performance, difficulty_to_performance
 from .skills import Aim, Speed, Flashlight
 
 
@@ -48,15 +42,18 @@ def calculate_difficulty(beatmap: Beatmap, mods: Sequence[Mods | str] | None = N
     approach_rate = float(difficulty.approach_rate)
     overall_difficulty = float(difficulty.overall_difficulty)
     circle_size = float(difficulty.circle_size)
+    drain_rate = float(getattr(difficulty, "drain_rate", 0.0))
 
     if "HardRock" in mods_list:
         approach_rate = min(10.0, approach_rate * 1.4)
         overall_difficulty = min(10.0, overall_difficulty * 1.4)
         circle_size = min(10.0, circle_size * 1.3)
+        drain_rate = min(10.0, drain_rate * 1.4)
     if "Easy" in mods_list:
         approach_rate *= 0.5
         overall_difficulty *= 0.5
         circle_size *= 0.5
+        drain_rate *= 0.5
 
     approach_rate_rate_adjusted = calculate_rate_adjusted_approach_rate(approach_rate, clock_rate)
     overall_difficulty_rate_adjusted = calculate_rate_adjusted_overall_difficulty(overall_difficulty, clock_rate)
@@ -68,35 +65,40 @@ def calculate_difficulty(beatmap: Beatmap, mods: Sequence[Mods | str] | None = N
 
     radius = 64.0 * calculate_scale_from_circle_size(circle_size, apply_fudge=True)
 
+    stack_leniency = getattr(getattr(beatmap, "general", None), "stack_leniency", 0.7)
     difficulty_objects = _generate_difficulty_objects(
         beatmap,
         radius,
         per_object_hit_window,
         approach_rate=approach_rate,
-        stack_leniency=getattr(getattr(beatmap, "general", None), "stack_leniency", 0.7),
+        stack_leniency=stack_leniency,
     )
 
     if len(difficulty_objects) <= 1:
+        hit_circle_count = sum(isinstance(obj, Circle) for obj in beatmap.hit_objects)
+        slider_count = sum(isinstance(obj, Slider) for obj in beatmap.hit_objects)
+        spinner_count = sum(isinstance(obj, Spinner) for obj in beatmap.hit_objects)
         return DifficultyAttributes(
             star_rating=0.0,
-            aim=0.0,
-            speed=0.0,
-            aim_rating=0.0,
-            speed_rating=0.0,
-            flashlight_rating=0.0,
-            approach_rate=approach_rate_rate_adjusted,
-            overall_difficulty=overall_difficulty_rate_adjusted,
-            circle_size=circle_size,
-            clock_rate=clock_rate,
-            max_combo=len(beatmap.hit_objects),
-            hit_circle_count=sum(isinstance(obj, Circle) for obj in beatmap.hit_objects),
-            slider_count=sum(isinstance(obj, Slider) for obj in beatmap.hit_objects),
-            spinner_count=sum(isinstance(obj, Spinner) for obj in beatmap.hit_objects),
-            strains=[],
-            mods=mods_list,
+            aim_difficulty=0.0,
+            speed_difficulty=0.0,
+            flashlight_difficulty=0.0,
             slider_factor=1.0,
             aim_difficult_slider_count=0.0,
             speed_note_count=0.0,
+            aim_difficult_strain_count=0.0,
+            speed_difficult_strain_count=0.0,
+            approach_rate=approach_rate_rate_adjusted,
+            overall_difficulty=overall_difficulty_rate_adjusted,
+            drain_rate=drain_rate,
+            circle_size=circle_size,
+            clock_rate=clock_rate,
+            max_combo=len(beatmap.hit_objects),
+            hit_circle_count=hit_circle_count,
+            slider_count=slider_count,
+            spinner_count=spinner_count,
+            strains=[],
+            mods=mods_list,
         )
 
     difficulty_hit_objects: List[OsuDifficultyHitObject] = []
@@ -117,7 +119,7 @@ def calculate_difficulty(beatmap: Beatmap, mods: Sequence[Mods | str] | None = N
     speed_skill = Speed(mods_list)
     flashlight_skill = None
     if any(mod.lower() == "flashlight" for mod in mods_list):
-        flashlight_skill = Flashlight(mods_list, has_hidden=any(mod.lower() == "hidden" for mod in mods_list))
+        flashlight_skill = Flashlight(mods_list)
 
     for diff_obj in difficulty_hit_objects:
         aim_skill.process(diff_obj)
@@ -127,40 +129,44 @@ def calculate_difficulty(beatmap: Beatmap, mods: Sequence[Mods | str] | None = N
             flashlight_skill.process(diff_obj)
 
     aim_difficulty_value = aim_skill.difficulty_value()
-    aim_no_slider_difficulty_value = aim_no_sliders_skill.difficulty_value()
-    speed_difficulty_value = speed_skill.difficulty_value()
-    flashlight_difficulty_value = flashlight_skill.difficulty_value() if flashlight_skill is not None else 0.0
-
+    aim_rating = calculate_difficulty_rating(aim_difficulty_value)
+    aim_difficult_strain_count = aim_skill.count_top_weighted_strains()
     difficult_sliders = aim_skill.get_difficult_sliders()
+
+    aim_no_slider_difficulty_value = aim_no_sliders_skill.difficulty_value()
+    aim_rating_no_sliders = calculate_difficulty_rating(aim_no_slider_difficulty_value)
+    slider_factor = aim_rating_no_sliders / aim_rating if aim_rating > 0 else 1.0
+
+    speed_difficulty_value = speed_skill.difficulty_value()
+    speed_rating = calculate_difficulty_rating(speed_difficulty_value)
     speed_notes = speed_skill.relevant_note_count()
+    speed_difficult_strain_count = speed_skill.count_top_weighted_strains()
 
-    if aim_difficulty_value == 0.0:
-        slider_factor = 1.0
-    else:
-        slider_factor = (
-            calculate_difficulty_rating(aim_no_slider_difficulty_value) / calculate_difficulty_rating(aim_difficulty_value)
-            if aim_no_slider_difficulty_value > 0
-            else 1.0
-        )
+    flashlight_rating = 0.0
+    flashlight_difficulty_value = 0.0
+    if flashlight_skill is not None:
+        flashlight_difficulty_value = flashlight_skill.difficulty_value()
+        flashlight_rating = calculate_difficulty_rating(flashlight_difficulty_value)
 
-    mechanical_difficulty_rating = calculate_mechanical_difficulty_rating(aim_difficulty_value, speed_difficulty_value)
+    mod_set = {mod.lower() for mod in mods_list}
+    if "touchdevice" in mod_set:
+        aim_rating = math.pow(aim_rating, 0.8)
+        flashlight_rating = math.pow(flashlight_rating, 0.8)
 
-    rating_calculator = OsuRatingCalculator(
-        mods_list,
-        total_hits=len(difficulty_objects),
-        approach_rate=approach_rate_rate_adjusted,
-        overall_difficulty=overall_difficulty_rate_adjusted,
-        mechanical_difficulty_rating=mechanical_difficulty_rating,
-        slider_factor=slider_factor,
-    )
-
-    aim_rating = rating_calculator.compute_aim_rating(aim_difficulty_value)
-    speed_rating = rating_calculator.compute_speed_rating(speed_difficulty_value)
-    flashlight_rating = rating_calculator.compute_flashlight_rating(flashlight_difficulty_value)
+    if "relax" in mod_set:
+        aim_rating *= 0.9
+        speed_rating = 0.0
+        flashlight_rating *= 0.7
+    elif "autopilot" in mod_set:
+        speed_rating *= 0.5
+        aim_rating = 0.0
+        flashlight_rating *= 0.4
 
     base_aim_performance = difficulty_to_performance(aim_rating)
     base_speed_performance = difficulty_to_performance(speed_rating)
-    base_flashlight_performance = difficulty_to_performance(flashlight_rating)
+    base_flashlight_performance = 0.0
+    if "flashlight" in mod_set:
+        base_flashlight_performance = Flashlight.difficulty_to_performance(flashlight_rating)
 
     base_performance = math.pow(
         math.pow(base_aim_performance, 1.1)
@@ -177,24 +183,25 @@ def calculate_difficulty(beatmap: Beatmap, mods: Sequence[Mods | str] | None = N
 
     return DifficultyAttributes(
         star_rating=star_rating,
-        aim=aim_rating,
-        speed=speed_rating,
-        aim_difficulty_value=aim_difficulty_value,
-        speed_difficulty_value=speed_difficulty_value,
-        flashlight_rating=flashlight_rating,
+        aim_difficulty=aim_rating,
+        speed_difficulty=speed_rating,
+        flashlight_difficulty=flashlight_rating,
+        slider_factor=slider_factor,
+        aim_difficult_slider_count=difficult_sliders,
+        speed_note_count=speed_notes,
+        aim_difficult_strain_count=aim_difficult_strain_count,
+        speed_difficult_strain_count=speed_difficult_strain_count,
         approach_rate=approach_rate_rate_adjusted,
         overall_difficulty=overall_difficulty_rate_adjusted,
+        drain_rate=drain_rate,
         circle_size=circle_size,
         clock_rate=clock_rate,
         max_combo=len(beatmap.hit_objects),
         hit_circle_count=hit_circle_count,
         slider_count=slider_count,
         spinner_count=spinner_count,
-        strains=list(aim_skill.object_strains),
         mods=mods_list,
-        slider_factor=slider_factor,
-        aim_difficult_slider_count=difficult_sliders,
-        speed_note_count=speed_notes,
+        strains=list(aim_skill.object_strains),
     )
 
 
@@ -213,52 +220,69 @@ def _generate_difficulty_objects(
 
     for idx, ho in enumerate(sorted_objects):
         stack_offset = stack_offsets[idx]
+        base_pos = (float(ho.x), float(ho.y))
+        stacked_pos = _apply_stack_offset(base_pos, stack_offset)
+
         if isinstance(ho, Circle):
-            pos = _apply_stack_offset((float(ho.x), float(ho.y)), stack_offset)
             start_time = float(ho.time)
             objects.append(
                 DifficultyObject(
                     start_time=start_time,
                     end_time=start_time,
-                    position=pos,
-                    end_position=pos,
+                    position=base_pos,
+                    stacked_position=stacked_pos,
+                    end_position=base_pos,
+                    stacked_end_position=stacked_pos,
                     object_radius=radius,
                     object_type="Circle",
                     hit_window_great=hit_window_great,
                 )
             )
         elif isinstance(ho, Slider):
-            pos = _apply_stack_offset((float(ho.x), float(ho.y)), stack_offset)
             start_time = float(ho.time)
             duration = float(getattr(ho.object_params, "duration", 0.0) or 0.0)
             end_time = start_time + duration
-            end_pos = _apply_stack_offset(_get_slider_end_position(ho), stack_offset)
+            end_pos = _get_slider_end_position(ho)
+            stacked_end_pos = _apply_stack_offset(end_pos, stack_offset)
+            slider_length = float(getattr(ho.object_params, "length", 0.0) or 0.0)
+            repeat_count = int(getattr(ho.object_params, "slides", 1) or 1)
+
+            scaling_factor = OsuDifficultyHitObject.NORMALISED_RADIUS / radius if radius > 0 else 1.0
+            span_count = max(1, repeat_count)
+            lazy_travel_distance = slider_length * span_count * scaling_factor / 100.0
+            lazy_travel_time = duration
+
             slider_length = float(getattr(ho.object_params, "length", 0.0) or 0.0)
             repeat_count = int(getattr(ho.object_params, "slides", 1) or 1)
             objects.append(
                 DifficultyObject(
                     start_time=start_time,
                     end_time=end_time,
-                    position=pos,
+                    position=base_pos,
+                    stacked_position=stacked_pos,
                     end_position=end_pos,
+                    stacked_end_position=stacked_end_pos,
                     object_radius=radius,
                     object_type="Slider",
                     slider_length=slider_length,
                     slider_duration=duration,
                     slider_repeat_count=repeat_count,
                     hit_window_great=hit_window_great,
+                    lazy_travel_distance=lazy_travel_distance,
+                    lazy_travel_time=lazy_travel_time,
                 )
             )
         elif isinstance(ho, Spinner):
-            pos = _apply_stack_offset((float(ho.x), float(ho.y)), stack_offset)
             start_time = float(ho.time)
             end_time = float(getattr(ho.object_params, "end_time", ho.time))
             objects.append(
                 DifficultyObject(
                     start_time=start_time,
                     end_time=end_time,
-                    position=pos,
-                    end_position=pos,
+                    position=base_pos,
+                    stacked_position=stacked_pos,
+                    end_position=base_pos,
+                    stacked_end_position=stacked_pos,
                     object_radius=radius,
                     object_type="Spinner",
                     hit_window_great=hit_window_great,

@@ -2,9 +2,6 @@ from __future__ import annotations
 
 from enum import Enum, auto
 
-from .math_utils import clamp
-
-
 class HitResult(Enum):
     Great = auto()
     Ok = auto()
