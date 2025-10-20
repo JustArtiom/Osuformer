@@ -7,7 +7,7 @@ from osu import (
 )
 
 
-beatmap = Beatmap(file_path="dataset/test.osu")
+beatmap = Beatmap(file_path="dataset/lexycat - glitter  (thenoname) [Extra Glitter].osu")
 difficulty = calculate_difficulty(beatmap, [])
 performance = calculate_performance(difficulty)
 print(f"star_rating={difficulty.star_rating:.4f}")

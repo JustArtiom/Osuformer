@@ -8,6 +8,7 @@ from .hit_object import (
   Spinner, 
   HitObject, 
   SliderObjectParams, 
+  SliderCurve,
   SpinnerObjectParams
 )
 from .beatmap import Beatmap

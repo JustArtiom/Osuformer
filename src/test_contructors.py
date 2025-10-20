@@ -1,5 +1,16 @@
-from osu import General, TimingPoint, Circle, Slider, Spinner, SliderObjectParams, SpinnerObjectParams, HitSample
+from osu import (
+  General, 
+  TimingPoint,
+  Circle, 
+  Slider, 
+  Spinner, 
+  SliderCurve,
+  SliderObjectParams, 
+  SpinnerObjectParams,
+  HitSample
+)
 
+print("\n[General]")
 general = """AudioFilename: audio.mp3
 AudioLeadIn: 0
 PreviewTime: 99664
@@ -12,9 +23,21 @@ UseSkinSprites: 1
 SkinPreference:Default
 WidescreenStoryboard: 1
 SamplesMatchPlaybackRate: 1"""
-
 g = General(raw=general)
+print(str(g))
 
+print("\n[Difficulty]")
+difficulty = """HPDrainRate: 5
+CircleSize: 4
+OverallDifficulty: 7
+ApproachRate: 9
+SliderMultiplier: 1.4
+SliderTickRate: 1"""
+d = General(raw=difficulty)
+print(str(d))
+
+
+print("\n[TimingPoint]")
 timing_point = "-28,461.538461538462,4,1,0,100,1,0"
 t = TimingPoint(raw=timing_point)
 t2 = TimingPoint(
@@ -45,6 +68,7 @@ t2 = TimingPoint(
 print(str(t))
 print(str(t2))
 
+print("\n[HitObjects]")
 circle = "255,184,3664,69,4,3:1:0:0:"
 h = Circle(raw=circle)
 h2 = Circle(
@@ -70,8 +94,12 @@ h2 = Slider(
   type=h.type,
   hit_sound=h.hit_sound,
   object_params=SliderObjectParams(
-    curve_type=h.object_params.curve_type,
-    curve_points=h.object_params.curve_points,
+    curves=[
+      SliderCurve(
+        curve_type=curve.curve_type,
+        curve_points=curve.curve_points
+      ) for curve in h.object_params.curves
+    ],
     slides=h.object_params.slides,
     length=h.object_params.length,
     edge_sounds=h.object_params.edge_sounds,

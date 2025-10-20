@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Optional, Union, List
 from .hit_sample import HitSample  
+import re
 
 class HitObject:
   def __init__(
@@ -45,9 +46,9 @@ class Circle(HitObject):
   def __init__(
     self, *, 
     raw: str = "",
-    x: int = 0,
-    y: int = 0,
-    time: int = 0,
+    x: float = 0,
+    y: float = 0,
+    time: float = 0,
     type: int = 0,
     hit_sound: int = 0,
     hit_sample: HitSample = HitSample()
@@ -56,9 +57,9 @@ class Circle(HitObject):
 
   def _load_raw(self, raw: str):
     segments = [segment.strip() for segment in raw.split(",")]
-    self.x = int(segments[0])
-    self.y = int(segments[1])
-    self.time = int(segments[2])
+    self.x = float(segments[0])
+    self.y = float(segments[1])
+    self.time = float(segments[2])
     self.type = int(segments[3])
     self.hit_sound = int(segments[4])
     self.hit_sample = HitSample(raw=segments[5]) if len(segments) > 5 else HitSample()
@@ -66,23 +67,42 @@ class Circle(HitObject):
 
   def __str__(self) -> str:
     return  f"{self.x},{self.y},{self.time},{self.type},{self.hit_sound},{self.hit_sample}"
-  
+
+class SliderCurve:
+  def __init__(
+      self,
+      *,
+      curve_type: str = "",
+      curve_points: list[tuple[float, float]] = [],
+      raw: str = ""
+  ):
+    self.curve_type = curve_type
+    self.curve_points = curve_points
+
+    if(raw):
+      self._load_raw(raw)
+
+  def _load_raw(self, raw: str):
+    [curve_type, *curve_points_str] = raw.split("|")
+    self.curve_type = curve_type
+    self.curve_points = [tuple(map(float, point.split(":"))) for point in curve_points_str if point]
+
+  def __str__(self) -> str:
+    return f"{self.curve_type}|{'|'.join([f'{x}:{y}' for x, y in self.curve_points])}"
 
 class SliderObjectParams:
   def __init__(
     self, 
     *,
     raw: str = "",
-    curve_type: str = "",
-    curve_points: list[tuple[int, int]] = [],
+    curves: List[SliderCurve] = [],
     slides: int = 1,
     length: float = 0.0,
     duration: float = 0.0,
     edge_sounds: list[int] = [],
     edge_sets: list[tuple[int, int]] = []
   ):
-    self.curve_type = curve_type
-    self.curve_points = curve_points
+    self.curves = curves
     self.slides = slides
     self.length = length
     self.duration = duration
@@ -94,10 +114,9 @@ class SliderObjectParams:
 
   def _load_raw(self, raw: str):
     segments = [segment.strip() for segment in raw.split(",")]
-    [curve_type, *curve_points_str] = segments[0].split("|")
+    curves = re.findall(r"(?:[BLCP]\|[^BLCP]*)", segments[0])
 
-    self.curve_type = curve_type
-    self.curve_points = [tuple(map(int, point.split(":"))) for point in curve_points_str]
+    self.curves = [SliderCurve(raw=curve) for curve in curves]
     self.slides = int(segments[1])
     self.length = float(segments[2])
 
@@ -116,19 +135,18 @@ class SliderObjectParams:
     self.duration = dur_ms
 
   def __str__(self) -> str:
-    curve_points_str = "|".join([f"{x}:{y}" for x, y in self.curve_points])
     edge_sounds_str = "|".join(map(str, self.edge_sounds))
     edge_sets_str = "|".join([f"{s1}:{s2}" for s1, s2 in self.edge_sets])
-    return f"{self.curve_type}|{curve_points_str},{self.slides},{self.length},{edge_sounds_str},{edge_sets_str}"
+    return f"{"|".join([str(curve) for curve in self.curves])},{self.slides},{self.length},{edge_sounds_str},{edge_sets_str}"
 
 class Slider(HitObject):
   def __init__(
     self, 
     *, 
     raw: str = "",
-    x: int = 0,
-    y: int = 0,
-    time: int = 0,
+    x: float = 0,
+    y: float = 0,
+    time: float = 0,
     type: int = 0,
     hit_sound: int = 0,
     object_params: SliderObjectParams = SliderObjectParams(),
@@ -144,9 +162,9 @@ class Slider(HitObject):
       object_params_str.append(hit_sample)
       hit_sample = "0:0:0:0:"
 
-    self.x = int(x)
-    self.y = int(y)
-    self.time = int(time)
+    self.x = float(x)
+    self.y = float(y)
+    self.time = float(time)
     self.type = int(type)
     self.hit_sound = int(hit_sound)
     self.object_params = SliderObjectParams(raw=",".join(object_params_str))
@@ -161,7 +179,7 @@ class SpinnerObjectParams:
     self, 
     *,
     raw: str = "",
-    end_time: int = 0
+    end_time: float = 0
   ):
     self.end_time = end_time
 
@@ -169,7 +187,7 @@ class SpinnerObjectParams:
       self._load_raw(raw)
 
   def _load_raw(self, raw: str):
-    self.end_time = int(raw)
+    self.end_time = float(raw)
 
   def __str__(self) -> str:
     return f"{self.end_time}"
@@ -180,9 +198,9 @@ class Spinner(HitObject):
     self, 
     *, 
     raw: str = "",
-    x: int = 0,
-    y: int = 0,
-    time: int = 0,
+    x: float = 0,
+    y: float = 0,
+    time: float = 0,
     type: int = 0,
     hit_sound: int = 0,
     object_params: SpinnerObjectParams = SpinnerObjectParams(),
@@ -197,9 +215,9 @@ class Spinner(HitObject):
       object_params_str.append(hit_sample)
       hit_sample = "0:0:0:0:"
       
-    self.x = int(x)
-    self.y = int(y)
-    self.time = int(time)
+    self.x = float(x)
+    self.y = float(y)
+    self.time = float(time)
     self.type = int(type)
     self.hit_sound = int(hit_sound)
     self.object_params = SpinnerObjectParams(raw=",".join(object_params_str))
