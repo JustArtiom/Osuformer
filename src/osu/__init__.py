@@ -1,4 +1,4 @@
-from . import sections
+from . import sections, difficulty, hit_object
 from .sections import (
   General,
   Difficulty,
@@ -16,7 +16,6 @@ from .hit_object import (
 )
 from .beatmap import Beatmap
 from .mods import Mods
-from . import difficulty
 from .difficulty import (
   DifficultyAttributes,
   PerformanceAttributes,
@@ -30,6 +29,7 @@ __all__ = [
   "Difficulty",
   "TimingPoint",
   "HitSample",
+  "hit_object",
   "Circle",
   "HitObject", 
   "Slider", 
