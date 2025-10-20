@@ -1,5 +1,6 @@
-from osu import (
-  General, 
+from src.osu import (
+  General,
+  Difficulty,
   TimingPoint,
   Circle, 
   Slider, 
@@ -33,7 +34,7 @@ OverallDifficulty: 7
 ApproachRate: 9
 SliderMultiplier: 1.4
 SliderTickRate: 1"""
-d = General(raw=difficulty)
+d = Difficulty(raw=difficulty)
 print(str(d))
 
 

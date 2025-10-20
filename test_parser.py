@@ -1,4 +1,4 @@
-from osu import (
+from src.osu import (
     Beatmap,
     Slider,
     Circle,

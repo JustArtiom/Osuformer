@@ -1,5 +1,5 @@
-from .head_general import General
-from .head_difficulty import Difficulty
+from .sections.general import General
+from .sections.difficulty import Difficulty
 from .timing_point import TimingPoint
 from .hit_object import Circle, Slider, Spinner, HitObject
 from typing import Optional, Union, List

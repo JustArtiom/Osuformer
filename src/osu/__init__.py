@@ -1,5 +1,8 @@
-from .head_general import General
-from .head_difficulty import Difficulty
+from . import sections
+from .sections import (
+  General,
+  Difficulty,
+)
 from .timing_point import TimingPoint
 from .hit_sample import HitSample
 from .hit_object import (
@@ -13,6 +16,7 @@ from .hit_object import (
 )
 from .beatmap import Beatmap
 from .mods import Mods
+from . import difficulty
 from .difficulty import (
   DifficultyAttributes,
   PerformanceAttributes,
@@ -21,18 +25,21 @@ from .difficulty import (
 )
 
 __all__ = [
-  "General", 
+  "sections",
+  "General",
   "Difficulty",
   "TimingPoint",
   "HitSample",
   "Circle",
   "HitObject", 
   "Slider", 
-  "Spinner", 
+  "SliderCurve",
   "SliderObjectParams", 
+  "Spinner", 
   "SpinnerObjectParams",
   "Beatmap", 
   "Mods",
+  "difficulty",
   "DifficultyAttributes",
   "PerformanceAttributes",
   "calculate_difficulty",
