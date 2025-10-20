@@ -111,6 +111,14 @@ class Beatmap():
     else:
       raise ValueError(f"Unknown hit object type id: {type_id}")
     
+  def get_difficulty(self):
+    from .difficulty import calculate_difficulty
+    return calculate_difficulty(self)
+
+  def get_performance(self):
+    from .difficulty import calculate_performance
+    return calculate_performance(self.get_difficulty())
+
   def __str__(self) -> str:
     result = ["osu file format v14\n"]
     if hasattr(self, "general"):

@@ -2,7 +2,7 @@ class TimingPoint:
   def __init__(
     self, *,
     raw: str = "",
-    time: int = 0,
+    time: float = 0,
     beat_length: float = 0,
     meter: int = 4,
     sample_set: int = 1,
@@ -26,7 +26,7 @@ class TimingPoint:
   def _load_raw(self, raw: str):
     segments = [segment.strip() for segment in raw.split(",")]
 
-    self.time=int(segments[0])
+    self.time=float(segments[0])
     self.beat_length=float(segments[1])
     self.meter=int(segments[2] if len(segments) > 2 else 4)
     self.sample_set=int(segments[3] if len(segments) > 3 else 1)
