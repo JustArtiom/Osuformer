@@ -1,5 +1,5 @@
-# src/audio/spectrogram.py
 from __future__ import annotations
+import os
 from dataclasses import dataclass
 from typing import Optional, Tuple
 import numpy as np
@@ -67,7 +67,7 @@ class MelSpec:
     else:
       fig.canvas.draw_idle()
 
-  def save(
+  def save_to_img(
     self,
     path: str,
     *,
@@ -98,6 +98,52 @@ class MelSpec:
     data = np.clip(data, 0.0, 1.0)
     return (data * (np.iinfo(dtype).max if np.issubdtype(dtype, np.integer) else 1.0)).astype(dtype)
 
+  def save_to_npz(self, path: str) -> None:
+    """Save Mel spectrogram data and metadata into a compressed .npz file."""
+    np.savez_compressed(
+      path,
+      S_db=self.S_db,
+      times=self.times,
+      freqs=self.freqs,
+      sr=self.sr,
+      hop_length=self.hop_length,
+      n_fft=self.n_fft,
+      n_mels=self.n_mels,
+      fmin=self.fmin,
+      fmax=self.fmax if self.fmax is not None else -1.0,
+      power=self.power,
+      ref=self.ref,
+      top_db=self.top_db,
+      frame_duration_ms=self.frame_duration_ms,
+      window=self.window,
+      center=self.center
+    )
+
+  @staticmethod
+  def load_npz(path: str) -> "MelSpec":
+    """Load Mel spectrogram data and metadata from a compressed .npz file."""
+    data = np.load(path, allow_pickle=False)
+    fmax_val = data["fmax"].item() if np.isscalar(data["fmax"]) else data["fmax"]
+    if isinstance(fmax_val, (float, np.floating)) and fmax_val == -1.0:
+      fmax_val = None
+    return MelSpec(
+      S_db=data["S_db"],
+      times=data["times"],
+      freqs=data["freqs"],
+      sr=int(data["sr"]),
+      hop_length=int(data["hop_length"]),
+      n_fft=int(data["n_fft"]),
+      n_mels=int(data["n_mels"]),
+      fmin=float(data["fmin"]),
+      fmax=fmax_val,
+      power=float(data["power"]),
+      ref=float(data["ref"]),
+      top_db=float(data["top_db"]),
+      frame_duration_ms=float(data["frame_duration_ms"]),
+      window=str(data["window"]),
+      center=bool(data["center"])
+    )
+
 def audio_to_mel_spectrogram(
   audio_path: str,
   *,
@@ -106,6 +152,7 @@ def audio_to_mel_spectrogram(
   hop_length: Optional[int] = None,
   hop_ms: Optional[float] = 10.0,
   win_length: Optional[int] = None,
+  win_ms: Optional[float] = 25.0,
   window: str = "hann",
   center: bool = True,
   pad_mode: str = "constant",
@@ -128,6 +175,13 @@ def audio_to_mel_spectrogram(
       hop_length = 512
     else:
       hop_length = max(1, int(round(sr_eff * (hop_ms / 1000.0))))
+
+  if win_length is None:
+    if win_ms is None:
+      win_length = n_fft
+    else:
+      win_length = max(1, int(round(sr_eff * (win_ms / 1000.0))))
+
   S_mel = librosa.feature.melspectrogram(
     y=y, sr=sr_eff, n_fft=n_fft, hop_length=hop_length, win_length=win_length,
     window=window, center=center, pad_mode=pad_mode,
@@ -143,3 +197,27 @@ def audio_to_mel_spectrogram(
     frame_duration_ms=hop_length / sr_eff * 1000.0,
     window=window, center=center
   )
+
+
+def prepare_audio(f, sample_rate, hop_ms, win_ms, n_mels, n_fft, force=False):
+    spec = audio_to_mel_spectrogram(
+        f,
+        sr=sample_rate,
+        hop_ms=hop_ms,
+        win_ms=win_ms,
+        n_mels=n_mels,
+        n_fft=n_fft,
+    )
+    
+    out_npz = f + ".mel.npz"
+    out_png = f + ".mel.png"
+
+    if force or not os.path.exists(out_npz):
+        if os.path.exists(out_npz):
+            os.remove(out_npz)
+        spec.save_to_npz(out_npz)
+
+    if force or not os.path.exists(out_png):
+        if os.path.exists(out_png):
+            os.remove(out_png)
+        spec.save_to_img(out_png, figsize=(20, 8))
