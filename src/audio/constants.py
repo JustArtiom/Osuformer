@@ -1,0 +1,1 @@
+AUDIO_EXTENSIONS = ["*.wav", "*.mp3", "*.ogg", "*.flac"]
