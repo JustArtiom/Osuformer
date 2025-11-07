@@ -15,10 +15,9 @@ print(f"Include patterns: {AUDIO_EXTENSIONS}")
 print(f"Exclude patterns: {EXCLUDE_PATTERNS}")
 
 files = collect_files(DATA_DIR, AUDIO_EXTENSIONS, EXCLUDE_PATTERNS)
-
 if __name__ == "__main__":
     for f in tqdm(files, desc="Audio → Spectrogram", unit="file"):
         try:
-            prepare_audio(f, config["data"]["sample_rate"], config["data"]["hop_ms"], config["data"]["win_ms"], config["data"]["n_mels"], config["data"]["n_fft"], force=True)
+            prepare_audio(DATA_DIR + "/" + f, config["data"]["sample_rate"], config["data"]["hop_ms"], config["data"]["win_ms"], config["data"]["n_mels"], config["data"]["n_fft"], force=True)
         except Exception as e:
             print(f"[ERROR] Failed processing {f}: {e}")

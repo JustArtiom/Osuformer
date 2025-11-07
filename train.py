@@ -1,13 +1,205 @@
-from src.utils.config import load_config
-from src.training import TrainingSession
+from __future__ import annotations
+
+import argparse
 import json
-config = load_config("./config.yaml")
+from pathlib import Path
+from typing import Dict, List, Optional
 
-training_session = TrainingSession(config)
-print("Starting training session...")
-print("Session path:", training_session.path)
+try:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+except ImportError:  # pragma: no cover
+    matplotlib = None
+    plt = None
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
+from src.data import OsuBeatmapDataset, osu_collate
+from src.models import ConformerSeq2Seq
+from src.training import TrainingSession
+from src.utils.config import load_config
 
 
-training_session._load_files_path()
-print(f"Number of files in dataset: {len(training_session.files)}")
-print(json.dumps(training_session.file_dict, indent=2))
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Train the osu! beatmap generator model.")
+    parser.add_argument("--config", type=str, default="config.yaml", help="Path to the config file.")
+    parser.add_argument("--epochs", type=int, default=None, help="Override number of epochs from config.")
+    return parser.parse_args()
+
+
+def resolve_device(preferred: str) -> torch.device:
+    preferred = preferred.lower()
+    if preferred == "cuda" and not torch.cuda.is_available():
+        print("[WARN] CUDA requested but not available. Falling back to CPU.")
+        preferred = "cpu"
+    return torch.device(preferred)
+
+
+def run_epoch(
+    model: ConformerSeq2Seq,
+    dataloader: DataLoader,
+    device: torch.device,
+    eos_loss_weight: float,
+    grad_clip: float,
+    optimizer: Optional[torch.optim.Optimizer] = None,
+) -> Dict[str, float]:
+    is_train = optimizer is not None
+    model.train(is_train)
+    total_loss = 0.0
+    total_coord = 0.0
+    total_eos = 0.0
+    total_samples = 0
+
+    iterator = tqdm(dataloader, desc="Train" if is_train else "Eval", leave=False)
+    for batch in iterator:
+        audio = batch["audio"].to(device)
+        tokens = batch["tokens"].to(device)
+        audio_mask = batch["audio_mask"].to(device)
+        token_mask = batch["token_mask"].to(device)
+
+        coords_pred, eos_logits = model(audio, audio_mask, tokens, token_mask)
+
+        target_coords = tokens[..., :3]
+        target_eos = tokens[..., 3:]
+        valid_mask = (~token_mask).unsqueeze(-1).float()
+        mask_total = valid_mask.sum().clamp_min(1.0)
+
+        coord_loss = F.smooth_l1_loss(coords_pred, target_coords, reduction="none")
+        coord_loss = (coord_loss * valid_mask).sum() / mask_total
+
+        eos_loss = F.binary_cross_entropy_with_logits(eos_logits, target_eos, reduction="none")
+        eos_loss = (eos_loss * valid_mask).sum() / mask_total
+
+        loss = coord_loss + eos_loss_weight * eos_loss
+
+        if is_train:
+            optimizer.zero_grad()
+            loss.backward()
+            if grad_clip > 0:
+                nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            optimizer.step()
+
+        batch_size = audio.size(0)
+        total_loss += loss.item() * batch_size
+        total_coord += coord_loss.item() * batch_size
+        total_eos += eos_loss.item() * batch_size
+        total_samples += batch_size
+
+        iterator.set_postfix(loss=loss.item())
+
+    if total_samples == 0:
+        return {"loss": 0.0, "coord_loss": 0.0, "eos_loss": 0.0}
+
+    return {
+        "loss": total_loss / total_samples,
+        "coord_loss": total_coord / total_samples,
+        "eos_loss": total_eos / total_samples,
+    }
+
+
+def save_checkpoint(path: Path, model: ConformerSeq2Seq, optimizer: torch.optim.Optimizer, epoch: int, metrics: Dict[str, float]) -> None:
+    payload = {
+        "epoch": epoch,
+        "model_state": model.state_dict(),
+        "optimizer_state": optimizer.state_dict(),
+        "metrics": metrics,
+    }
+    torch.save(payload, path)
+
+
+def plot_curves(history: List[Dict[str, float]], val_history: List[Dict[str, float]], output_path: Path) -> None:
+    if plt is None:
+        print("[WARN] matplotlib is not installed; skipping loss plot.")
+        return
+    epochs = range(1, len(history) + 1)
+    plt.figure(figsize=(8, 5))
+    plt.plot(epochs, [m["loss"] for m in history], label="Train Loss")
+    plt.plot(epochs, [m["loss"] for m in val_history], label="Val Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Training vs Validation Loss")
+    plt.legend()
+    plt.grid(True, linestyle="--", alpha=0.4)
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close()
+
+
+def main() -> None:
+    args = parse_args()
+    config = load_config(args.config)
+    training_cfg = config["training"]
+
+    session = TrainingSession(config)
+    print(f"[INFO] Session directory: {session.path}")
+
+    device = resolve_device(training_cfg.get("device", "cpu"))
+    batch_size = training_cfg["batch_size"]
+    num_epochs = args.epochs or training_cfg["num_epochs"]
+    num_workers = training_cfg.get("num_workers", 0)
+    eos_loss_weight = training_cfg.get("eos_loss_weight", 1.0)
+    grad_clip = training_cfg.get("grad_clip", 1.0)
+
+    train_dataset = OsuBeatmapDataset(config, split="train")
+    val_dataset = OsuBeatmapDataset(config, split="val")
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=device.type == "cuda",
+        collate_fn=osu_collate,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=device.type == "cuda",
+        collate_fn=osu_collate,
+    )
+
+    model = ConformerSeq2Seq(config).to(device)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=training_cfg["lr"],
+        weight_decay=training_cfg.get("weight_decay", 1e-4),
+    )
+
+    best_val = float("inf")
+    train_history: List[Dict[str, float]] = []
+    val_history: List[Dict[str, float]] = []
+    metrics_path = Path(session.path) / "metrics.json"
+
+    for epoch in range(1, num_epochs + 1):
+        print(f"[INFO] Epoch {epoch}/{num_epochs}")
+        train_metrics = run_epoch(model, train_loader, device, eos_loss_weight, grad_clip, optimizer=optimizer)
+        val_metrics = run_epoch(model, val_loader, device, eos_loss_weight, grad_clip, optimizer=None)
+
+        train_history.append(train_metrics)
+        val_history.append(val_metrics)
+
+        print(f"       Train Loss: {train_metrics['loss']:.4f} | Val Loss: {val_metrics['loss']:.4f}")
+
+        latest_path = Path(session.path) / "latest.pt"
+        save_checkpoint(latest_path, model, optimizer, epoch, val_metrics)
+        if val_metrics["loss"] < best_val:
+            best_val = val_metrics["loss"]
+            save_checkpoint(Path(session.path) / "best.pt", model, optimizer, epoch, val_metrics)
+
+        with open(metrics_path, "w", encoding="utf-8") as f:
+            json.dump({"train": train_history, "val": val_history}, f, indent=2)
+
+        plot_curves(train_history, val_history, Path(session.path) / "loss_curve.png")
+
+    print("[INFO] Training complete.")
+
+
+if __name__ == "__main__":
+    main()
