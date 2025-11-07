@@ -4,9 +4,15 @@ data:
   win_ms: 25
   n_mels: 80
   n_fft: 1024
-  ticks_per_beat: 48
-  osu_width: 128
-  osu_height: 96
+  ticks_per_beat: 8
+  beats_per_sample: 16
+  sample_hop_beats: 8
+  osu_width: 512
+  osu_height: 384
+  normalize_audio: true
+  skip_empty_chunks: true
+  default_bpm: 120.0
+  merge_tolerance_ms: 8.0
 
 model:
   encoder:
@@ -16,10 +22,13 @@ model:
     num_heads: 4
     ffn_dim: 512
     conv_kernel: 31
+    dropout: 0.1
   decoder:
     num_layers: 6
     num_heads: 4
     ffn_dim: 512
+    dropout: 0.1
+    max_seq_len: 64
 
 training:
   batch_size: 8
@@ -27,8 +36,13 @@ training:
   num_epochs: 100
   device: "cpu"
   path: "checkpoints/"
+  val_split: 0.2
+  num_workers: 0
+  weight_decay: 0.01
+  eos_loss_weight: 1.0
+  grad_clip: 1.0
 
 paths:
-  data: "dataset/raw/"
+  data: "dataset/raw"
   include: ["*.osu", "*.wav", "*.mp3", "*.ogg", "*.flac"]
   exclude: ["_*", ]
