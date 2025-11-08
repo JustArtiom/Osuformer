@@ -3,22 +3,26 @@ from ..utils.file import collect_files, build_file_tree, dictify_files
 from ..audio import AUDIO_EXTENSIONS
 
 class TrainingSession:
-  def __init__(self, config):
+  def __init__(self, config, resume_path: str | None = None):
     self.config = config
     self.dataset_path = config["paths"]["data"]
-    self.path = os.path.join(config["training"]["path"])
-    if not os.path.exists(self.path):
-      os.makedirs(self.path, exist_ok=True)
+    base_path = os.path.abspath(config["training"]["path"])
+    os.makedirs(base_path, exist_ok=True)
 
-    self.training_name = TrainingSession.auto(self.path)
-    self.path = os.path.join(self.path, self.training_name)
-
-    if not os.path.exists(self.path):
-      os.makedirs(self.path, exist_ok=True)
+    if resume_path:
+      self.path = os.path.abspath(resume_path)
+      if not os.path.isdir(self.path):
+        raise FileNotFoundError(f"Resume directory '{self.path}' does not exist.")
+      self.training_name = os.path.basename(self.path.rstrip(os.sep))
+    else:
+      self.training_name = TrainingSession.auto(base_path)
+      self.path = os.path.join(base_path, self.training_name)
+      if not os.path.exists(self.path):
+        os.makedirs(self.path, exist_ok=True)
 
   @staticmethod
   def auto(path):
-    existing = os.listdir(f"./{path}")
+    existing = os.listdir(path)
     max_num = 0
     for name in existing:
       if name.isdigit():
@@ -31,4 +35,3 @@ class TrainingSession:
     self.files = collect_files(self.dataset_path, [*AUDIO_EXTENSIONS, "*.mel.npz", "*.osu"])
     self.file_tree = build_file_tree(self.files)
     self.file_dict = dictify_files(self.file_tree)
-

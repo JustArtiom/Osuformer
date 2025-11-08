@@ -9,10 +9,13 @@ data:
   sample_hop_beats: 8
   osu_width: 512
   osu_height: 384
+  prep_num_workers: 4
   normalize_audio: true
   skip_empty_chunks: true
   default_bpm: 120.0
   merge_tolerance_ms: 8.0
+  min_star_rating: 5.5
+  max_star_rating: 7.5
 
 model:
   encoder:
@@ -31,18 +34,18 @@ model:
     max_seq_len: 64
 
 training:
-  batch_size: 8
+  batch_size: 12
   lr: 0.0003
   num_epochs: 100
-  device: "cpu"
+  device: "cuda"
   path: "checkpoints/"
   val_split: 0.2
-  num_workers: 0
+  num_workers: 5
   weight_decay: 0.01
   eos_loss_weight: 1.0
   grad_clip: 1.0
 
 paths:
-  data: "dataset/raw"
+  data: "dataset"
   include: ["*.osu", "*.wav", "*.mp3", "*.ogg", "*.flac"]
   exclude: ["_*", ]

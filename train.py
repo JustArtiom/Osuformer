@@ -19,7 +19,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from src.data import OsuBeatmapDataset, osu_collate
+from src.data import OsuBeatmapDataset, osu_collate, split_train_val_files
 from src.models import ConformerSeq2Seq
 from src.training import TrainingSession
 from src.utils.config import load_config
@@ -29,6 +29,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train the osu! beatmap generator model.")
     parser.add_argument("--config", type=str, default="config.yaml", help="Path to the config file.")
     parser.add_argument("--epochs", type=int, default=None, help="Override number of epochs from config.")
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Optional checkpoint path to resume training from (e.g., checkpoints/8/latest.pt).",
+    )
     return parser.parse_args()
 
 
@@ -135,7 +141,9 @@ def main() -> None:
     config = load_config(args.config)
     training_cfg = config["training"]
 
-    session = TrainingSession(config)
+    resume_checkpoint_path = Path(args.checkpoint).expanduser().resolve() if args.checkpoint else None
+    resume_dir = resume_checkpoint_path.parent if resume_checkpoint_path else None
+    session = TrainingSession(config, resume_path=str(resume_dir) if resume_dir else None)
     print(f"[INFO] Session directory: {session.path}")
 
     device = resolve_device(training_cfg.get("device", "cpu"))
@@ -145,8 +153,9 @@ def main() -> None:
     eos_loss_weight = training_cfg.get("eos_loss_weight", 1.0)
     grad_clip = training_cfg.get("grad_clip", 1.0)
 
-    train_dataset = OsuBeatmapDataset(config, split="train")
-    val_dataset = OsuBeatmapDataset(config, split="val")
+    train_files, val_files = split_train_val_files(config)
+    train_dataset = OsuBeatmapDataset(config, split="train", osu_files=train_files)
+    val_dataset = OsuBeatmapDataset(config, split="val", osu_files=val_files)
 
     train_loader = DataLoader(
         train_dataset,
@@ -172,12 +181,35 @@ def main() -> None:
         weight_decay=training_cfg.get("weight_decay", 1e-4),
     )
 
-    best_val = float("inf")
+    metrics_path = Path(session.path) / "metrics.json"
     train_history: List[Dict[str, float]] = []
     val_history: List[Dict[str, float]] = []
-    metrics_path = Path(session.path) / "metrics.json"
+    start_epoch = 1
 
-    for epoch in range(1, num_epochs + 1):
+    if resume_checkpoint_path:
+        if not resume_checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint '{resume_checkpoint_path}' not found.")
+        print(f"[INFO] Resuming from checkpoint: {resume_checkpoint_path}")
+        payload = torch.load(resume_checkpoint_path, map_location=device)
+        model.load_state_dict(payload["model_state"])
+        optimizer.load_state_dict(payload["optimizer_state"])
+        start_epoch = int(payload.get("epoch", 0)) + 1
+        if metrics_path.exists():
+            with open(metrics_path, "r", encoding="utf-8") as f:
+                metrics_data = json.load(f)
+                train_history = metrics_data.get("train", [])
+                val_history = metrics_data.get("val", [])
+    best_val = (
+        min((entry.get("loss", float("inf")) for entry in val_history), default=float("inf"))
+        if val_history
+        else float("inf")
+    )
+
+    if start_epoch > num_epochs:
+        print(f"[INFO] Checkpoint epoch ({start_epoch - 1}) >= target epochs ({num_epochs}). Nothing to do.")
+        return
+
+    for epoch in range(start_epoch, num_epochs + 1):
         print(f"[INFO] Epoch {epoch}/{num_epochs}")
         train_metrics = run_epoch(model, train_loader, device, eos_loss_weight, grad_clip, optimizer=optimizer)
         val_metrics = run_epoch(model, val_loader, device, eos_loss_weight, grad_clip, optimizer=None)
