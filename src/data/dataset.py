@@ -4,7 +4,7 @@ import math
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -13,6 +13,13 @@ from torch.utils.data import Dataset
 from src.audio import AUDIO_EXTENSIONS, MelSpec, prepare_audio
 from src.osu import Beatmap, Circle, Slider
 from src.utils.file import collect_files
+
+try:  # pragma: no cover - tqdm optional at runtime, but usually installed
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover
+    tqdm = None
+
+_SPLIT_CACHE: Dict[Tuple[str, float, Optional[int], Tuple[str, ...]], Tuple[List[Path], List[Path]]] = {}
 
 
 @dataclass
@@ -24,8 +31,60 @@ class SampleDescriptor:
     tokens: np.ndarray
 
 
+def collect_osu_file_paths(paths_cfg: dict) -> List[Path]:
+    base_path = Path(paths_cfg["data"])
+    rel_paths = collect_files(
+        str(base_path),
+        include_patterns=["*.osu"],
+        exclude_patterns=paths_cfg.get("exclude", []),
+    )
+    return [base_path / rel_path for rel_path in rel_paths if rel_path.lower().endswith(".osu")]
+
+
+def split_train_val_files(
+    config: dict,
+    osu_files: Optional[Sequence[Path]] = None,
+) -> Tuple[List[Path], List[Path]]:
+    paths_cfg = config["paths"]
+    training_cfg = config["training"]
+    cache_key = None
+    if osu_files is None:
+        base_path = str(Path(paths_cfg["data"]).resolve())
+        val_split = training_cfg.get("val_split", 0.2)
+        dataset_seed = training_cfg.get("dataset_seed")
+        exclude_patterns = tuple(sorted(paths_cfg.get("exclude", [])))
+        cache_key = (base_path, float(val_split), dataset_seed, exclude_patterns)
+        if cache_key in _SPLIT_CACHE:
+            cached_train, cached_val = _SPLIT_CACHE[cache_key]
+            return list(cached_train), list(cached_val)
+
+    files = list(osu_files) if osu_files is not None else collect_osu_file_paths(paths_cfg)
+    if not files:
+        raise RuntimeError(f"No osu files found under {paths_cfg['data']}")
+
+    dataset_seed = training_cfg.get("dataset_seed")
+    rng = random.Random(dataset_seed)
+    rng.shuffle(files)
+
+    val_split = training_cfg.get("val_split", 0.2)
+    val_count = int(math.ceil(len(files) * val_split)) if val_split > 0 else 0
+    if val_count > 0:
+        val_size = max(1, val_count)
+        val_files = files[:val_size]
+        train_files = files[val_size:] or files
+    else:
+        fallback = max(1, len(files) // 5)
+        val_files = files[:fallback]
+        train_files = files[fallback:] or files
+
+    result = (train_files, val_files)
+    if cache_key is not None:
+        _SPLIT_CACHE[cache_key] = (train_files.copy(), val_files.copy())
+    return train_files, val_files
+
+
 class OsuBeatmapDataset(Dataset):
-    def __init__(self, config: dict, split: str = "train") -> None:
+    def __init__(self, config: dict, split: str = "train", osu_files: Optional[Sequence[Path]] = None) -> None:
         self.config = config
         self.split = split
         self.data_cfg = config["data"]
@@ -39,47 +98,72 @@ class OsuBeatmapDataset(Dataset):
         self.max_seq_len = config["model"]["decoder"].get("max_seq_len", 64)
         self.normalize_audio = self.data_cfg.get("normalize_audio", True)
         self.skip_empty = self.data_cfg.get("skip_empty_chunks", True)
-
-        self.val_split = self.training_cfg.get("val_split", 0.2)
+        self.min_star_rating = self._parse_star_rating(self.data_cfg.get("min_star_rating"), "min_star_rating")
+        self.max_star_rating = self._parse_star_rating(self.data_cfg.get("max_star_rating"), "max_star_rating")
+        if (
+            self.min_star_rating is not None
+            and self.max_star_rating is not None
+            and self.min_star_rating > self.max_star_rating
+        ):
+            raise ValueError("data.min_star_rating cannot be greater than data.max_star_rating")
 
         self._spec_cache: Dict[str, MelSpec] = {}
         self.samples: List[SampleDescriptor] = []
 
-        osu_files = self._gather_osu_files()
-        if not osu_files:
-            raise RuntimeError(f"No osu files found under {self.base_path}")
+        if osu_files is None:
+            train_files, val_files = split_train_val_files(config)
+            osu_files = train_files if split == "train" else val_files
 
-        random.shuffle(osu_files)
-
-        val_count = int(math.ceil(len(osu_files) * self.val_split)) if self.val_split > 0 else 0
-        if split == "train":
-            selected = osu_files[val_count:] if val_count < len(osu_files) else osu_files
-        else:
-            if val_count:
-                selected = osu_files[: max(1, val_count)]
-            else:
-                fallback = max(1, len(osu_files) // 5)
-                selected = osu_files[:fallback]
-
+        selected = list(osu_files)
         if not selected:
-            selected = osu_files
+            raise RuntimeError(f"No osu files available for split '{split}'")
 
-        for osu_path in selected:
-            self.samples.extend(self._build_samples_for_map(osu_path))
+        progress_bar = None
+        iterator: Sequence[Path]
+        if tqdm is not None:
+            progress_bar = tqdm(selected, desc=f"Loading {self.split} beatmaps", unit="map")
+            iterator = progress_bar
+        else:
+            iterator = selected
+
+        for osu_path in iterator:
+            beatmap = self._load_standard_beatmap(osu_path)
+            if beatmap is None:
+                continue
+            self.samples.extend(self._build_samples_for_map(osu_path, beatmap))
+            if progress_bar is not None:
+                progress_bar.set_postfix(samples=len(self.samples))
+
+        if progress_bar is not None:
+            progress_bar.close()
 
         if not self.samples:
             raise RuntimeError(f"No training samples could be built for split '{split}'")
 
-    def _gather_osu_files(self) -> List[Path]:
-        rel_paths = collect_files(
-            str(self.base_path),
-            include_patterns=["*.osu"],
-            exclude_patterns=self.paths_cfg.get("exclude", []),
-        )
-        return [self.base_path / rel_path for rel_path in rel_paths if rel_path.lower().endswith(".osu")]
+    def _load_standard_beatmap(self, osu_path: Path) -> Beatmap | None:
+        try:
+            beatmap = Beatmap(file_path=str(osu_path))
+        except Exception as exc:  # pragma: no cover - defensive guard
+            print(f"[WARN] Skipping {osu_path}: failed to parse beatmap ({exc})")
+            return None
 
-    def _build_samples_for_map(self, osu_path: Path) -> List[SampleDescriptor]:
-        beatmap = Beatmap(file_path=str(osu_path))
+        mode = 0
+        general = getattr(beatmap, "general", None)
+        if general is not None:
+            try:
+                mode = int(getattr(general, "mode", 0))
+            except (TypeError, ValueError):
+                mode = 0
+
+        if mode != 0:
+            print(f"[WARN] Skipping {osu_path}: mode {mode} is not osu!standard.")
+            return None
+
+        return beatmap
+
+    def _build_samples_for_map(self, osu_path: Path, beatmap: Beatmap) -> List[SampleDescriptor]:
+        if not self._star_rating_in_range(beatmap, osu_path):
+            return []
         audio_path = self._resolve_audio_path(osu_path, beatmap)
         spec = self._load_mel_spec(audio_path)
 
@@ -145,6 +229,31 @@ class OsuBeatmapDataset(Dataset):
             )
 
         return descriptors
+
+    @staticmethod
+    def _parse_star_rating(value, key: str) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"data.{key} must be a number or null, got {value!r}") from exc
+
+    def _star_rating_in_range(self, beatmap: Beatmap, osu_path: Path) -> bool:
+        if self.min_star_rating is None and self.max_star_rating is None:
+            return True
+        try:
+            difficulty = beatmap.get_difficulty()
+            star_rating = float(getattr(difficulty, "star_rating", 0.0))
+        except Exception as exc:  # pragma: no cover - defensive guard
+            print(f"[WARN] Skipping {osu_path} due to star difficulty calculation failure: {exc}")
+            return False
+
+        if self.min_star_rating is not None and star_rating < self.min_star_rating:
+            return False
+        if self.max_star_rating is not None and star_rating > self.max_star_rating:
+            return False
+        return True
 
     def _resolve_audio_path(self, osu_path: Path, beatmap: Beatmap) -> Path:
         if hasattr(beatmap, "general") and beatmap.general.audio_filename:
