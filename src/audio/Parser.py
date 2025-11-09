@@ -170,6 +170,8 @@ def audio_to_mel_spectrogram(
   duration: Optional[float] = None,
 ) -> MelSpec:
   y, sr_eff = librosa.load(audio_path, sr=sr, mono=mono, offset=offset, duration=duration)
+  if y.size == 0:
+    raise ValueError(f"Audio '{audio_path}' is empty after loading.")
   if hop_length is None:
     if hop_ms is None:
       hop_length = 512
@@ -181,6 +183,10 @@ def audio_to_mel_spectrogram(
       win_length = n_fft
     else:
       win_length = max(1, int(round(sr_eff * (win_ms / 1000.0))))
+
+  if y.size < n_fft:
+    pad_width = n_fft - y.size
+    y = np.pad(y, (0, pad_width))
 
   S_mel = librosa.feature.melspectrogram(
     y=y, sr=sr_eff, n_fft=n_fft, hop_length=hop_length, win_length=win_length,

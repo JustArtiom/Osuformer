@@ -10,6 +10,9 @@ data:
   osu_width: 512
   osu_height: 384
   prep_num_workers: 4
+  max_frames_per_sample: 4096
+  min_bpm: 80
+  max_bpm: null
   normalize_audio: true
   skip_empty_chunks: true
   default_bpm: 120.0
@@ -34,7 +37,7 @@ model:
     max_seq_len: 64
 
 training:
-  batch_size: 12
+  batch_size: 16
   lr: 0.0003
   num_epochs: 100
   device: "cuda"
