@@ -1,4 +1,5 @@
 import os
+os.environ.setdefault("MPLBACKEND", "Agg")
 from concurrent.futures import ThreadPoolExecutor
 
 from src.utils.config import load_config
@@ -23,6 +24,11 @@ files = collect_files(DATA_DIR, AUDIO_EXTENSIONS, EXCLUDE_PATTERNS)
 
 def _prepare_single(rel_path: str):
     full_path = os.path.join(DATA_DIR, rel_path)
+    try:
+        if os.path.getsize(full_path) == 0:
+            return rel_path, "audio file is empty"
+    except OSError as exc:
+        return rel_path, f"stat failed: {exc}"
     try:
         prepare_audio(
             full_path,

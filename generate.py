@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Sequence, Tuple
 
+import math
 import numpy as np
 import torch
 
@@ -78,12 +79,27 @@ def build_chunks(spec: MelSpec, data_cfg: dict, bpm: float, offset_ms: float) ->
     ticks_per_beat = data_cfg.get("ticks_per_beat", 8)
     sample_hop_beats = data_cfg.get("sample_hop_beats", max(1, beats_per_sample // 2))
     ticks_per_sample = beats_per_sample * ticks_per_beat
+    normalize_audio = data_cfg.get("normalize_audio", True)
 
     beat_duration_ms = 60000.0 / max(bpm, 1e-3)
     chunk_duration_ms = beats_per_sample * beat_duration_ms
     sample_hop_ms = sample_hop_beats * beat_duration_ms
     tick_duration_ms = beat_duration_ms / ticks_per_beat
     frames_per_chunk = max(1, int(round(chunk_duration_ms / spec.frame_duration_ms)))
+    raw_frames_per_chunk = frames_per_chunk
+    frame_stride = 1
+    max_frames = data_cfg.get("max_frames_per_sample")
+    if max_frames and max_frames > 0 and raw_frames_per_chunk > max_frames:
+        frame_stride = int(math.ceil(raw_frames_per_chunk / max_frames))
+        frames_per_chunk = int(math.ceil(raw_frames_per_chunk / frame_stride))
+        print(
+            f"[INFO] Downsampling generation window: {raw_frames_per_chunk} frames -> "
+            f"{frames_per_chunk} (stride {frame_stride})"
+        )
+
+    if normalize_audio:
+        mean = torch.from_numpy(spec.S_db.mean(axis=1).astype(np.float32)).view(1, 1, -1)
+        std = torch.from_numpy(np.maximum(spec.S_db.std(axis=1).astype(np.float32), 1e-5)).view(1, 1, -1)
 
     start = max(0.0, offset_ms)
     timeline_end = spec.times[-1] * 1000.0
@@ -92,16 +108,14 @@ def build_chunks(spec: MelSpec, data_cfg: dict, bpm: float, offset_ms: float) ->
     chunks: List[AudioChunk] = []
     while start < timeline_end:
         start_frame = int(round(start / spec.frame_duration_ms))
-        mel_slice = spec.S_db[:, start_frame : start_frame + frames_per_chunk]
+        mel_slice = spec.S_db[:, start_frame : start_frame + raw_frames_per_chunk : frame_stride]
         valid_frames = mel_slice.shape[1]
         if valid_frames < frames_per_chunk:
             pad = frames_per_chunk - valid_frames
             mel_slice = np.pad(mel_slice, ((0, 0), (0, pad)), constant_values=pad_value)
 
         audio = torch.from_numpy(mel_slice.T).unsqueeze(0).float()
-        if data_cfg.get("normalize_audio", True):
-            mean = audio.mean(dim=1, keepdim=True)
-            std = audio.std(dim=1, keepdim=True).clamp_min(1e-5)
+        if normalize_audio:
             audio = (audio - mean) / std
 
         mask = torch.arange(frames_per_chunk).unsqueeze(0) >= valid_frames
@@ -172,6 +186,8 @@ def build_default_map(audio_name: str, bpm: float, offset: float, hitobject_line
     beat_length = 60000.0 / max(bpm, 1e-3)
     content = [
         "osu file format v14",
+        "// AI Osu Beatmap Generator - by JustArtiom",
+        "// https://github.com/JustArtiom/osu-bmg",
         "",
         "[General]",
         f"AudioFilename: {audio_name}",
@@ -189,7 +205,7 @@ def build_default_map(audio_name: str, bpm: float, offset: float, hitobject_line
         "TitleUnicode:Generated Track",
         "Artist:Unknown",
         "ArtistUnicode:Unknown",
-        "Creator:Codex",
+        "Creator:Osu Beatmap Generator - by JustArtiom",
         "Version:Auto",
         "Source:",
         "Tags:generated",

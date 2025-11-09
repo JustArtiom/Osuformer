@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import random
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -29,6 +30,8 @@ class SampleDescriptor:
     frames_per_chunk: int
     token_length: int
     tokens: np.ndarray
+    frame_stride: int = 1
+    raw_frames: int = 0
 
 
 def collect_osu_file_paths(paths_cfg: dict) -> List[Path]:
@@ -100,6 +103,8 @@ class OsuBeatmapDataset(Dataset):
         self.skip_empty = self.data_cfg.get("skip_empty_chunks", True)
         self.min_star_rating = self._parse_star_rating(self.data_cfg.get("min_star_rating"), "min_star_rating")
         self.max_star_rating = self._parse_star_rating(self.data_cfg.get("max_star_rating"), "max_star_rating")
+        self.min_bpm = self._parse_bpm(self.data_cfg.get("min_bpm"), "min_bpm")
+        self.max_bpm = self._parse_bpm(self.data_cfg.get("max_bpm"), "max_bpm")
         if (
             self.min_star_rating is not None
             and self.max_star_rating is not None
@@ -108,6 +113,7 @@ class OsuBeatmapDataset(Dataset):
             raise ValueError("data.min_star_rating cannot be greater than data.max_star_rating")
 
         self._spec_cache: Dict[str, MelSpec] = {}
+        self._spec_stats: Dict[str, Tuple[torch.Tensor, torch.Tensor]] = {}
         self.samples: List[SampleDescriptor] = []
 
         if osu_files is None:
@@ -140,11 +146,30 @@ class OsuBeatmapDataset(Dataset):
         if not self.samples:
             raise RuntimeError(f"No training samples could be built for split '{split}'")
 
+    def _compute_frame_stride(self, frames: int) -> Tuple[int, int]:
+        frames = max(1, frames)
+        max_frames = self.data_cfg.get("max_frames_per_sample")
+        if not max_frames or max_frames <= 0 or frames <= max_frames:
+            return 1, frames
+        stride = int(math.ceil(frames / max_frames))
+        adjusted = int(math.ceil(frames / stride))
+        return max(1, stride), max(1, adjusted)
+
+    def _compute_spec_stats(self, spec: MelSpec) -> Tuple[torch.Tensor, torch.Tensor]:
+        data = spec.S_db
+        mean = torch.from_numpy(data.mean(axis=1).astype(np.float32))
+        std = torch.from_numpy(np.maximum(data.std(axis=1).astype(np.float32), 1e-5))
+        return mean, std
+
+    def _get_spec_stats(self, audio_key: str, spec: MelSpec) -> Tuple[torch.Tensor, torch.Tensor]:
+        if audio_key not in self._spec_stats:
+            self._spec_stats[audio_key] = self._compute_spec_stats(spec)
+        return self._spec_stats[audio_key]
+
     def _load_standard_beatmap(self, osu_path: Path) -> Beatmap | None:
         try:
             beatmap = Beatmap(file_path=str(osu_path))
-        except Exception as exc:  # pragma: no cover - defensive guard
-            print(f"[WARN] Skipping {osu_path}: failed to parse beatmap ({exc})")
+        except:  # pragma: no cover - defensive guard
             return None
 
         mode = 0
@@ -156,13 +181,14 @@ class OsuBeatmapDataset(Dataset):
                 mode = 0
 
         if mode != 0:
-            print(f"[WARN] Skipping {osu_path}: mode {mode} is not osu!standard.")
             return None
 
         return beatmap
 
     def _build_samples_for_map(self, osu_path: Path, beatmap: Beatmap) -> List[SampleDescriptor]:
         if not self._star_rating_in_range(beatmap, osu_path):
+            return []
+        if not self._bpm_in_range(beatmap, osu_path):
             return []
         audio_path = self._resolve_audio_path(osu_path, beatmap)
         spec = self._load_mel_spec(audio_path)
@@ -179,7 +205,13 @@ class OsuBeatmapDataset(Dataset):
         chunk_duration_ms = self.beats_per_sample * beat_duration_ms
         sample_hop_ms = self.sample_hop_beats * beat_duration_ms
         tick_duration_ms = beat_duration_ms / self.ticks_per_beat
-        frames_per_chunk = max(1, int(round(chunk_duration_ms / spec.frame_duration_ms)))
+        raw_frames_per_chunk = max(1, int(round(chunk_duration_ms / spec.frame_duration_ms)))
+        frame_stride, frames_per_chunk = self._compute_frame_stride(raw_frames_per_chunk)
+        if frame_stride > 1:
+            print(
+                f"[INFO] Downsampling audio window for {osu_path.name}: "
+                f"{raw_frames_per_chunk} frames -> {frames_per_chunk} (stride {frame_stride})"
+            )
 
         timeline_end_ms = spec.times[-1] * 1000.0
         current_start = max(0.0, offset_ms)
@@ -210,6 +242,8 @@ class OsuBeatmapDataset(Dataset):
                     audio_path=str(audio_path),
                     start_frame=max(0, start_frame),
                     frames_per_chunk=frames_per_chunk,
+                    frame_stride=frame_stride,
+                    raw_frames=raw_frames_per_chunk,
                     token_length=token_length,
                     tokens=tokens,
                 )
@@ -222,7 +256,9 @@ class OsuBeatmapDataset(Dataset):
                 SampleDescriptor(
                     audio_path=str(audio_path),
                     start_frame=0,
-                    frames_per_chunk=max(1, int(round(chunk_duration_ms / spec.frame_duration_ms))),
+                    frames_per_chunk=frames_per_chunk,
+                    frame_stride=frame_stride,
+                    raw_frames=raw_frames_per_chunk,
                     token_length=token_length,
                     tokens=tokens,
                 )
@@ -232,6 +268,15 @@ class OsuBeatmapDataset(Dataset):
 
     @staticmethod
     def _parse_star_rating(value, key: str) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"data.{key} must be a number or null, got {value!r}") from exc
+
+    @staticmethod
+    def _parse_bpm(value, key: str) -> float | None:
         if value is None:
             return None
         try:
@@ -252,6 +297,23 @@ class OsuBeatmapDataset(Dataset):
         if self.min_star_rating is not None and star_rating < self.min_star_rating:
             return False
         if self.max_star_rating is not None and star_rating > self.max_star_rating:
+            return False
+        return True
+
+    def _bpm_in_range(self, beatmap: Beatmap, osu_path: Path) -> bool:
+        if self.min_bpm is None and self.max_bpm is None:
+            return True
+        bpm = None
+        for tp in getattr(beatmap, "timing_points", []):
+            if tp.uninherited == 1:
+                bpm = tp.get_bpm()
+                break
+        if bpm is None:
+            print(f"[WARN] Skipping {osu_path}: could not determine BPM.")
+            return False
+        if self.min_bpm is not None and bpm < self.min_bpm:
+            return False
+        if self.max_bpm is not None and bpm > self.max_bpm:
             return False
         return True
 
@@ -286,6 +348,8 @@ class OsuBeatmapDataset(Dataset):
             )
         spec = MelSpec.load_npz(str(npz_path))
         self._spec_cache[audio_key] = spec
+        if self.normalize_audio:
+            self._spec_stats[audio_key] = self._compute_spec_stats(spec)
         return spec
 
     def _get_primary_bpm_and_offset(self, beatmap: Beatmap) -> Tuple[float, float]:
@@ -367,8 +431,10 @@ class OsuBeatmapDataset(Dataset):
         spec = self._spec_cache[descriptor.audio_path]
 
         start = descriptor.start_frame
-        end = start + descriptor.frames_per_chunk
-        mel_slice = spec.S_db[:, start:end]
+        raw_frames = descriptor.raw_frames or (descriptor.frames_per_chunk * descriptor.frame_stride)
+        end = start + raw_frames
+        stride = max(1, descriptor.frame_stride)
+        mel_slice = spec.S_db[:, start:end:stride]
         valid_frames = mel_slice.shape[1]
 
         if valid_frames < descriptor.frames_per_chunk:
@@ -380,9 +446,8 @@ class OsuBeatmapDataset(Dataset):
         audio_length = valid_frames
 
         if self.normalize_audio:
-            mean = mel.mean(dim=0, keepdim=True)
-            std = mel.std(dim=0, keepdim=True).clamp_min(1e-5)
-            mel = (mel - mean) / std
+            mean, std = self._get_spec_stats(descriptor.audio_path, spec)
+            mel = (mel - mean.unsqueeze(0)) / std.unsqueeze(0)
 
         tokens = torch.from_numpy(descriptor.tokens).float()
 
