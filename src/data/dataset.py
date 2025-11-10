@@ -100,7 +100,14 @@ class OsuBeatmapDataset(Dataset):
         self.sample_hop_beats = self.data_cfg.get("sample_hop_beats", max(1, self.beats_per_sample // 2))
         self.max_seq_len = config["model"]["decoder"].get("max_seq_len", 64)
         self.normalize_audio = self.data_cfg.get("normalize_audio", True)
-        self.skip_empty = self.data_cfg.get("skip_empty_chunks", True)
+        self.skip_empty = self.data_cfg.get("skip_empty_chunks", False)
+        self.map_types = {mt.lower() for mt in (self.data_cfg.get("map_types") or [])}
+        type_thresholds = self.data_cfg.get("map_type_thresholds", {})
+        self.stream_interval_ms = float(type_thresholds.get("stream_interval_ms", 110.0))
+        self.stream_ratio = float(type_thresholds.get("stream_ratio", 0.35))
+        self.stream_gap_distance = float(type_thresholds.get("stream_gap_distance", 80.0))
+        self.aim_jump_distance = float(type_thresholds.get("aim_jump_distance", 120.0))
+        self.aim_ratio = float(type_thresholds.get("aim_ratio", 0.3))
         self.min_star_rating = self._parse_star_rating(self.data_cfg.get("min_star_rating"), "min_star_rating")
         self.max_star_rating = self._parse_star_rating(self.data_cfg.get("max_star_rating"), "max_star_rating")
         self.min_bpm = self._parse_bpm(self.data_cfg.get("min_bpm"), "min_bpm")
@@ -190,15 +197,19 @@ class OsuBeatmapDataset(Dataset):
             return []
         if not self._bpm_in_range(beatmap, osu_path):
             return []
+        events = self._collect_events(beatmap)
+        events.sort(key=lambda item: item[0])
+        if not events:
+            return []
+        if not self._map_types_match(events):
+            return []
+
         audio_path = self._resolve_audio_path(osu_path, beatmap)
         spec = self._load_mel_spec(audio_path)
 
         bpm, offset_ms = self._get_primary_bpm_and_offset(beatmap)
         if bpm <= 0:
             bpm = self.data_cfg.get("default_bpm", 120.0)
-
-        events = self._collect_events(beatmap)
-        events.sort(key=lambda item: item[0])
 
         ticks_per_sample = self.beats_per_sample * self.ticks_per_beat
         beat_duration_ms = 60000.0 / max(bpm, 1e-3)
@@ -367,6 +378,61 @@ class OsuBeatmapDataset(Dataset):
                 events.extend(self._slider_to_events(ho))
         return events
 
+    def _map_types_match(self, events: Sequence[Tuple[float, float, float]]) -> bool:
+        if not self.map_types:
+            return True
+
+        requested = {typ for typ in self.map_types if typ in {"aim", "stream"}}
+        if not requested:
+            return True
+
+        is_stream = self._is_stream_map(events)
+        is_aim = self._is_aim_map(events)
+
+        if "aim" in requested and "stream" in requested:
+            return is_aim or is_stream
+        if "aim" in requested:
+            return is_aim and not is_stream
+        if "stream" in requested:
+            return is_stream and not is_aim
+        return True
+
+    def _is_stream_map(self, events: Sequence[Tuple[float, float, float]]) -> bool:
+        if len(events) < 3:
+            return False
+        arr = np.asarray(events, dtype=np.float32)
+        if arr.ndim != 2 or arr.shape[1] < 3:
+            return False
+        order = np.argsort(arr[:, 0])
+        times = arr[order, 0]
+        coords = arr[order, 1:3]
+        intervals = np.diff(times)
+        if intervals.size == 0:
+            return False
+        deltas = np.diff(coords, axis=0)
+        distances = np.linalg.norm(deltas, axis=1)
+        close_time = intervals <= self.stream_interval_ms
+        close_space = distances <= self.stream_gap_distance
+        stream_pairs = close_time & close_space
+        if stream_pairs.size == 0:
+            return False
+        ratio = float(stream_pairs.sum()) / float(stream_pairs.size)
+        return ratio >= self.stream_ratio
+
+    def _is_aim_map(self, events: Sequence[Tuple[float, float, float]]) -> bool:
+        if len(events) < 2:
+            return False
+        coords = np.array([(event[1], event[2]) for event in events], dtype=np.float32)
+        if coords.shape[0] < 2:
+            return False
+        diffs = np.diff(coords, axis=0)
+        if diffs.size == 0:
+            return False
+        dists = np.linalg.norm(diffs, axis=1)
+        long_jumps = (dists >= self.aim_jump_distance).sum()
+        ratio = float(long_jumps) / float(dists.size)
+        return ratio >= self.aim_ratio
+
     def _slider_to_events(self, slider: Slider) -> List[Tuple[float, float, float]]:
         points: List[Tuple[float, float]] = []
         if slider.object_params and slider.object_params.curves:
@@ -410,8 +476,27 @@ class OsuBeatmapDataset(Dataset):
             y_norm = np.clip(event[2] / self.data_cfg["osu_height"], 0.0, 1.0)
             encoded.append((tick_norm, x_norm, y_norm, 0.0))
 
-        if len(encoded) >= self.max_seq_len:
-            encoded = encoded[: self.max_seq_len - 1]
+        max_events = self.max_seq_len - 1
+        if len(encoded) > max_events and max_events > 0:
+            stride = int(math.ceil(len(encoded) / max_events))
+            encoded = encoded[::stride]
+            if len(encoded) > max_events:
+                encoded = encoded[:max_events]
+
+        eos_ramp_steps = max(0, int(self.data_cfg.get("eos_ramp_steps", 0)))
+        if eos_ramp_steps > 0 and encoded:
+            ramp_start = max(0, len(encoded) - eos_ramp_steps)
+            ramp_span = len(encoded) - ramp_start
+            if ramp_span > 0:
+                ramp_values = np.linspace(0.25, 0.9, num=ramp_span, endpoint=True, dtype=np.float32)
+                updated: List[Tuple[float, float, float, float]] = []
+                for idx, token in enumerate(encoded):
+                    if idx >= ramp_start:
+                        ramp_idx = idx - ramp_start
+                        updated.append((token[0], token[1], token[2], float(ramp_values[ramp_idx])))
+                    else:
+                        updated.append(token)
+                encoded = updated
 
         encoded.append((0.0, 0.0, 0.0, 1.0))
 

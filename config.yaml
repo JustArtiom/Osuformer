@@ -14,11 +14,19 @@ data:
   min_bpm: 80
   max_bpm: null
   normalize_audio: true
-  skip_empty_chunks: true
+  skip_empty_chunks: false
   default_bpm: 120.0
   merge_tolerance_ms: 8.0
-  min_star_rating: 5.5
-  max_star_rating: 7.5
+  map_types: [aim]
+  map_type_thresholds:
+    stream_interval_ms: 110.0
+    stream_ratio: 0.35
+    stream_gap_distance: 80.0
+    aim_jump_distance: 120.0
+    aim_ratio: 0.3
+  min_star_rating: 6
+  max_star_rating: 7
+  eos_ramp_steps: 4
 
 model:
   encoder:
@@ -34,19 +42,24 @@ model:
     num_heads: 4
     ffn_dim: 512
     dropout: 0.1
-    max_seq_len: 64
+    max_seq_len: 128
 
 training:
-  batch_size: 16
-  lr: 0.0003
+  batch_size: 12
+  lr: 0.0001
   num_epochs: 100
   device: "cuda"
   path: "checkpoints/"
   val_split: 0.2
   num_workers: 5
-  weight_decay: 0.01
-  eos_loss_weight: 1.0
+  weight_decay: 0.0001
+  eos_loss_weight: 2.0
   grad_clip: 1.0
+  use_amp: true
+  lr_schedule:
+    type: "multistep"
+    milestones: [30]
+    gamma: 0.3
 
 paths:
   data: "dataset"

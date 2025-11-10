@@ -36,6 +36,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--offset", type=float, default=None, help="Override offset (ms) for beat alignment.")
     parser.add_argument("--device", type=str, default="cpu", help="Device to run generation on.")
     parser.add_argument("--eos-threshold", type=float, default=0.6, help="Probability threshold for stopping decoding.")
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=1.0,
+        help="Sampling temperature for coordinate/EOS logits (higher = more random).",
+    )
     return parser.parse_args()
 
 
@@ -265,7 +271,7 @@ def main() -> None:
     for chunk in chunks:
         audio = chunk.audio.to(device)
         mask = chunk.mask.to(device)
-        preds = model.generate(audio, mask, eos_threshold=args.eos_threshold)
+        preds = model.generate(audio, mask, eos_threshold=args.eos_threshold, temperature=args.temperature)
         chunk_events = tokens_to_events(preds[0].cpu(), chunk, data_cfg, args.eos_threshold)
         all_events.extend(chunk_events)
 

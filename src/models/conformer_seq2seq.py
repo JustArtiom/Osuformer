@@ -186,6 +186,7 @@ class HitObjectDecoder(nn.Module):
         memory_key_padding_mask: Optional[torch.Tensor],
         targets: torch.Tensor,
         target_key_padding_mask: Optional[torch.Tensor],
+        temperature: float = 1.0,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size, target_len, _ = targets.shape
         embedded = self.event_embed(targets)
@@ -205,6 +206,9 @@ class HitObjectDecoder(nn.Module):
             memory_key_padding_mask=memory_key_padding_mask,
         )
         logits = self.output_proj(decoded)
+        if temperature != 1.0:
+            temp = max(temperature, 1e-4)
+            logits = logits / temp
         coord_logits = logits[..., :3]
         eos_logits = logits[..., 3:]
         coord_pred = torch.sigmoid(coord_logits)
@@ -248,7 +252,7 @@ class ConformerSeq2Seq(nn.Module):
         memory = self.encoder(audio, audio_mask)
         if targets is None:
             raise ValueError("Targets are required for training forward pass")
-        coords, eos_logits = self.decoder(memory, audio_mask, targets, target_mask)
+        coords, eos_logits = self.decoder(memory, audio_mask, targets, target_mask, temperature=1.0)
         return coords, eos_logits
 
     @torch.no_grad()
@@ -258,6 +262,7 @@ class ConformerSeq2Seq(nn.Module):
         audio_mask: Optional[torch.Tensor],
         max_steps: Optional[int] = None,
         eos_threshold: float = 0.6,
+        temperature: float = 1.0,
     ) -> torch.Tensor:
         self.eval()
         memory = self.encoder(audio, audio_mask)
@@ -269,7 +274,7 @@ class ConformerSeq2Seq(nn.Module):
         finished = torch.zeros(batch_size, dtype=torch.bool, device=audio.device)
 
         for _ in range(max_steps):
-            coords, eos_logits = self.decoder(memory, audio_mask, generated, None)
+            coords, eos_logits = self.decoder(memory, audio_mask, generated, None, temperature=temperature)
             next_coords = coords[:, -1, :]
             next_eos = torch.sigmoid(eos_logits[:, -1, :])
             outputs.append(torch.cat([next_coords, next_eos], dim=-1))
@@ -281,7 +286,7 @@ class ConformerSeq2Seq(nn.Module):
 
             next_token = torch.zeros(batch_size, 1, 4, device=audio.device, dtype=audio.dtype)
             next_token[:, 0, :3] = next_coords
-            next_token[:, 0, 3] = 0.0
+            next_token[:, 0, 3] = next_eos.squeeze(-1)
             generated = torch.cat([generated, next_token], dim=1)
 
         return torch.stack(outputs, dim=1)
