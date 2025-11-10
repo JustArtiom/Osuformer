@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 from typing import Dict, List, Optional
+import time
 
 try:
     import matplotlib
@@ -23,6 +24,28 @@ from src.data import OsuBeatmapDataset, osu_collate, split_train_val_files
 from src.models import ConformerSeq2Seq
 from src.training import TrainingSession
 from src.utils.config import load_config
+from torch.cuda.amp import GradScaler, autocast
+
+
+def build_scheduler(optimizer: torch.optim.Optimizer, training_cfg: dict):
+    schedule_cfg = training_cfg.get("lr_schedule")
+    if not schedule_cfg:
+        return None
+    schedule_type = schedule_cfg.get("type", "").lower()
+    if schedule_type == "multistep":
+        milestones = schedule_cfg.get("milestones", [])
+        gamma = schedule_cfg.get("gamma", 0.1)
+        return torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=milestones, gamma=gamma)
+    if schedule_type == "step":
+        step_size = schedule_cfg.get("step_size", 10)
+        gamma = schedule_cfg.get("gamma", 0.1)
+        return torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
+    if schedule_type == "cosine":
+        t_max = schedule_cfg.get("t_max", training_cfg.get("num_epochs", 100))
+        eta_min = schedule_cfg.get("eta_min", schedule_cfg.get("min_lr", 0.0))
+        return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max, eta_min=eta_min)
+    print(f"[WARN] Unknown lr_schedule.type '{schedule_type}'. Skipping scheduler.")
+    return None
 
 
 def parse_args() -> argparse.Namespace:
@@ -53,6 +76,9 @@ def run_epoch(
     eos_loss_weight: float,
     grad_clip: float,
     optimizer: Optional[torch.optim.Optimizer] = None,
+    *,
+    amp_enabled: bool = False,
+    scaler: Optional[GradScaler] = None,
 ) -> Dict[str, float]:
     is_train = optimizer is not None
     model.train(is_train)
@@ -60,43 +86,76 @@ def run_epoch(
     total_coord = 0.0
     total_eos = 0.0
     total_samples = 0
+    batch_count = 0
+    total_batch_time = 0.0
+    total_data_time = 0.0
 
     iterator = tqdm(dataloader, desc="Train" if is_train else "Eval", leave=False)
+    data_start = time.perf_counter()
     for batch in iterator:
+        now = time.perf_counter()
+        data_elapsed = now - data_start
+        total_data_time += data_elapsed
+        batch_start = now
+
         audio = batch["audio"].to(device)
         tokens = batch["tokens"].to(device)
         audio_mask = batch["audio_mask"].to(device)
         token_mask = batch["token_mask"].to(device)
 
-        coords_pred, eos_logits = model(audio, audio_mask, tokens, token_mask)
+        with autocast(enabled=amp_enabled):
+            coords_pred, eos_logits = model(audio, audio_mask, tokens, token_mask)
 
-        target_coords = tokens[..., :3]
-        target_eos = tokens[..., 3:]
-        valid_mask = (~token_mask).unsqueeze(-1).float()
-        mask_total = valid_mask.sum().clamp_min(1.0)
+            target_coords = tokens[..., :3]
+            target_eos = tokens[..., 3:]
+            valid_mask = (~token_mask).unsqueeze(-1).float()
+            mask_total = valid_mask.sum().clamp_min(1.0)
 
-        coord_loss = F.smooth_l1_loss(coords_pred, target_coords, reduction="none")
-        coord_loss = (coord_loss * valid_mask).sum() / mask_total
+            coord_loss = F.smooth_l1_loss(coords_pred, target_coords, reduction="none")
+            coord_loss = (coord_loss * valid_mask).sum() / (mask_total * target_coords.size(-1))
 
-        eos_loss = F.binary_cross_entropy_with_logits(eos_logits, target_eos, reduction="none")
-        eos_loss = (eos_loss * valid_mask).sum() / mask_total
+            with torch.no_grad():
+                pos_eos = (target_eos * valid_mask).sum().clamp_min(1.0)
+                neg_eos = ((1.0 - target_eos) * valid_mask).sum().clamp_min(1.0)
+                eos_pos_weight = (neg_eos / pos_eos).clamp_min(1.0)
 
-        loss = coord_loss + eos_loss_weight * eos_loss
+            eos_loss = F.binary_cross_entropy_with_logits(
+                eos_logits,
+                target_eos,
+                reduction="none",
+                pos_weight=eos_pos_weight,
+            )
+            eos_loss = (eos_loss * valid_mask).sum() / mask_total
+
+            loss = coord_loss + eos_loss_weight * eos_loss
 
         if is_train:
             optimizer.zero_grad()
-            loss.backward()
-            if grad_clip > 0:
-                nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-            optimizer.step()
+            if scaler is not None and scaler.is_enabled():
+                scaler.scale(loss).backward()
+                if grad_clip > 0:
+                    scaler.unscale_(optimizer)
+                    nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                if grad_clip > 0:
+                    nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                optimizer.step()
 
         batch_size = audio.size(0)
         total_loss += loss.item() * batch_size
         total_coord += coord_loss.item() * batch_size
         total_eos += eos_loss.item() * batch_size
         total_samples += batch_size
+        batch_count += 1
 
-        iterator.set_postfix(loss=loss.item())
+        batch_elapsed = time.perf_counter() - batch_start
+        total_batch_time += batch_elapsed
+
+        iterator.set_postfix(loss=loss.item(), data=data_elapsed, batch=batch_elapsed)
+        data_start = time.perf_counter()
 
     if total_samples == 0:
         return {"loss": 0.0, "coord_loss": 0.0, "eos_loss": 0.0}
@@ -105,6 +164,9 @@ def run_epoch(
         "loss": total_loss / total_samples,
         "coord_loss": total_coord / total_samples,
         "eos_loss": total_eos / total_samples,
+        "avg_batch_time": total_batch_time / batch_count if batch_count else 0.0,
+        "avg_data_time": total_data_time / batch_count if batch_count else 0.0,
+        "samples_per_sec": (total_samples / total_batch_time) if total_batch_time > 0 else 0.0,
     }
 
 
@@ -115,6 +177,9 @@ def save_checkpoint(path: Path, model: ConformerSeq2Seq, optimizer: torch.optim.
         "optimizer_state": optimizer.state_dict(),
         "metrics": metrics,
     }
+    scheduler_state = metrics.get("_scheduler_state")
+    if scheduler_state is not None:
+        payload["scheduler_state"] = scheduler_state
     torch.save(payload, path)
 
 
@@ -180,6 +245,9 @@ def main() -> None:
         lr=training_cfg["lr"],
         weight_decay=training_cfg.get("weight_decay", 1e-4),
     )
+    use_amp = bool(training_cfg.get("use_amp", False)) and device.type == "cuda"
+    scaler = GradScaler(enabled=use_amp)
+    scheduler = build_scheduler(optimizer, training_cfg)
 
     metrics_path = Path(session.path) / "metrics.json"
     train_history: List[Dict[str, float]] = []
@@ -199,6 +267,8 @@ def main() -> None:
                 metrics_data = json.load(f)
                 train_history = metrics_data.get("train", [])
                 val_history = metrics_data.get("val", [])
+        if scheduler and "scheduler_state" in payload:
+            scheduler.load_state_dict(payload["scheduler_state"])
     best_val = (
         min((entry.get("loss", float("inf")) for entry in val_history), default=float("inf"))
         if val_history
@@ -211,23 +281,54 @@ def main() -> None:
 
     for epoch in range(start_epoch, num_epochs + 1):
         print(f"[INFO] Epoch {epoch}/{num_epochs}")
-        train_metrics = run_epoch(model, train_loader, device, eos_loss_weight, grad_clip, optimizer=optimizer)
-        val_metrics = run_epoch(model, val_loader, device, eos_loss_weight, grad_clip, optimizer=None)
+        train_metrics = run_epoch(
+            model,
+            train_loader,
+            device,
+            eos_loss_weight,
+            grad_clip,
+            optimizer=optimizer,
+            amp_enabled=use_amp,
+            scaler=scaler,
+        )
+        val_metrics = run_epoch(
+            model,
+            val_loader,
+            device,
+            eos_loss_weight,
+            grad_clip,
+            optimizer=None,
+            amp_enabled=use_amp,
+            scaler=None,
+        )
 
         train_history.append(train_metrics)
         val_history.append(val_metrics)
 
-        print(f"       Train Loss: {train_metrics['loss']:.4f} | Val Loss: {val_metrics['loss']:.4f}")
+        current_lr = optimizer.param_groups[0]["lr"]
+        print(f"       Train Loss: {train_metrics['loss']:.4f} | Val Loss: {val_metrics['loss']:.4f} | LR: {current_lr:.6f}")
+        if train_metrics.get("avg_batch_time", 0.0) > 0:
+            print(
+                "       Throughput: "
+                f"{train_metrics['samples_per_sec']:.2f} samples/s "
+                f"(batch {train_metrics['avg_batch_time']:.3f}s | data {train_metrics['avg_data_time']:.3f}s)"
+            )
+
+        checkpoint_metrics = val_metrics.copy()
+        if scheduler:
+            checkpoint_metrics["_scheduler_state"] = scheduler.state_dict()
 
         latest_path = Path(session.path) / "latest.pt"
-        save_checkpoint(latest_path, model, optimizer, epoch, val_metrics)
+        save_checkpoint(latest_path, model, optimizer, epoch, checkpoint_metrics)
         if val_metrics["loss"] < best_val:
             best_val = val_metrics["loss"]
-            save_checkpoint(Path(session.path) / "best.pt", model, optimizer, epoch, val_metrics)
+            save_checkpoint(Path(session.path) / "best.pt", model, optimizer, epoch, checkpoint_metrics)
 
         with open(metrics_path, "w", encoding="utf-8") as f:
             json.dump({"train": train_history, "val": val_history}, f, indent=2)
 
+        if scheduler:
+            scheduler.step()
         plot_curves(train_history, val_history, Path(session.path) / "loss_curve.png")
 
     print("[INFO] Training complete.")
