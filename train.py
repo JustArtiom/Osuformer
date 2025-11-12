@@ -21,6 +21,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src.data import OsuBeatmapDataset, osu_collate, split_train_val_files
+from src.data.tokenizer import TokenAttr, TokenType
 from src.models import ConformerSeq2Seq
 from src.training import TrainingSession
 from src.utils.config import load_config
@@ -58,6 +59,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional checkpoint path to resume training from (e.g., checkpoints/8/latest.pt).",
     )
+    parser.add_argument(
+        "--map-cache",
+        type=str,
+        default=None,
+        help="Optional base path for dataset caches (.train.npz/.val.npz). If provided, caches are reused.",
+    )
     return parser.parse_args()
 
 
@@ -73,7 +80,6 @@ def run_epoch(
     model: ConformerSeq2Seq,
     dataloader: DataLoader,
     device: torch.device,
-    eos_loss_weight: float,
     grad_clip: float,
     optimizer: Optional[torch.optim.Optimizer] = None,
     *,
@@ -83,8 +89,6 @@ def run_epoch(
     is_train = optimizer is not None
     model.train(is_train)
     total_loss = 0.0
-    total_coord = 0.0
-    total_eos = 0.0
     total_samples = 0
     batch_count = 0
     total_batch_time = 0.0
@@ -104,30 +108,70 @@ def run_epoch(
         token_mask = batch["token_mask"].to(device)
 
         with autocast(enabled=amp_enabled):
-            coords_pred, eos_logits = model(audio, audio_mask, tokens, token_mask)
+            attr_logits = model(audio, audio_mask, tokens, token_mask)
+            valid_mask = ~token_mask
+            type_targets = tokens[..., TokenAttr.TYPE]
 
-            target_coords = tokens[..., :3]
-            target_eos = tokens[..., 3:]
-            valid_mask = (~token_mask).unsqueeze(-1).float()
-            mask_total = valid_mask.sum().clamp_min(1.0)
+            attr_losses: List[torch.Tensor] = []
+            for attr_idx, logits in enumerate(attr_logits):
+                target = tokens[..., attr_idx]
+                if attr_idx == TokenAttr.TYPE:
+                    attr_mask = valid_mask
+                elif attr_idx in (TokenAttr.START_X, TokenAttr.START_Y):
+                    attr_mask = valid_mask & (type_targets != TokenType.EMPTY)
+                elif attr_idx in (
+                    TokenAttr.END_X,
+                    TokenAttr.END_Y,
+                    TokenAttr.CTRL1_X,
+                    TokenAttr.CTRL1_Y,
+                    TokenAttr.CTRL2_X,
+                    TokenAttr.CTRL2_Y,
+                    TokenAttr.DURATION,
+                    TokenAttr.SLIDES,
+                    TokenAttr.CURVE_TYPE,
+                    TokenAttr.SLIDER_SV,
+                ):
+                    attr_mask = valid_mask & (type_targets == TokenType.SLIDER)
+                else:
+                    attr_mask = valid_mask
 
-            coord_loss = F.smooth_l1_loss(coords_pred, target_coords, reduction="none")
-            coord_loss = (coord_loss * valid_mask).sum() / (mask_total * target_coords.size(-1))
+                flat_mask = attr_mask.reshape(-1).float()
+                if flat_mask.sum() == 0:
+                    continue
 
-            with torch.no_grad():
-                pos_eos = (target_eos * valid_mask).sum().clamp_min(1.0)
-                neg_eos = ((1.0 - target_eos) * valid_mask).sum().clamp_min(1.0)
-                eos_pos_weight = (neg_eos / pos_eos).clamp_min(1.0)
+                flat_logits = logits.view(-1, logits.size(-1))
+                flat_target = target.view(-1)
+                kwargs = {}
+                if attr_idx == TokenAttr.TYPE:
+                    counts = torch.bincount(flat_target, minlength=3).float()
+                    total = counts.sum().clamp_min(1.0)
+                    freq = counts / total
+                    empty_freq = freq[TokenType.EMPTY].clamp_min(1e-6)
+                    other_freq = (1 - empty_freq).clamp_min(1e-6)
+                    weight_empty = 1.0
+                    weight_other = (empty_freq / other_freq).item()
+                    weights = torch.tensor(
+                        [weight_empty, weight_other, weight_other],
+                        device=device,
+                        dtype=torch.float32,
+                    )
+                    kwargs["weight"] = weights
 
-            eos_loss = F.binary_cross_entropy_with_logits(
-                eos_logits,
-                target_eos,
-                reduction="none",
-                pos_weight=eos_pos_weight,
-            )
-            eos_loss = (eos_loss * valid_mask).sum() / mask_total
+                loss_attr = F.cross_entropy(
+                    flat_logits,
+                    flat_target,
+                    reduction="none",
+                    ignore_index=0,
+                    **kwargs,
+                )
+                loss_attr = loss_attr * flat_mask
+                loss_attr = loss_attr.sum() / flat_mask.sum().clamp_min(1.0)
+                attr_losses.append(loss_attr)
 
-            loss = coord_loss + eos_loss_weight * eos_loss
+            if not attr_losses:
+                loss = torch.tensor(0.0, device=device, requires_grad=True)
+            else:
+                loss = torch.stack(attr_losses).mean()
 
         if is_train:
             optimizer.zero_grad()
@@ -146,8 +190,6 @@ def run_epoch(
 
         batch_size = audio.size(0)
         total_loss += loss.item() * batch_size
-        total_coord += coord_loss.item() * batch_size
-        total_eos += eos_loss.item() * batch_size
         total_samples += batch_size
         batch_count += 1
 
@@ -157,25 +199,30 @@ def run_epoch(
         iterator.set_postfix(loss=loss.item(), data=data_elapsed, batch=batch_elapsed)
         data_start = time.perf_counter()
 
-    if total_samples == 0:
-        return {"loss": 0.0, "coord_loss": 0.0, "eos_loss": 0.0}
-
     return {
-        "loss": total_loss / total_samples,
-        "coord_loss": total_coord / total_samples,
-        "eos_loss": total_eos / total_samples,
+        "loss": (total_loss / total_samples) if total_samples else 0.0,
         "avg_batch_time": total_batch_time / batch_count if batch_count else 0.0,
         "avg_data_time": total_data_time / batch_count if batch_count else 0.0,
         "samples_per_sec": (total_samples / total_batch_time) if total_batch_time > 0 else 0.0,
     }
 
 
-def save_checkpoint(path: Path, model: ConformerSeq2Seq, optimizer: torch.optim.Optimizer, epoch: int, metrics: Dict[str, float]) -> None:
+def save_checkpoint(
+    path: Path,
+    model: ConformerSeq2Seq,
+    optimizer: torch.optim.Optimizer,
+    epoch: int,
+    metrics: Dict[str, float],
+    *,
+    tokenizer_meta: Dict[str, object],
+) -> None:
     payload = {
         "epoch": epoch,
         "model_state": model.state_dict(),
         "optimizer_state": optimizer.state_dict(),
         "metrics": metrics,
+        "tokenizer_meta": tokenizer_meta,
+        "data_cfg": model.data_cfg_snapshot,
     }
     scheduler_state = metrics.get("_scheduler_state")
     if scheduler_state is not None:
@@ -215,12 +262,15 @@ def main() -> None:
     batch_size = training_cfg["batch_size"]
     num_epochs = args.epochs or training_cfg["num_epochs"]
     num_workers = training_cfg.get("num_workers", 0)
-    eos_loss_weight = training_cfg.get("eos_loss_weight", 1.0)
     grad_clip = training_cfg.get("grad_clip", 1.0)
 
     train_files, val_files = split_train_val_files(config)
-    train_dataset = OsuBeatmapDataset(config, split="train", osu_files=train_files)
-    val_dataset = OsuBeatmapDataset(config, split="val", osu_files=val_files)
+    cache_base = Path(args.map_cache).expanduser().resolve() if args.map_cache else None
+    train_cache = cache_base.with_suffix(".train.npz") if cache_base else None
+    val_cache = cache_base.with_suffix(".val.npz") if cache_base else None
+
+    train_dataset = OsuBeatmapDataset(config, split="train", osu_files=train_files, cache_path=train_cache)
+    val_dataset = OsuBeatmapDataset(config, split="val", osu_files=val_files, cache_path=val_cache)
 
     train_loader = DataLoader(
         train_dataset,
@@ -285,7 +335,6 @@ def main() -> None:
             model,
             train_loader,
             device,
-            eos_loss_weight,
             grad_clip,
             optimizer=optimizer,
             amp_enabled=use_amp,
@@ -295,7 +344,6 @@ def main() -> None:
             model,
             val_loader,
             device,
-            eos_loss_weight,
             grad_clip,
             optimizer=None,
             amp_enabled=use_amp,
@@ -319,10 +367,24 @@ def main() -> None:
             checkpoint_metrics["_scheduler_state"] = scheduler.state_dict()
 
         latest_path = Path(session.path) / "latest.pt"
-        save_checkpoint(latest_path, model, optimizer, epoch, checkpoint_metrics)
+        save_checkpoint(
+            latest_path,
+            model,
+            optimizer,
+            epoch,
+            checkpoint_metrics,
+            tokenizer_meta=model.tokenizer_meta(),
+        )
         if val_metrics["loss"] < best_val:
             best_val = val_metrics["loss"]
-            save_checkpoint(Path(session.path) / "best.pt", model, optimizer, epoch, checkpoint_metrics)
+            save_checkpoint(
+                Path(session.path) / "best.pt",
+                model,
+                optimizer,
+                epoch,
+                checkpoint_metrics,
+                tokenizer_meta=model.tokenizer_meta(),
+            )
 
         with open(metrics_path, "w", encoding="utf-8") as f:
             json.dump({"train": train_history, "val": val_history}, f, indent=2)

@@ -4,7 +4,7 @@ import argparse
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import math
 import numpy as np
@@ -14,6 +14,7 @@ from src.audio import MelSpec, prepare_audio
 from src.models import ConformerSeq2Seq
 from src.osu import Beatmap
 from src.utils.config import load_config
+from src.data.tokenizer import HitObjectTokenizer, TokenAttr, TokenType
 
 
 @dataclass
@@ -23,6 +24,7 @@ class AudioChunk:
     start_ms: float
     tick_duration_ms: float
     ticks_per_sample: int
+    beat_duration_ms: float
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,7 +37,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bpm", type=float, default=None, help="Override BPM for beat alignment.")
     parser.add_argument("--offset", type=float, default=None, help="Override offset (ms) for beat alignment.")
     parser.add_argument("--device", type=str, default="cpu", help="Device to run generation on.")
-    parser.add_argument("--eos-threshold", type=float, default=0.6, help="Probability threshold for stopping decoding.")
     parser.add_argument(
         "--temperature",
         type=float,
@@ -125,67 +126,168 @@ def build_chunks(spec: MelSpec, data_cfg: dict, bpm: float, offset_ms: float) ->
             audio = (audio - mean) / std
 
         mask = torch.arange(frames_per_chunk).unsqueeze(0) >= valid_frames
-        chunks.append(AudioChunk(audio=audio, mask=mask, start_ms=start, tick_duration_ms=tick_duration_ms, ticks_per_sample=ticks_per_sample))
+        chunks.append(
+            AudioChunk(
+                audio=audio,
+                mask=mask,
+                start_ms=start,
+                tick_duration_ms=tick_duration_ms,
+                ticks_per_sample=ticks_per_sample,
+                beat_duration_ms=beat_duration_ms,
+            )
+        )
         start += sample_hop_ms
 
     return chunks
 
 
-def tokens_to_events(
+def _clamp_coord(value: Optional[float], limit: int) -> Optional[int]:
+    if value is None:
+        return None
+    return int(max(0, min(limit, round(value))))
+
+
+def tokens_to_hitobjects(
     tokens: torch.Tensor,
     chunk: AudioChunk,
+    tokenizer: HitObjectTokenizer,
     data_cfg: dict,
-    eos_threshold: float,
-) -> List[Tuple[float, float, float]]:
-    events: List[Tuple[float, float, float]] = []
-    for token in tokens:
-        tick_norm, x_norm, y_norm, eos_prob = token.tolist()
-        if eos_prob > eos_threshold:
-            break
-        tick_idx = tick_norm * chunk.ticks_per_sample
-        time_ms = chunk.start_ms + tick_idx * chunk.tick_duration_ms
-        x = np.clip(x_norm, 0.0, 1.0) * data_cfg["osu_width"]
-        y = np.clip(y_norm, 0.0, 1.0) * data_cfg["osu_height"]
-        events.append((time_ms, x, y))
+) -> List[dict]:
+    events: List[dict] = []
+    width = data_cfg["osu_width"]
+    height = data_cfg["osu_height"]
+
+    for tick_idx, token in enumerate(tokens.tolist()):
+        decoded = tokenizer.decode_token(token)
+        token_type = decoded["type"]
+        if token_type == TokenType.EMPTY:
+            continue
+
+        start_x = _clamp_coord(decoded.get("start_x"), width)
+        start_y = _clamp_coord(decoded.get("start_y"), height)
+        if start_x is None or start_y is None:
+            continue
+        time_ms = int(round(chunk.start_ms + tick_idx * chunk.tick_duration_ms))
+
+        if token_type == TokenType.CIRCLE:
+            events.append(
+                {
+                    "type": "circle",
+                    "time": time_ms,
+                    "x": start_x,
+                    "y": start_y,
+                }
+            )
+            continue
+
+        end_x = _clamp_coord(decoded.get("end_x"), width)
+        end_y = _clamp_coord(decoded.get("end_y"), height)
+        if end_x is None or end_y is None:
+            continue
+
+        ctrl_points: List[Tuple[int, int]] = []
+        ctrl1_x = _clamp_coord(decoded.get("ctrl1_x"), width)
+        ctrl1_y = _clamp_coord(decoded.get("ctrl1_y"), height)
+        ctrl2_x = _clamp_coord(decoded.get("ctrl2_x"), width)
+        ctrl2_y = _clamp_coord(decoded.get("ctrl2_y"), height)
+        if ctrl1_x is not None and ctrl1_y is not None:
+            ctrl_points.append((ctrl1_x, ctrl1_y))
+        if ctrl2_x is not None and ctrl2_y is not None:
+            ctrl_points.append((ctrl2_x, ctrl2_y))
+        ctrl_points.append((end_x, end_y))
+
+        duration_ticks = decoded.get("duration_ticks", 0)
+        if duration_ticks <= 0:
+            continue
+        duration_ms = duration_ticks * chunk.tick_duration_ms
+        slides = max(1, int(decoded.get("slides", 1)))
+        beat_length = chunk.beat_duration_ms
+        if beat_length <= 0:
+            continue
+        sv_factor = decoded.get("sv_factor") or 1.0
+        slider_length = duration_ms * sv_factor * 100.0 / (beat_length * slides)
+        slider_length = max(5.0, slider_length)
+
+        events.append(
+            {
+                "type": "slider",
+                "time": time_ms,
+                "x": start_x,
+                "y": start_y,
+                "curve_type": decoded.get("curve_type") or "L",
+                "points": ctrl_points,
+                "slides": slides,
+                "length": int(round(slider_length)),
+                "sv_factor": float(sv_factor),
+            }
+        )
+
     return events
 
 
-def merge_events(events: List[Tuple[float, float, float]], tolerance_ms: float, data_cfg: dict) -> List[Tuple[int, int, int]]:
+def merge_events(events: List[dict], tolerance_ms: float) -> List[dict]:
     if not events:
         return []
-    events.sort(key=lambda e: e[0])
-    merged: List[Tuple[float, float, float]] = [events[0]]
-    for time_ms, x, y in events[1:]:
-        last_time, last_x, last_y = merged[-1]
-        if time_ms - last_time <= tolerance_ms:
-            merged[-1] = ((last_time + time_ms) / 2.0, (last_x + x) / 2.0, (last_y + y) / 2.0)
-        else:
-            merged.append((time_ms, x, y))
-    discrete = [
-        (
-            int(round(t)),
-            int(round(np.clip(x, 0.0, data_cfg["osu_width"]))),
-            int(round(np.clip(y, 0.0, data_cfg["osu_height"]))),
-        )
-        for t, x, y in merged
-    ]
-    return discrete
+    events.sort(key=lambda e: e["time"])
+    merged: List[dict] = []
+    seen_keys: set = set()
+    tol = max(1.0, tolerance_ms)
+
+    for event in events:
+        bucket = int(round(event["time"] / tol))
+        sv_key = int(round(float(event.get("sv_factor") or 0.0) * 1000))
+        key = (bucket, event["type"], event.get("x"), event.get("y"), sv_key)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        merged.append(event)
+    merged.sort(key=lambda e: e["time"])
+    return merged
 
 
-def format_hit_objects(events: Sequence[Tuple[int, int, int]]) -> List[str]:
-    lines = []
-    for time_ms, x, y in events:
-        lines.append(f"{x},{y},{time_ms},1,0,0:0:0:0:")
+def format_hit_objects(events: Sequence[dict]) -> List[str]:
+    lines: List[str] = []
+    for event in events:
+        if event["type"] == "circle":
+            lines.append(f"{event['x']},{event['y']},{event['time']},1,0,0:0:0:0:")
+        elif event["type"] == "slider":
+            points = "|".join(f"{x}:{y}" for x, y in event["points"])
+            curve = f"{event['curve_type']}|{points}"
+            lines.append(
+                f"{event['x']},{event['y']},{event['time']},2,0,{curve},{event['slides']},{event['length']},0:0:0:0:"
+            )
     return lines
 
 
-def inject_hitobjects(template: str, hitobject_lines: Sequence[str]) -> str:
-    pattern = re.compile(r"(\[HitObjects\]\s*)(.*?)(?=\n\[|\Z)", re.DOTALL)
-    replacement = "\\1" + "\n".join(hitobject_lines) + "\n"
-    updated, count = pattern.subn(replacement, template)
-    if count == 0:
-        updated = template.rstrip() + "\n[HitObjects]\n" + "\n".join(hitobject_lines) + "\n"
-    return updated
+def replace_section(content: str, section: str, lines: Sequence[str]) -> str:
+    pattern = re.compile(rf"\[{section}\]\s*(.*?)(?=\n\[|\Z)", re.DOTALL)
+    block = f"[{section}]\n" + "\n".join(lines) + "\n"
+    if pattern.search(content):
+        return pattern.sub(block, content, count=1)
+    return content.rstrip() + "\n" + block
+
+
+def normalize_slider_multiplier(content: str) -> str:
+    return re.sub(r"(SliderMultiplier\s*:\s*)([0-9.]+)", r"\g<1>1", content, count=1)
+
+
+def build_timing_points(offset_ms: float, beat_length: float, events: Sequence[dict]) -> List[str]:
+    lines = [
+        f"{offset_ms:.4f},{beat_length:.4f},4,2,0,50,1,0",
+        f"{offset_ms:.4f},-100.0000,4,2,0,50,0,0",
+    ]
+    seen: set[Tuple[int, int]] = set()
+    for event in events:
+        if event.get("type") != "slider":
+            continue
+        sv = float(event.get("sv_factor") or 1.0)
+        key = (int(round(event["time"])), int(round(sv * 1000)))
+        if key in seen:
+            continue
+        seen.add(key)
+        beat_len = -100.0 / max(sv, 1e-4)
+        lines.append(f"{event['time']:.4f},{beat_len:.4f},4,2,0,50,0,0")
+    return lines
 
 
 def build_default_map(audio_name: str, bpm: float, offset: float, hitobject_lines: Sequence[str]) -> str:
@@ -223,11 +325,12 @@ def build_default_map(audio_name: str, bpm: float, offset: float, hitobject_line
         "CircleSize:4",
         "OverallDifficulty:7",
         "ApproachRate:7",
-        "SliderMultiplier:1.4",
+        "SliderMultiplier:1",
         "SliderTickRate:1",
         "",
         "[TimingPoints]",
         f"{offset:.4f},{beat_length:.4f},4,2,0,50,1,0",
+        f"{offset:.4f},-100.0000,4,2,0,50,0,0",
         "",
         "[HitObjects]",
         "\n".join(hitobject_lines),
@@ -238,7 +341,6 @@ def build_default_map(audio_name: str, bpm: float, offset: float, hitobject_line
 def main() -> None:
     args = parse_args()
     config = load_config(args.config)
-    data_cfg = config["data"]
     audio_path = Path(args.audio).expanduser().resolve()
     checkpoint_path = Path(args.checkpoint).expanduser().resolve()
     output_path = Path(args.output).expanduser().resolve() if args.output else audio_path.with_suffix(".generated.osu")
@@ -254,36 +356,62 @@ def main() -> None:
         if offset is None:
             offset = template_offset
 
+    device = resolve_device(args.device)
+
+    payload = torch.load(checkpoint_path, map_location=device)
+    tokenizer_meta = payload.get("tokenizer_meta") or {}
+    if not tokenizer_meta:
+        print("[WARN] Checkpoint missing tokenizer metadata; falling back to config.yaml settings.")
+    data_cfg_override = tokenizer_meta.get("data_cfg")
+    if data_cfg_override:
+        config["data"] = data_cfg_override
+    data_cfg = config["data"]
+    tokenizer = HitObjectTokenizer(data_cfg)
+
     bpm = bpm or data_cfg.get("default_bpm", 120.0)
     offset = offset if offset is not None else 0.0
-
-    device = resolve_device(args.device)
 
     spec = load_or_create_mel(audio_path, data_cfg)
     chunks = build_chunks(spec, data_cfg, bpm, offset)
 
     model = ConformerSeq2Seq(config).to(device)
-    payload = torch.load(checkpoint_path, map_location=device)
     model.load_state_dict(payload["model_state"])
+    saved_attr_sizes = tokenizer_meta.get("attr_sizes")
+    if saved_attr_sizes and saved_attr_sizes != model.attr_sizes:
+        raise RuntimeError(
+            f"Tokenizer attribute sizes in checkpoint ({saved_attr_sizes}) do not match current config ({model.attr_sizes})"
+        )
     model.eval()
 
     all_events: List[Tuple[float, float, float]] = []
     for chunk in chunks:
         audio = chunk.audio.to(device)
         mask = chunk.mask.to(device)
-        preds = model.generate(audio, mask, eos_threshold=args.eos_threshold, temperature=args.temperature)
-        chunk_events = tokens_to_events(preds[0].cpu(), chunk, data_cfg, args.eos_threshold)
+        preds = model.generate(
+            audio,
+            mask,
+            max_steps=chunk.ticks_per_sample,
+            temperature=args.temperature,
+        )
+        chunk_events = tokens_to_hitobjects(preds[0].cpu(), chunk, tokenizer, data_cfg)
         all_events.extend(chunk_events)
 
     tolerance_ms = data_cfg.get("merge_tolerance_ms", chunks[0].tick_duration_ms if chunks else 10.0)
-    discrete_events = merge_events(all_events, tolerance_ms=tolerance_ms, data_cfg=data_cfg)
+    discrete_events = merge_events(all_events, tolerance_ms=tolerance_ms)
     hitobject_lines = format_hit_objects(discrete_events)
 
+    beat_length = 60000.0 / max(bpm, 1e-3)
+
+    timing_lines = build_timing_points(offset, beat_length, discrete_events)
+
     if template_path and template_path.exists():
-        template_text = template_path.read_text(encoding="utf-8")
-        output_text = inject_hitobjects(template_text, hitobject_lines)
+        output_text = template_path.read_text(encoding="utf-8")
     else:
         output_text = build_default_map(audio_path.name, bpm, offset, hitobject_lines)
+
+    output_text = normalize_slider_multiplier(output_text)
+    output_text = replace_section(output_text, "TimingPoints", timing_lines)
+    output_text = replace_section(output_text, "HitObjects", hitobject_lines)
 
     output_path.write_text(output_text, encoding="utf-8")
     print(f"[INFO] Generated {len(hitobject_lines)} hitobjects → {output_path}")

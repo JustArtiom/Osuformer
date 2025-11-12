@@ -4,11 +4,12 @@ data:
   win_ms: 25
   n_mels: 80
   n_fft: 1024
-  ticks_per_beat: 8
+  ticks_per_beat: 4
   beats_per_sample: 16
-  sample_hop_beats: 8
+  sample_hop_beats: 16
   osu_width: 512
   osu_height: 384
+  position_bin_size: 8
   prep_num_workers: 4
   max_frames_per_sample: 4096
   min_bpm: 80
@@ -17,15 +18,25 @@ data:
   skip_empty_chunks: false
   default_bpm: 120.0
   merge_tolerance_ms: 8.0
-  map_types: [aim]
+  tick_tolerance_ms: 10.0
+  require_constant_bpm: true
+  require_tick_alignment: true
+  default_slider_multiplier: 1.4
+  map_types: []
   map_type_thresholds:
     stream_interval_ms: 110.0
     stream_ratio: 0.35
     stream_gap_distance: 80.0
     aim_jump_distance: 120.0
     aim_ratio: 0.3
-  min_star_rating: 6
-  max_star_rating: 7
+  max_slider_ticks: 64
+  slider_sv_precision: 100
+  slider_sv_max: 4.0
+  max_slides: 4
+  max_slider_control_points: 2
+  slider_curve_types: ["L", "B", "P", "C"]
+  min_star_rating: 2.5
+  max_star_rating: 4.0
   eos_ramp_steps: 4
 
 model:
@@ -46,14 +57,13 @@ model:
 
 training:
   batch_size: 12
-  lr: 0.0001
-  num_epochs: 100
+  lr: 0.00001
+  num_epochs: 200
   device: "cuda"
   path: "checkpoints/"
   val_split: 0.2
   num_workers: 5
   weight_decay: 0.0001
-  eos_loss_weight: 2.0
   grad_clip: 1.0
   use_amp: true
   lr_schedule:
