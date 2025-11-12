@@ -35,6 +35,11 @@ data:
   max_slides: 4
   max_slider_control_points: 2
   slider_curve_types: ["L", "B", "P", "C"]
+  suppress_overlap: false
+  class_weights:
+    empty_type: 2.0
+    circle_type: 1.0
+    slider_type: 1.0
   min_star_rating: 2.5
   max_star_rating: 4.0
   eos_ramp_steps: 4

@@ -324,7 +324,6 @@ class ConformerSeq2Seq(nn.Module):
                 assembled[slider_mask, TokenAttr.SLIDES] = torch.clamp(
                     assembled[slider_mask, TokenAttr.SLIDES], min=1
                 )
-
             outputs.append(assembled)
             generated = torch.cat([generated, assembled.unsqueeze(1)], dim=1)
 

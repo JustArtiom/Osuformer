@@ -85,6 +85,7 @@ def run_epoch(
     *,
     amp_enabled: bool = False,
     scaler: Optional[GradScaler] = None,
+    class_weights: Optional[Dict[str, float]] = None,
 ) -> Dict[str, float]:
     is_train = optimizer is not None
     model.train(is_train)
@@ -148,10 +149,14 @@ def run_epoch(
                     freq = counts / total
                     empty_freq = freq[TokenType.EMPTY].clamp_min(1e-6)
                     other_freq = (1 - empty_freq).clamp_min(1e-6)
-                    weight_empty = 1.0
-                    weight_other = (empty_freq / other_freq).item()
+                    weight_empty = float(class_weights.get("empty_type", 2.0)) if class_weights else 2.0
+                    weight_circle = float(class_weights.get("circle_type", 1.0)) if class_weights else 1.0
+                    weight_slider = float(class_weights.get("slider_type", 1.0)) if class_weights else 1.0
+                    ratio = (empty_freq / other_freq).item() if other_freq > 0 else 1.0
+                    weight_circle *= ratio
+                    weight_slider *= ratio
                     weights = torch.tensor(
-                        [weight_empty, weight_other, weight_other],
+                        [weight_empty, weight_circle, weight_slider],
                         device=device,
                         dtype=torch.float32,
                     )
