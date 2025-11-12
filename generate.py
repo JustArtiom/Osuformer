@@ -152,10 +152,12 @@ def tokens_to_hitobjects(
     chunk: AudioChunk,
     tokenizer: HitObjectTokenizer,
     data_cfg: dict,
+    suppress_overlaps: bool = True,
 ) -> List[dict]:
     events: List[dict] = []
     width = data_cfg["osu_width"]
     height = data_cfg["osu_height"]
+    blocked_until = float("-inf")
 
     for tick_idx, token in enumerate(tokens.tolist()):
         decoded = tokenizer.decode_token(token)
@@ -168,6 +170,8 @@ def tokens_to_hitobjects(
         if start_x is None or start_y is None:
             continue
         time_ms = int(round(chunk.start_ms + tick_idx * chunk.tick_duration_ms))
+        if suppress_overlaps and time_ms < blocked_until:
+            continue
 
         if token_type == TokenType.CIRCLE:
             events.append(
@@ -176,6 +180,7 @@ def tokens_to_hitobjects(
                     "time": time_ms,
                     "x": start_x,
                     "y": start_y,
+                    "end_time": time_ms,
                 }
             )
             continue
@@ -219,21 +224,29 @@ def tokens_to_hitobjects(
                 "slides": slides,
                 "length": int(round(slider_length)),
                 "sv_factor": float(sv_factor),
+                "end_time": time_ms + int(round(duration_ms)),
             }
         )
+        if suppress_overlaps:
+            blocked_until = max(blocked_until, time_ms + duration_ms)
 
     return events
 
 
-def merge_events(events: List[dict], tolerance_ms: float) -> List[dict]:
+def merge_events(events: List[dict], tolerance_ms: float, suppress_overlaps: bool = True) -> List[dict]:
     if not events:
         return []
     events.sort(key=lambda e: e["time"])
+    if not suppress_overlaps:
+        return events
     merged: List[dict] = []
     seen_keys: set = set()
     tol = max(1.0, tolerance_ms)
+    active_until = float("-inf")
 
     for event in events:
+        if event["time"] < active_until:
+            continue
         bucket = int(round(event["time"] / tol))
         sv_key = int(round(float(event.get("sv_factor") or 0.0) * 1000))
         key = (bucket, event["type"], event.get("x"), event.get("y"), sv_key)
@@ -241,6 +254,7 @@ def merge_events(events: List[dict], tolerance_ms: float) -> List[dict]:
             continue
         seen_keys.add(key)
         merged.append(event)
+        active_until = max(active_until, float(event.get("end_time", event["time"])))
     merged.sort(key=lambda e: e["time"])
     return merged
 
@@ -288,6 +302,28 @@ def build_timing_points(offset_ms: float, beat_length: float, events: Sequence[d
         beat_len = -100.0 / max(sv, 1e-4)
         lines.append(f"{event['time']:.4f},{beat_len:.4f},4,2,0,50,0,0")
     return lines
+
+
+def set_editor_bookmarks(content: str, bookmarks: Sequence[int]) -> str:
+    bookmark_line = "Bookmarks: " + ",".join(str(int(b)) for b in bookmarks) if bookmarks else "Bookmarks:"
+    pattern = re.compile(r"(\[Editor\]\s*)(.*?)(?=\n\[|\Z)", re.DOTALL)
+    match = pattern.search(content)
+    if match:
+        body = match.group(2).strip().splitlines()
+        updated = False
+        new_lines: List[str] = []
+        for line in body:
+            if line.strip().startswith("Bookmarks:"):
+                new_lines.append(bookmark_line)
+                updated = True
+            else:
+                new_lines.append(line)
+        if not updated:
+            new_lines.append(bookmark_line)
+        new_block = "[Editor]\n" + "\n".join(new_lines) + "\n"
+        return content[: match.start()] + new_block + content[match.end() :]
+    else:
+        return content.rstrip() + "\n[Editor]\n" + bookmark_line + "\n"
 
 
 def build_default_map(audio_name: str, bpm: float, offset: float, hitobject_lines: Sequence[str]) -> str:
@@ -367,12 +403,14 @@ def main() -> None:
         config["data"] = data_cfg_override
     data_cfg = config["data"]
     tokenizer = HitObjectTokenizer(data_cfg)
+    suppress_overlaps = bool(data_cfg.get("suppress_overlap", True))
 
     bpm = bpm or data_cfg.get("default_bpm", 120.0)
     offset = offset if offset is not None else 0.0
 
     spec = load_or_create_mel(audio_path, data_cfg)
     chunks = build_chunks(spec, data_cfg, bpm, offset)
+    bookmark_times = sorted({int(round(chunk.start_ms)) for chunk in chunks})
 
     model = ConformerSeq2Seq(config).to(device)
     model.load_state_dict(payload["model_state"])
@@ -393,11 +431,21 @@ def main() -> None:
             max_steps=chunk.ticks_per_sample,
             temperature=args.temperature,
         )
-        chunk_events = tokens_to_hitobjects(preds[0].cpu(), chunk, tokenizer, data_cfg)
+        chunk_events = tokens_to_hitobjects(
+            preds[0].cpu(),
+            chunk,
+            tokenizer,
+            data_cfg,
+            suppress_overlaps=suppress_overlaps,
+        )
         all_events.extend(chunk_events)
 
     tolerance_ms = data_cfg.get("merge_tolerance_ms", chunks[0].tick_duration_ms if chunks else 10.0)
-    discrete_events = merge_events(all_events, tolerance_ms=tolerance_ms)
+    discrete_events = merge_events(
+        all_events,
+        tolerance_ms=tolerance_ms,
+        suppress_overlaps=suppress_overlaps,
+    )
     hitobject_lines = format_hit_objects(discrete_events)
 
     beat_length = 60000.0 / max(bpm, 1e-3)
@@ -412,6 +460,7 @@ def main() -> None:
     output_text = normalize_slider_multiplier(output_text)
     output_text = replace_section(output_text, "TimingPoints", timing_lines)
     output_text = replace_section(output_text, "HitObjects", hitobject_lines)
+    output_text = set_editor_bookmarks(output_text, bookmark_times)
 
     output_path.write_text(output_text, encoding="utf-8")
     print(f"[INFO] Generated {len(hitobject_lines)} hitobjects → {output_path}")

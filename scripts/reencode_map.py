@@ -119,11 +119,13 @@ def decode_tokens(
     base_time: float,
     tick_duration_ms: float,
     data_cfg: dict,
+    suppress_overlaps: bool = True,
 ) -> List[dict]:
     events: List[dict] = []
     width = data_cfg["osu_width"]
     height = data_cfg["osu_height"]
     beat_duration_ms = tick_duration_ms * data_cfg.get("ticks_per_beat", 8)
+    blocked_until = float("-inf")
 
     for idx, token in enumerate(tokens):
         decoded = tokenizer.decode_token(token)
@@ -135,9 +137,11 @@ def decode_tokens(
         if start_x is None or start_y is None:
             continue
         time_ms = int(round(base_time + idx * tick_duration_ms))
+        if suppress_overlaps and time_ms < blocked_until:
+            continue
 
         if token_type == TokenType.CIRCLE:
-            events.append({"type": "circle", "time": time_ms, "x": start_x, "y": start_y})
+            events.append({"type": "circle", "time": time_ms, "x": start_x, "y": start_y, "end_time": time_ms})
             continue
 
         end_x = _clamp_coord(decoded.get("end_x"), width)
@@ -177,8 +181,11 @@ def decode_tokens(
                 "slides": slides,
                 "length": int(round(slider_length)),
                 "sv_factor": float(sv_factor),
+                "end_time": time_ms + int(round(duration_ms)),
             }
         )
+        if suppress_overlaps:
+            blocked_until = max(blocked_until, time_ms + duration_ms)
 
     events.sort(key=lambda e: e["time"])
     return events
@@ -267,7 +274,16 @@ def main() -> None:
             decoded = tokenizer.decode_token(token)
             print(f"TICK {idx:05d}: {decoded}")
 
-    events = decode_tokens(tokens, tokenizer, base_time, tick_duration_ms, data_cfg)
+    suppress_overlaps = bool(data_cfg.get("suppress_overlap", True))
+
+    events = decode_tokens(
+        tokens,
+        tokenizer,
+        base_time,
+        tick_duration_ms,
+        data_cfg,
+        suppress_overlaps=suppress_overlaps,
+    )
     hitobject_lines = format_hitobjects(events)
 
     template_text = osu_path.read_text(encoding="utf-8")
