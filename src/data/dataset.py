@@ -12,8 +12,10 @@ import torch
 from torch.utils.data import Dataset
 
 from src.audio import AUDIO_EXTENSIONS, MelSpec, prepare_audio
+from src.data.tokenizer import HitObjectTokenizer
 from src.osu import Beatmap, Circle, Slider
 from src.utils.file import collect_files
+import json
 
 try:  # pragma: no cover - tqdm optional at runtime, but usually installed
     from tqdm import tqdm
@@ -87,7 +89,13 @@ def split_train_val_files(
 
 
 class OsuBeatmapDataset(Dataset):
-    def __init__(self, config: dict, split: str = "train", osu_files: Optional[Sequence[Path]] = None) -> None:
+    def __init__(
+        self,
+        config: dict,
+        split: str = "train",
+        osu_files: Optional[Sequence[Path]] = None,
+        cache_path: Optional[Path] = None,
+    ) -> None:
         self.config = config
         self.split = split
         self.data_cfg = config["data"]
@@ -98,9 +106,12 @@ class OsuBeatmapDataset(Dataset):
         self.beats_per_sample = self.data_cfg.get("beats_per_sample", 16)
         self.ticks_per_beat = self.data_cfg.get("ticks_per_beat", 8)
         self.sample_hop_beats = self.data_cfg.get("sample_hop_beats", max(1, self.beats_per_sample // 2))
-        self.max_seq_len = config["model"]["decoder"].get("max_seq_len", 64)
+        self.seq_len = self.beats_per_sample * self.ticks_per_beat
         self.normalize_audio = self.data_cfg.get("normalize_audio", True)
         self.skip_empty = self.data_cfg.get("skip_empty_chunks", False)
+        self.tick_tolerance_ms = float(self.data_cfg.get("tick_tolerance_ms", 3.0))
+        self.require_constant_bpm = bool(self.data_cfg.get("require_constant_bpm", False))
+        self.require_tick_alignment = bool(self.data_cfg.get("require_tick_alignment", False))
         self.map_types = {mt.lower() for mt in (self.data_cfg.get("map_types") or [])}
         type_thresholds = self.data_cfg.get("map_type_thresholds", {})
         self.stream_interval_ms = float(type_thresholds.get("stream_interval_ms", 110.0))
@@ -108,6 +119,9 @@ class OsuBeatmapDataset(Dataset):
         self.stream_gap_distance = float(type_thresholds.get("stream_gap_distance", 80.0))
         self.aim_jump_distance = float(type_thresholds.get("aim_jump_distance", 120.0))
         self.aim_ratio = float(type_thresholds.get("aim_ratio", 0.3))
+        self.tokenizer = HitObjectTokenizer(self.data_cfg)
+        self.attr_sizes = self.tokenizer.attribute_sizes
+        self.cache_path = cache_path
         self.min_star_rating = self._parse_star_rating(self.data_cfg.get("min_star_rating"), "min_star_rating")
         self.max_star_rating = self._parse_star_rating(self.data_cfg.get("max_star_rating"), "max_star_rating")
         self.min_bpm = self._parse_bpm(self.data_cfg.get("min_bpm"), "min_bpm")
@@ -122,6 +136,19 @@ class OsuBeatmapDataset(Dataset):
         self._spec_cache: Dict[str, MelSpec] = {}
         self._spec_stats: Dict[str, Tuple[torch.Tensor, torch.Tensor]] = {}
         self.samples: List[SampleDescriptor] = []
+
+        cache_loaded = False
+        if self.cache_path and Path(self.cache_path).exists():
+            try:
+                self._load_cache(Path(self.cache_path))
+                cache_loaded = True
+                print(f"[INFO] Loaded {len(self.samples)} {self.split} samples from cache {self.cache_path}")
+            except Exception as exc:
+                print(f"[WARN] Failed to load cache '{self.cache_path}': {exc}. Rebuilding...")
+                self.samples = []
+
+        if cache_loaded:
+            return
 
         if osu_files is None:
             train_files, val_files = split_train_val_files(config)
@@ -152,6 +179,13 @@ class OsuBeatmapDataset(Dataset):
 
         if not self.samples:
             raise RuntimeError(f"No training samples could be built for split '{split}'")
+
+        if self.cache_path:
+            try:
+                self._save_cache(Path(self.cache_path))
+                print(f"[INFO] Saved {len(self.samples)} {self.split} samples to cache {self.cache_path}")
+            except Exception as exc:
+                print(f"[WARN] Failed to save cache '{self.cache_path}': {exc}")
 
     def _compute_frame_stride(self, frames: int) -> Tuple[int, int]:
         frames = max(1, frames)
@@ -197,6 +231,8 @@ class OsuBeatmapDataset(Dataset):
             return []
         if not self._bpm_in_range(beatmap, osu_path):
             return []
+        if self.require_constant_bpm and not self._has_constant_bpm(beatmap):
+            return []
         events = self._collect_events(beatmap)
         events.sort(key=lambda item: item[0])
         if not events:
@@ -210,8 +246,10 @@ class OsuBeatmapDataset(Dataset):
         bpm, offset_ms = self._get_primary_bpm_and_offset(beatmap)
         if bpm <= 0:
             bpm = self.data_cfg.get("default_bpm", 120.0)
+        if self.require_tick_alignment and not self._aligned_to_tick_grid(beatmap, bpm, offset_ms):
+            return []
 
-        ticks_per_sample = self.beats_per_sample * self.ticks_per_beat
+        ticks_per_sample = self.seq_len
         beat_duration_ms = 60000.0 / max(bpm, 1e-3)
         chunk_duration_ms = self.beats_per_sample * beat_duration_ms
         sample_hop_ms = self.sample_hop_beats * beat_duration_ms
@@ -230,20 +268,21 @@ class OsuBeatmapDataset(Dataset):
         descriptors: List[SampleDescriptor] = []
         while current_start < timeline_end_ms:
             chunk_end = current_start + chunk_duration_ms
-            chunk_events = self._filter_events(events, current_start, chunk_end)
+            chunk_hit_objects = self._filter_hit_objects(beatmap, current_start, chunk_end)
 
-            if not chunk_events and self.skip_empty:
+            if not chunk_hit_objects and self.skip_empty:
                 current_start += sample_hop_ms
                 continue
 
-            tokens, token_length = self._encode_events(
-                chunk_events,
+            tokens = self._encode_chunk_tokens(
+                chunk_hit_objects,
                 current_start,
                 ticks_per_sample,
                 tick_duration_ms,
+                beatmap,
             )
 
-            if token_length == 0:
+            if tokens is None:
                 current_start += sample_hop_ms
                 continue
 
@@ -255,14 +294,22 @@ class OsuBeatmapDataset(Dataset):
                     frames_per_chunk=frames_per_chunk,
                     frame_stride=frame_stride,
                     raw_frames=raw_frames_per_chunk,
-                    token_length=token_length,
-                    tokens=tokens,
+                    token_length=ticks_per_sample,
+                    tokens=np.asarray(tokens, dtype=np.int64),
                 )
             )
             current_start += sample_hop_ms
 
         if not descriptors and events:
-            tokens, token_length = self._encode_events(events, max(0.0, offset_ms), ticks_per_sample, tick_duration_ms)
+            tokens = self._encode_chunk_tokens(
+                getattr(beatmap, "hit_objects", []),
+                max(0.0, offset_ms),
+                ticks_per_sample,
+                tick_duration_ms,
+                beatmap,
+            )
+            if tokens is None:
+                return []
             descriptors.append(
                 SampleDescriptor(
                     audio_path=str(audio_path),
@@ -270,8 +317,8 @@ class OsuBeatmapDataset(Dataset):
                     frames_per_chunk=frames_per_chunk,
                     frame_stride=frame_stride,
                     raw_frames=raw_frames_per_chunk,
-                    token_length=token_length,
-                    tokens=tokens,
+                    token_length=ticks_per_sample,
+                    tokens=np.asarray(tokens, dtype=np.int64),
                 )
             )
 
@@ -328,6 +375,30 @@ class OsuBeatmapDataset(Dataset):
             return False
         return True
 
+    def _has_constant_bpm(self, beatmap: Beatmap) -> bool:
+        bpm_value = None
+        for tp in getattr(beatmap, "timing_points", []):
+            if tp.uninherited != 1:
+                continue
+            bpm = tp.get_bpm()
+            if bpm <= 0:
+                continue
+            if bpm_value is None:
+                bpm_value = bpm
+            elif abs(bpm - bpm_value) > 1e-3:
+                return False
+        return bpm_value is not None
+
+    def _effective_slider_sv(self, beatmap: Beatmap, time_ms: float) -> float:
+        difficulty = getattr(beatmap, "difficulty", None)
+        base_sv = float(getattr(difficulty, "slider_multiplier", 1.0))
+        inherited_tp = beatmap.get_previous_timing_point(time_ms, filter=lambda tp: tp.uninherited == 0)
+        if inherited_tp is not None:
+            sv_multiplier = inherited_tp.get_slider_velocity_multiplier()
+        else:
+            sv_multiplier = 1.0
+        return max(1e-3, base_sv * sv_multiplier)
+
     def _resolve_audio_path(self, osu_path: Path, beatmap: Beatmap) -> Path:
         if hasattr(beatmap, "general") and beatmap.general.audio_filename:
             candidate = osu_path.parent / beatmap.general.audio_filename
@@ -341,15 +412,30 @@ class OsuBeatmapDataset(Dataset):
 
         raise FileNotFoundError(f"Audio file not found for beatmap {osu_path}")
 
-    def _load_mel_spec(self, audio_path: Path) -> MelSpec:
-        audio_key = str(audio_path)
+    def _aligned_to_tick_grid(self, beatmap: Beatmap, bpm: float, offset_ms: float) -> bool:
+        tick_duration_ms = 60000.0 / max(bpm, 1e-3) / max(self.ticks_per_beat, 1)
+        if tick_duration_ms <= 0:
+            return False
+        tolerance = self.tick_tolerance_ms
+        for ho in getattr(beatmap, "hit_objects", []):
+            time_ms = float(getattr(ho, "time", 0.0))
+            rel = time_ms - offset_ms
+            nearest_ticks = round(rel / tick_duration_ms)
+            aligned_time = nearest_ticks * tick_duration_ms
+            if abs(rel - aligned_time) > tolerance:
+                return False
+        return True
+
+    def _load_mel_spec(self, audio_path: Path | str) -> MelSpec:
+        apath = Path(audio_path)
+        audio_key = str(apath)
         if audio_key in self._spec_cache:
             return self._spec_cache[audio_key]
 
-        npz_path = Path(str(audio_path) + ".mel.npz")
+        npz_path = Path(str(apath) + ".mel.npz")
         if not npz_path.exists():
             prepare_audio(
-                str(audio_path),
+                str(apath),
                 self.data_cfg["sample_rate"],
                 self.data_cfg["hop_ms"],
                 self.data_cfg["win_ms"],
@@ -377,6 +463,13 @@ class OsuBeatmapDataset(Dataset):
             elif isinstance(ho, Slider):
                 events.extend(self._slider_to_events(ho))
         return events
+
+    def _filter_hit_objects(self, beatmap: Beatmap, start_ms: float, end_ms: float) -> List[object]:
+        return [
+            ho
+            for ho in getattr(beatmap, "hit_objects", [])
+            if start_ms <= float(getattr(ho, "time", 0.0)) < end_ms
+        ]
 
     def _map_types_match(self, events: Sequence[Tuple[float, float, float]]) -> bool:
         if not self.map_types:
@@ -452,6 +545,86 @@ class OsuBeatmapDataset(Dataset):
             events.append((float(slider.time + duration), float(end_point[0]), float(end_point[1])))
         return events
 
+    def _cache_metadata(self) -> Dict[str, object]:
+        return {
+            "version": 1,
+            "split": self.split,
+            "beats_per_sample": self.beats_per_sample,
+            "ticks_per_beat": self.ticks_per_beat,
+            "seq_len": self.seq_len,
+            "attr_sizes": self.attr_sizes,
+            "position_bin_size": self.data_cfg.get("position_bin_size"),
+            "max_slider_ticks": self.data_cfg.get("max_slider_ticks"),
+            "max_slides": self.data_cfg.get("max_slides"),
+            "max_slider_control_points": self.data_cfg.get("max_slider_control_points"),
+            "slider_sv_precision": self.data_cfg.get("slider_sv_precision"),
+            "slider_sv_max": self.data_cfg.get("slider_sv_max"),
+            "tick_tolerance_ms": self.tick_tolerance_ms,
+            "map_types": sorted(self.map_types),
+            "require_constant_bpm": self.require_constant_bpm,
+            "require_tick_alignment": self.require_tick_alignment,
+        }
+
+    def _cache_meta_matches(self, meta: Dict[str, object]) -> bool:
+        expected = self._cache_metadata()
+        for key, value in expected.items():
+            if meta.get(key) != value:
+                return False
+        return True
+
+    def _save_cache(self, path: Path) -> None:
+        if not self.samples:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        meta = json.dumps(self._cache_metadata(), sort_keys=True)
+        audio_paths = np.array([desc.audio_path for desc in self.samples], dtype=np.str_)
+        start_frames = np.array([desc.start_frame for desc in self.samples], dtype=np.int32)
+        frames_per_chunk = np.array([desc.frames_per_chunk for desc in self.samples], dtype=np.int32)
+        frame_strides = np.array([desc.frame_stride for desc in self.samples], dtype=np.int16)
+        raw_frames = np.array([desc.raw_frames for desc in self.samples], dtype=np.int32)
+        token_lengths = np.array([desc.token_length for desc in self.samples], dtype=np.int32)
+        tokens = np.stack([desc.tokens for desc in self.samples], axis=0).astype(np.int32)
+        np.savez_compressed(
+            path,
+            meta=np.array(meta),
+            audio_paths=audio_paths,
+            start_frames=start_frames,
+            frames_per_chunk=frames_per_chunk,
+            frame_strides=frame_strides,
+            raw_frames=raw_frames,
+            token_lengths=token_lengths,
+            tokens=tokens,
+        )
+
+    def _load_cache(self, path: Path) -> None:
+        data = np.load(path, allow_pickle=False)
+        raw_meta = data["meta"]
+        meta = json.loads(str(raw_meta.item() if raw_meta.shape == () else raw_meta))
+        if not self._cache_meta_matches(meta):
+            raise RuntimeError("cache metadata mismatch")
+
+        audio_paths = data["audio_paths"].astype(str).tolist()
+        start_frames = data["start_frames"]
+        frames_per_chunk = data["frames_per_chunk"]
+        frame_strides = data["frame_strides"]
+        raw_frames = data["raw_frames"]
+        token_lengths = data["token_lengths"]
+        tokens = data["tokens"]
+
+        self.samples = []
+        for idx, audio_path in enumerate(audio_paths):
+            self.samples.append(
+                SampleDescriptor(
+                    audio_path=audio_path,
+                    start_frame=int(start_frames[idx]),
+                    frames_per_chunk=int(frames_per_chunk[idx]),
+                    frame_stride=int(frame_strides[idx]),
+                    raw_frames=int(raw_frames[idx]),
+                    token_length=int(token_lengths[idx]),
+                    tokens=np.array(tokens[idx], dtype=np.int64),
+                )
+            )
+
     def _filter_events(
         self,
         events: Sequence[Tuple[float, float, float]],
@@ -460,59 +633,53 @@ class OsuBeatmapDataset(Dataset):
     ) -> List[Tuple[float, float, float]]:
         return [event for event in events if start_ms <= event[0] < end_ms]
 
-    def _encode_events(
+    def _encode_chunk_tokens(
         self,
-        events: Sequence[Tuple[float, float, float]],
+        hit_objects: Sequence[object],
         chunk_start_ms: float,
         ticks_per_sample: int,
         tick_duration_ms: float,
-    ) -> Tuple[np.ndarray, int]:
-        encoded: List[Tuple[float, float, float, float]] = []
-        for event in events:
-            rel_ms = max(0.0, event[0] - chunk_start_ms)
-            tick_idx = min(ticks_per_sample - 1, rel_ms / max(tick_duration_ms, 1e-3))
-            tick_norm = float(tick_idx) / ticks_per_sample
-            x_norm = np.clip(event[1] / self.data_cfg["osu_width"], 0.0, 1.0)
-            y_norm = np.clip(event[2] / self.data_cfg["osu_height"], 0.0, 1.0)
-            encoded.append((tick_norm, x_norm, y_norm, 0.0))
+        beatmap: Beatmap,
+    ) -> List[List[int]] | None:
+        if ticks_per_sample <= 0:
+            return None
+        tokens: List[List[int]] = [self.tokenizer.empty_token() for _ in range(ticks_per_sample)]
+        occupied = [False] * ticks_per_sample
+        any_event = False
 
-        max_events = self.max_seq_len - 1
-        if len(encoded) > max_events and max_events > 0:
-            stride = int(math.ceil(len(encoded) / max_events))
-            encoded = encoded[::stride]
-            if len(encoded) > max_events:
-                encoded = encoded[:max_events]
+        for ho in sorted(hit_objects, key=lambda h: float(getattr(h, "time", 0.0))):
+            event_time = float(getattr(ho, "time", 0.0))
+            rel = (event_time - chunk_start_ms) / max(tick_duration_ms, 1e-3)
+            tick_idx = int(round(rel))
+            if tick_idx < 0 or tick_idx >= ticks_per_sample:
+                continue
+            tick_time = chunk_start_ms + tick_idx * tick_duration_ms
+            if abs(event_time - tick_time) > self.tick_tolerance_ms:
+                continue
+            if occupied[tick_idx]:
+                continue
+            if isinstance(ho, Circle):
+                token = self.tokenizer.encode_circle(float(ho.x), float(ho.y))
+            elif isinstance(ho, Slider):
+                sv = self._effective_slider_sv(beatmap, event_time)
+                token = self.tokenizer.encode_slider(ho, tick_duration_ms, sv)
+            else:
+                continue
+            tokens[tick_idx] = token
+            occupied[tick_idx] = True
+            any_event = True
 
-        eos_ramp_steps = max(0, int(self.data_cfg.get("eos_ramp_steps", 0)))
-        if eos_ramp_steps > 0 and encoded:
-            ramp_start = max(0, len(encoded) - eos_ramp_steps)
-            ramp_span = len(encoded) - ramp_start
-            if ramp_span > 0:
-                ramp_values = np.linspace(0.25, 0.9, num=ramp_span, endpoint=True, dtype=np.float32)
-                updated: List[Tuple[float, float, float, float]] = []
-                for idx, token in enumerate(encoded):
-                    if idx >= ramp_start:
-                        ramp_idx = idx - ramp_start
-                        updated.append((token[0], token[1], token[2], float(ramp_values[ramp_idx])))
-                    else:
-                        updated.append(token)
-                encoded = updated
-
-        encoded.append((0.0, 0.0, 0.0, 1.0))
-
-        token_length = min(len(encoded), self.max_seq_len)
-        tokens = np.zeros((self.max_seq_len, 4), dtype=np.float32)
-        tokens[:token_length] = np.asarray(encoded[:token_length], dtype=np.float32)
-        if token_length < self.max_seq_len:
-            tokens[token_length:, 3] = 1.0
-
-        return tokens, token_length
+        if not any_event and self.skip_empty:
+            return None
+        return tokens
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         descriptor = self.samples[idx]
+        if descriptor.audio_path not in self._spec_cache:
+            self._load_mel_spec(descriptor.audio_path)
         spec = self._spec_cache[descriptor.audio_path]
 
         start = descriptor.start_frame
@@ -534,7 +701,7 @@ class OsuBeatmapDataset(Dataset):
             mean, std = self._get_spec_stats(descriptor.audio_path, spec)
             mel = (mel - mean.unsqueeze(0)) / std.unsqueeze(0)
 
-        tokens = torch.from_numpy(descriptor.tokens).float()
+        tokens = torch.from_numpy(descriptor.tokens).long()
 
         return {
             "audio": mel,

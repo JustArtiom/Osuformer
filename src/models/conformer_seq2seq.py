@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import math
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
+from src.data.tokenizer import HitObjectTokenizer, TokenAttr, TokenType
 
 
 class Swish(nn.Module):
@@ -161,9 +164,13 @@ class HitObjectDecoder(nn.Module):
         num_heads: int,
         ffn_dim: int,
         dropout: float,
+        attr_sizes: Sequence[int],
     ) -> None:
         super().__init__()
-        self.event_embed = nn.Linear(4, d_model)
+        self.attr_sizes = list(attr_sizes)
+        self.embeddings = nn.ModuleList(
+            [nn.Embedding(size, d_model, padding_idx=0) for size in self.attr_sizes]
+        )
         decoder_layer = nn.TransformerDecoderLayer(
             d_model=d_model,
             nhead=num_heads,
@@ -174,11 +181,18 @@ class HitObjectDecoder(nn.Module):
         self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
         self.positional_encoding = PositionalEncoding(d_model, dropout)
         self.bos = nn.Parameter(torch.zeros(d_model))
-        self.output_proj = nn.Linear(d_model, 4)
+        self.attr_heads = nn.ModuleList([nn.Linear(d_model, size) for size in self.attr_sizes])
 
     def _causal_mask(self, size: int, device: torch.device) -> torch.Tensor:
         mask = torch.triu(torch.ones(size, size, device=device), diagonal=1).bool()
         return mask
+
+    def _embed_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
+        embed = None
+        for idx, embedding in enumerate(self.embeddings):
+            attr_emb = embedding(tokens[..., idx])
+            embed = attr_emb if embed is None else embed + attr_emb
+        return embed
 
     def forward(
         self,
@@ -187,9 +201,9 @@ class HitObjectDecoder(nn.Module):
         targets: torch.Tensor,
         target_key_padding_mask: Optional[torch.Tensor],
         temperature: float = 1.0,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> List[torch.Tensor]:
         batch_size, target_len, _ = targets.shape
-        embedded = self.event_embed(targets)
+        embedded = self._embed_tokens(targets)
         shifted = torch.zeros_like(embedded)
         if target_len > 1:
             shifted[:, 1:, :] = embedded[:, :-1, :]
@@ -205,14 +219,14 @@ class HitObjectDecoder(nn.Module):
             tgt_key_padding_mask=target_key_padding_mask,
             memory_key_padding_mask=memory_key_padding_mask,
         )
-        logits = self.output_proj(decoded)
-        if temperature != 1.0:
-            temp = max(temperature, 1e-4)
-            logits = logits / temp
-        coord_logits = logits[..., :3]
-        eos_logits = logits[..., 3:]
-        coord_pred = torch.sigmoid(coord_logits)
-        return coord_pred, eos_logits
+        logits_list: List[torch.Tensor] = []
+        for head in self.attr_heads:
+            logits = head(decoded)
+            if temperature != 1.0:
+                temp = max(temperature, 1e-4)
+                logits = logits / temp
+            logits_list.append(logits)
+        return logits_list
 
 
 class ConformerSeq2Seq(nn.Module):
@@ -232,15 +246,19 @@ class ConformerSeq2Seq(nn.Module):
             dropout=encoder_cfg.get("dropout", 0.1),
         )
 
+        self.data_cfg_snapshot = data_cfg.copy()
+        self.tokenizer = HitObjectTokenizer(data_cfg)
+        self.attr_sizes = self.tokenizer.attribute_sizes
+        self.seq_len = data_cfg.get("beats_per_sample", 16) * data_cfg.get("ticks_per_beat", 8)
+
         self.decoder = HitObjectDecoder(
             d_model=encoder_cfg["d_model"],
             num_layers=decoder_cfg["num_layers"],
             num_heads=decoder_cfg["num_heads"],
             ffn_dim=decoder_cfg["ffn_dim"],
             dropout=decoder_cfg.get("dropout", 0.1),
+            attr_sizes=self.attr_sizes,
         )
-
-        self.max_seq_len = decoder_cfg.get("max_seq_len", 64)
 
     def forward(
         self,
@@ -248,12 +266,13 @@ class ConformerSeq2Seq(nn.Module):
         audio_mask: Optional[torch.Tensor],
         targets: Optional[torch.Tensor] = None,
         target_mask: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        temperature: float = 1.0,
+    ) -> List[torch.Tensor]:
         memory = self.encoder(audio, audio_mask)
         if targets is None:
             raise ValueError("Targets are required for training forward pass")
-        coords, eos_logits = self.decoder(memory, audio_mask, targets, target_mask, temperature=1.0)
-        return coords, eos_logits
+        attr_logits = self.decoder(memory, audio_mask, targets, target_mask, temperature=temperature)
+        return attr_logits
 
     @torch.no_grad()
     def generate(
@@ -261,32 +280,59 @@ class ConformerSeq2Seq(nn.Module):
         audio: torch.Tensor,
         audio_mask: Optional[torch.Tensor],
         max_steps: Optional[int] = None,
-        eos_threshold: float = 0.6,
         temperature: float = 1.0,
     ) -> torch.Tensor:
         self.eval()
         memory = self.encoder(audio, audio_mask)
         batch_size = audio.size(0)
-        max_steps = max_steps or self.max_seq_len
+        max_steps = max_steps or self.seq_len
 
-        generated = torch.zeros(batch_size, 1, 4, device=audio.device, dtype=audio.dtype)
+        attr_count = TokenAttr.COUNT
+        generated = torch.zeros(batch_size, 1, attr_count, device=audio.device, dtype=torch.long)
         outputs: List[torch.Tensor] = []
-        finished = torch.zeros(batch_size, dtype=torch.bool, device=audio.device)
 
         for _ in range(max_steps):
-            coords, eos_logits = self.decoder(memory, audio_mask, generated, None, temperature=temperature)
-            next_coords = coords[:, -1, :]
-            next_eos = torch.sigmoid(eos_logits[:, -1, :])
-            outputs.append(torch.cat([next_coords, next_eos], dim=-1))
+            logits_list = self.decoder(memory, audio_mask, generated, None, temperature=temperature)
+            next_attrs: List[torch.Tensor] = []
+            type_logits = logits_list[TokenAttr.TYPE][:, -1, :]
+            type_probs = F.softmax(type_logits, dim=-1)
+            type_sample = torch.multinomial(type_probs, num_samples=1).squeeze(-1)
+            assembled = torch.zeros(batch_size, attr_count, device=audio.device, dtype=torch.long)
+            assembled[:, TokenAttr.TYPE] = type_sample
 
-            eos_hit = (next_eos.squeeze(-1) > eos_threshold)
-            finished = finished | eos_hit
-            if finished.all():
-                break
+            for attr_idx, logits in enumerate(logits_list):
+                if attr_idx == TokenAttr.TYPE:
+                    continue
+                attr_logits = logits[:, -1, :]
+                attr_probs = F.softmax(attr_logits, dim=-1)
+                attr_sample = torch.multinomial(attr_probs, num_samples=1).squeeze(-1)
+                assembled[:, attr_idx] = attr_sample
 
-            next_token = torch.zeros(batch_size, 1, 4, device=audio.device, dtype=audio.dtype)
-            next_token[:, 0, :3] = next_coords
-            next_token[:, 0, 3] = next_eos.squeeze(-1)
-            generated = torch.cat([generated, next_token], dim=1)
+            token_type = assembled[:, TokenAttr.TYPE]
+            empty_mask = token_type == TokenType.EMPTY
+            circle_mask = token_type == TokenType.CIRCLE
+            slider_mask = token_type == TokenType.SLIDER
+
+            if empty_mask.any():
+                assembled[empty_mask, TokenAttr.START_X :] = 0
+            if circle_mask.any():
+                assembled[circle_mask, TokenAttr.END_X :] = 0
+            if slider_mask.any():
+                assembled[slider_mask, TokenAttr.DURATION] = torch.clamp(
+                    assembled[slider_mask, TokenAttr.DURATION], min=1
+                )
+                assembled[slider_mask, TokenAttr.SLIDES] = torch.clamp(
+                    assembled[slider_mask, TokenAttr.SLIDES], min=1
+                )
+
+            outputs.append(assembled)
+            generated = torch.cat([generated, assembled.unsqueeze(1)], dim=1)
 
         return torch.stack(outputs, dim=1)
+
+    def tokenizer_meta(self) -> dict:
+        return {
+            "attr_sizes": self.attr_sizes,
+            "seq_len": self.seq_len,
+            "data_cfg": self.data_cfg_snapshot,
+        }
