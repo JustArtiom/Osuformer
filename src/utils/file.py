@@ -1,4 +1,3 @@
-from collections import defaultdict
 import os
 import glob
 import fnmatch
@@ -15,28 +14,3 @@ def collect_files(base_dir, include_patterns=["*"], exclude_patterns=[]):
             filtered_files.append(rel_path)
 
     return filtered_files
-
-
-def tree():
-    return defaultdict(tree)
-
-def insert_path(d, path):
-    parts = path.split(os.sep)
-    for p in parts[:-1]:
-        d = d[p]
-    d[parts[-1]] = None
-
-def build_file_tree(paths):
-    root = tree()
-    for p in paths:
-        insert_path(root, p)
-    return root
-
-def dictify_files(d):
-    if isinstance(d, defaultdict):
-        if all(v is None for v in d.values()):
-            return list(d.keys())
-        return {k: dictify_files(v) for k, v in d.items()}
-    return d
-
-AUDIO_EXTENSIONS = ["*.wav", "*.mp3", "*.ogg", "*.flac"]

@@ -158,18 +158,21 @@ def tokens_to_hitobjects(
     width = data_cfg["osu_width"]
     height = data_cfg["osu_height"]
     blocked_until = float("-inf")
+    current_time = float(chunk.start_ms)
 
-    for tick_idx, token in enumerate(tokens.tolist()):
+    for token in tokens.tolist():
         decoded = tokenizer.decode_token(token)
         token_type = decoded["type"]
-        if token_type == TokenType.EMPTY:
-            continue
+        if token_type == TokenType.EOS:
+            break
 
         start_x = _clamp_coord(decoded.get("start_x"), width)
         start_y = _clamp_coord(decoded.get("start_y"), height)
         if start_x is None or start_y is None:
             continue
-        time_ms = int(round(chunk.start_ms + tick_idx * chunk.tick_duration_ms))
+        delta_ticks = decoded.get("delta_ticks", 0)
+        current_time += delta_ticks * chunk.tick_duration_ms
+        time_ms = int(round(current_time))
         if suppress_overlaps and time_ms < blocked_until:
             continue
 

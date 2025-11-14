@@ -12,7 +12,7 @@ import torch
 from torch.utils.data import Dataset
 
 from src.audio import AUDIO_EXTENSIONS, MelSpec, prepare_audio
-from src.data.tokenizer import HitObjectTokenizer
+from src.data.tokenizer import HitObjectTokenizer, TokenAttr, TokenType
 from src.osu import Beatmap, Circle, Slider
 from src.utils.file import collect_files
 import json
@@ -99,6 +99,7 @@ class OsuBeatmapDataset(Dataset):
         self.config = config
         self.split = split
         self.data_cfg = config["data"]
+        self.filters_cfg = config.get("filters", {})
         self.training_cfg = config["training"]
         self.paths_cfg = config["paths"]
 
@@ -110,10 +111,10 @@ class OsuBeatmapDataset(Dataset):
         self.normalize_audio = self.data_cfg.get("normalize_audio", True)
         self.skip_empty = self.data_cfg.get("skip_empty_chunks", False)
         self.tick_tolerance_ms = float(self.data_cfg.get("tick_tolerance_ms", 3.0))
-        self.require_constant_bpm = bool(self.data_cfg.get("require_constant_bpm", False))
-        self.require_tick_alignment = bool(self.data_cfg.get("require_tick_alignment", False))
-        self.map_types = {mt.lower() for mt in (self.data_cfg.get("map_types") or [])}
-        type_thresholds = self.data_cfg.get("map_type_thresholds", {})
+        self.require_constant_bpm = bool(self._filter_value("require_constant_bpm", False))
+        self.require_tick_alignment = bool(self._filter_value("require_tick_alignment", False))
+        self.map_types = {mt.lower() for mt in (self._filter_value("map_types", []) or [])}
+        type_thresholds = self._filter_value("map_type_thresholds", {}) or {}
         self.stream_interval_ms = float(type_thresholds.get("stream_interval_ms", 110.0))
         self.stream_ratio = float(type_thresholds.get("stream_ratio", 0.35))
         self.stream_gap_distance = float(type_thresholds.get("stream_gap_distance", 80.0))
@@ -122,10 +123,13 @@ class OsuBeatmapDataset(Dataset):
         self.tokenizer = HitObjectTokenizer(self.data_cfg)
         self.attr_sizes = self.tokenizer.attribute_sizes
         self.cache_path = cache_path
-        self.min_star_rating = self._parse_star_rating(self.data_cfg.get("min_star_rating"), "min_star_rating")
-        self.max_star_rating = self._parse_star_rating(self.data_cfg.get("max_star_rating"), "max_star_rating")
-        self.min_bpm = self._parse_bpm(self.data_cfg.get("min_bpm"), "min_bpm")
-        self.max_bpm = self._parse_bpm(self.data_cfg.get("max_bpm"), "max_bpm")
+        self.min_star_rating = self._parse_star_rating(self._filter_value("min_star_rating"), "min_star_rating")
+        self.max_star_rating = self._parse_star_rating(self._filter_value("max_star_rating"), "max_star_rating")
+        self.min_bpm = self._parse_bpm(self._filter_value("min_bpm"), "min_bpm")
+        self.max_bpm = self._parse_bpm(self._filter_value("max_bpm"), "max_bpm")
+        self.min_rating = self._parse_rating(self._filter_value("min_rating"), "min_rating")
+        self.max_rating = self._parse_rating(self._filter_value("max_rating"), "max_rating")
+        self.rating_filters_active = self.min_rating is not None or self.max_rating is not None
         if (
             self.min_star_rating is not None
             and self.max_star_rating is not None
@@ -136,6 +140,7 @@ class OsuBeatmapDataset(Dataset):
         self._spec_cache: Dict[str, MelSpec] = {}
         self._spec_stats: Dict[str, Tuple[torch.Tensor, torch.Tensor]] = {}
         self.samples: List[SampleDescriptor] = []
+        self._stats_cache: Dict[str, Optional[float]] = {}
 
         cache_loaded = False
         if self.cache_path and Path(self.cache_path).exists():
@@ -202,6 +207,11 @@ class OsuBeatmapDataset(Dataset):
         std = torch.from_numpy(np.maximum(data.std(axis=1).astype(np.float32), 1e-5))
         return mean, std
 
+    def _filter_value(self, key: str, default=None):
+        if key in self.filters_cfg:
+            return self.filters_cfg.get(key, default)
+        return self.data_cfg.get(key, default)
+
     def _get_spec_stats(self, audio_key: str, spec: MelSpec) -> Tuple[torch.Tensor, torch.Tensor]:
         if audio_key not in self._spec_stats:
             self._spec_stats[audio_key] = self._compute_spec_stats(spec)
@@ -231,6 +241,13 @@ class OsuBeatmapDataset(Dataset):
             return []
         if not self._bpm_in_range(beatmap, osu_path):
             return []
+        if self.rating_filters_active:
+            rating_value = self._get_user_rating(osu_path)
+            if rating_value is None:
+                print(f"[WARN] Skipping {osu_path}: missing stats for rating filter.")
+                return []
+            if not self._rating_in_range(rating_value):
+                return []
         if self.require_constant_bpm and not self._has_constant_bpm(beatmap):
             return []
         events = self._collect_events(beatmap)
@@ -274,17 +291,17 @@ class OsuBeatmapDataset(Dataset):
                 current_start += sample_hop_ms
                 continue
 
-            tokens = self._encode_chunk_tokens(
+            encoded = self._encode_chunk_tokens(
                 chunk_hit_objects,
                 current_start,
                 ticks_per_sample,
                 tick_duration_ms,
                 beatmap,
             )
-
-            if tokens is None:
+            if encoded is None:
                 current_start += sample_hop_ms
                 continue
+            tokens, token_length = encoded
 
             start_frame = int(round(current_start / spec.frame_duration_ms))
             descriptors.append(
@@ -294,22 +311,23 @@ class OsuBeatmapDataset(Dataset):
                     frames_per_chunk=frames_per_chunk,
                     frame_stride=frame_stride,
                     raw_frames=raw_frames_per_chunk,
-                    token_length=ticks_per_sample,
+                    token_length=token_length,
                     tokens=np.asarray(tokens, dtype=np.int64),
                 )
             )
             current_start += sample_hop_ms
 
         if not descriptors and events:
-            tokens = self._encode_chunk_tokens(
+            encoded = self._encode_chunk_tokens(
                 getattr(beatmap, "hit_objects", []),
                 max(0.0, offset_ms),
                 ticks_per_sample,
                 tick_duration_ms,
                 beatmap,
             )
-            if tokens is None:
+            if encoded is None:
                 return []
+            tokens, token_length = encoded
             descriptors.append(
                 SampleDescriptor(
                     audio_path=str(audio_path),
@@ -317,7 +335,7 @@ class OsuBeatmapDataset(Dataset):
                     frames_per_chunk=frames_per_chunk,
                     frame_stride=frame_stride,
                     raw_frames=raw_frames_per_chunk,
-                    token_length=ticks_per_sample,
+                    token_length=token_length,
                     tokens=np.asarray(tokens, dtype=np.int64),
                 )
             )
@@ -341,6 +359,61 @@ class OsuBeatmapDataset(Dataset):
             return float(value)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"data.{key} must be a number or null, got {value!r}") from exc
+
+    @staticmethod
+    def _parse_rating(value, key: str) -> float | None:
+        if value is None:
+            return None
+        try:
+            val = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"filters.{key} must be a number or null, got {value!r}") from exc
+        if not (0.0 <= val <= 10.0):
+            raise ValueError(f"filters.{key} must be between 0 and 10, got {val}")
+        return val
+
+    def _get_user_rating(self, osu_path: Path) -> Optional[float]:
+        stats_path = osu_path.with_suffix(".stats.json")
+        key = str(stats_path)
+        if key in self._stats_cache:
+            return self._stats_cache[key]
+        if not stats_path.exists():
+            self._stats_cache[key] = None
+            return None
+        try:
+            payload = json.loads(stats_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            print(f"[WARN] Failed to read stats file '{stats_path}': {exc}")
+            self._stats_cache[key] = None
+            return None
+        beatmap_data = payload.get("data") if isinstance(payload, dict) else None
+        rating_counts = None
+        if isinstance(beatmap_data, dict):
+            beatmapset = beatmap_data.get("beatmapset")
+            if isinstance(beatmapset, dict):
+                rating_counts = beatmapset.get("ratings")
+        rating_value = self._compute_rating_from_counts(rating_counts)
+        self._stats_cache[key] = rating_value
+        return rating_value
+
+    @staticmethod
+    def _compute_rating_from_counts(ratings: Optional[Sequence[int]]) -> Optional[float]:
+        if not ratings:
+            return None
+        total = sum(ratings)
+        if total <= 0:
+            return None
+        weighted = sum(idx * count for idx, count in enumerate(ratings))
+        return float(weighted) / float(total)
+
+    def _rating_in_range(self, rating: float) -> bool:
+        if rating is None:
+            return False
+        if self.min_rating is not None and rating < self.min_rating:
+            return False
+        if self.max_rating is not None and rating > self.max_rating:
+            return False
+        return True
 
     def _star_rating_in_range(self, beatmap: Beatmap, osu_path: Path) -> bool:
         if self.min_star_rating is None and self.max_star_rating is None:
@@ -547,7 +620,7 @@ class OsuBeatmapDataset(Dataset):
 
     def _cache_metadata(self) -> Dict[str, object]:
         return {
-            "version": 1,
+            "version": 2,
             "split": self.split,
             "beats_per_sample": self.beats_per_sample,
             "ticks_per_beat": self.ticks_per_beat,
@@ -640,38 +713,49 @@ class OsuBeatmapDataset(Dataset):
         ticks_per_sample: int,
         tick_duration_ms: float,
         beatmap: Beatmap,
-    ) -> List[List[int]] | None:
+    ) -> Tuple[List[List[int]], int] | None:
         if ticks_per_sample <= 0:
             return None
-        tokens: List[List[int]] = [self.tokenizer.empty_token() for _ in range(ticks_per_sample)]
-        occupied = [False] * ticks_per_sample
-        any_event = False
+        events = sorted(hit_objects, key=lambda h: float(getattr(h, "time", 0.0)))
+        if not events and self.skip_empty:
+            return None
 
-        for ho in sorted(hit_objects, key=lambda h: float(getattr(h, "time", 0.0))):
+        tokens: List[List[int]] = []
+        prev_time = chunk_start_ms
+        tick_ms = max(tick_duration_ms, 1e-3)
+
+        for ho in events:
             event_time = float(getattr(ho, "time", 0.0))
-            rel = (event_time - chunk_start_ms) / max(tick_duration_ms, 1e-3)
-            tick_idx = int(round(rel))
-            if tick_idx < 0 or tick_idx >= ticks_per_sample:
+            delta_ms = max(0.0, event_time - prev_time)
+            delta_ticks = int(round(delta_ms / tick_ms))
+            delta_ticks = max(0, min(delta_ticks, self.tokenizer.max_delta_ticks))
+            snapped_time = prev_time + delta_ticks * tick_ms
+            if abs(event_time - snapped_time) > self.tick_tolerance_ms:
                 continue
-            tick_time = chunk_start_ms + tick_idx * tick_duration_ms
-            if abs(event_time - tick_time) > self.tick_tolerance_ms:
-                continue
-            if occupied[tick_idx]:
-                continue
+
             if isinstance(ho, Circle):
-                token = self.tokenizer.encode_circle(float(ho.x), float(ho.y))
+                token = self.tokenizer.encode_circle(float(ho.x), float(ho.y), delta_ticks)
             elif isinstance(ho, Slider):
                 sv = self._effective_slider_sv(beatmap, event_time)
-                token = self.tokenizer.encode_slider(ho, tick_duration_ms, sv)
+                token = self.tokenizer.encode_slider(ho, tick_duration_ms, sv, delta_ticks)
             else:
                 continue
-            tokens[tick_idx] = token
-            occupied[tick_idx] = True
-            any_event = True
+            tokens.append(token)
+            prev_time = snapped_time
 
-        if not any_event and self.skip_empty:
+        if not tokens and self.skip_empty:
             return None
-        return tokens
+
+        tokens.append(self.tokenizer.eos_token())
+        token_length = min(len(tokens), ticks_per_sample)
+        tokens = tokens[:token_length]
+        if tokens[-1][TokenAttr.TYPE] != TokenType.EOS:
+            tokens[-1] = self.tokenizer.eos_token()
+
+        while len(tokens) < ticks_per_sample:
+            tokens.append(self.tokenizer.pad_token())
+
+        return tokens, token_length
 
     def __len__(self) -> int:
         return len(self.samples)

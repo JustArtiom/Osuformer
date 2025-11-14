@@ -28,27 +28,6 @@ from src.utils.config import load_config
 from torch.cuda.amp import GradScaler, autocast
 
 
-def build_scheduler(optimizer: torch.optim.Optimizer, training_cfg: dict):
-    schedule_cfg = training_cfg.get("lr_schedule")
-    if not schedule_cfg:
-        return None
-    schedule_type = schedule_cfg.get("type", "").lower()
-    if schedule_type == "multistep":
-        milestones = schedule_cfg.get("milestones", [])
-        gamma = schedule_cfg.get("gamma", 0.1)
-        return torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=milestones, gamma=gamma)
-    if schedule_type == "step":
-        step_size = schedule_cfg.get("step_size", 10)
-        gamma = schedule_cfg.get("gamma", 0.1)
-        return torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
-    if schedule_type == "cosine":
-        t_max = schedule_cfg.get("t_max", training_cfg.get("num_epochs", 100))
-        eta_min = schedule_cfg.get("eta_min", schedule_cfg.get("min_lr", 0.0))
-        return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max, eta_min=eta_min)
-    print(f"[WARN] Unknown lr_schedule.type '{schedule_type}'. Skipping scheduler.")
-    return None
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train the osu! beatmap generator model.")
     parser.add_argument("--config", type=str, default="config.yaml", help="Path to the config file.")
@@ -118,8 +97,10 @@ def run_epoch(
                 target = tokens[..., attr_idx]
                 if attr_idx == TokenAttr.TYPE:
                     attr_mask = valid_mask
+                elif attr_idx == TokenAttr.DELTA:
+                    attr_mask = valid_mask & (type_targets != TokenType.EOS)
                 elif attr_idx in (TokenAttr.START_X, TokenAttr.START_Y):
-                    attr_mask = valid_mask & (type_targets != TokenType.EMPTY)
+                    attr_mask = valid_mask & (type_targets != TokenType.EOS)
                 elif attr_idx in (
                     TokenAttr.END_X,
                     TokenAttr.END_Y,
@@ -147,7 +128,7 @@ def run_epoch(
                     counts = torch.bincount(flat_target, minlength=3).float()
                     total = counts.sum().clamp_min(1.0)
                     freq = counts / total
-                    empty_freq = freq[TokenType.EMPTY].clamp_min(1e-6)
+                    empty_freq = freq[TokenType.EOS].clamp_min(1e-6)
                     other_freq = (1 - empty_freq).clamp_min(1e-6)
                     weight_empty = float(class_weights.get("empty_type", 2.0)) if class_weights else 2.0
                     weight_circle = float(class_weights.get("circle_type", 1.0)) if class_weights else 1.0
@@ -229,9 +210,6 @@ def save_checkpoint(
         "tokenizer_meta": tokenizer_meta,
         "data_cfg": model.data_cfg_snapshot,
     }
-    scheduler_state = metrics.get("_scheduler_state")
-    if scheduler_state is not None:
-        payload["scheduler_state"] = scheduler_state
     torch.save(payload, path)
 
 
@@ -302,7 +280,6 @@ def main() -> None:
     )
     use_amp = bool(training_cfg.get("use_amp", False)) and device.type == "cuda"
     scaler = GradScaler(enabled=use_amp)
-    scheduler = build_scheduler(optimizer, training_cfg)
 
     metrics_path = Path(session.path) / "metrics.json"
     train_history: List[Dict[str, float]] = []
@@ -322,8 +299,6 @@ def main() -> None:
                 metrics_data = json.load(f)
                 train_history = metrics_data.get("train", [])
                 val_history = metrics_data.get("val", [])
-        if scheduler and "scheduler_state" in payload:
-            scheduler.load_state_dict(payload["scheduler_state"])
     best_val = (
         min((entry.get("loss", float("inf")) for entry in val_history), default=float("inf"))
         if val_history
@@ -368,8 +343,6 @@ def main() -> None:
             )
 
         checkpoint_metrics = val_metrics.copy()
-        if scheduler:
-            checkpoint_metrics["_scheduler_state"] = scheduler.state_dict()
 
         latest_path = Path(session.path) / "latest.pt"
         save_checkpoint(
@@ -394,8 +367,6 @@ def main() -> None:
         with open(metrics_path, "w", encoding="utf-8") as f:
             json.dump({"train": train_history, "val": val_history}, f, indent=2)
 
-        if scheduler:
-            scheduler.step()
         plot_curves(train_history, val_history, Path(session.path) / "loss_curve.png")
 
     print("[INFO] Training complete.")

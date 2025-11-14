@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Tuple
 from .hit_sample import HitSample  
 import re
 
@@ -12,8 +12,8 @@ class HitObject:
       time: int = 0,
       type: int = 0,
       hit_sound: int = 0,
-      object_params: List[Union[SpinnerObjectParams, SliderObjectParams]] = None,
-      hit_sample: HitSample = HitSample()
+      object_params: Optional[Union["SpinnerObjectParams", "SliderObjectParams"]] = None,
+      hit_sample: Optional[HitSample] = None
   ):
     self.x = x
     self.y = y
@@ -21,7 +21,7 @@ class HitObject:
     self.type = type
     self.hit_sound = hit_sound
     self.object_params = object_params
-    self.hit_sample = hit_sample
+    self.hit_sample = hit_sample if hit_sample is not None else HitSample()
 
     if raw:
       self._load_raw(raw)
@@ -51,7 +51,7 @@ class Circle(HitObject):
     time: float = 0,
     type: int = 0,
     hit_sound: int = 0,
-    hit_sample: HitSample = HitSample()
+    hit_sample: Optional[HitSample] = None
   ):
     super().__init__(raw=raw, x=x, y=y, time=time, type=type, hit_sound=hit_sound, object_params=None, hit_sample=hit_sample)
 
@@ -73,11 +73,11 @@ class SliderCurve:
       self,
       *,
       curve_type: str = "",
-      curve_points: list[tuple[float, float]] = [],
+      curve_points: Optional[List[Tuple[float, float]]] = None,
       raw: str = ""
   ):
     self.curve_type = curve_type
-    self.curve_points = curve_points
+    self.curve_points = list(curve_points) if curve_points is not None else []
 
     if(raw):
       self._load_raw(raw)
@@ -95,19 +95,19 @@ class SliderObjectParams:
     self, 
     *,
     raw: str = "",
-    curves: List[SliderCurve] = [],
+    curves: Optional[List[SliderCurve]] = None,
     slides: int = 1,
     length: float = 0.0,
     duration: float = 0.0,
-    edge_sounds: list[int] = [],
-    edge_sets: list[tuple[int, int]] = []
+    edge_sounds: Optional[List[int]] = None,
+    edge_sets: Optional[List[Tuple[int, int]]] = None
   ):
-    self.curves = curves
+    self.curves = list(curves) if curves is not None else []
     self.slides = slides
     self.length = length
     self.duration = duration
-    self.edge_sounds = edge_sounds
-    self.edge_sets = edge_sets
+    self.edge_sounds = list(edge_sounds) if edge_sounds is not None else []
+    self.edge_sets = list(edge_sets) if edge_sets is not None else []
 
     if raw:
       self._load_raw(raw)
@@ -149,9 +149,11 @@ class Slider(HitObject):
     time: float = 0,
     type: int = 0,
     hit_sound: int = 0,
-    object_params: SliderObjectParams = SliderObjectParams(),
-    hit_sample: HitSample = HitSample()
+    object_params: Optional[SliderObjectParams] = None,
+    hit_sample: Optional[HitSample] = None
   ):
+    if object_params is None:
+      object_params = SliderObjectParams()
     super().__init__(raw=raw, x=x, y=y, time=time, type=type, hit_sound=hit_sound, object_params=object_params, hit_sample=hit_sample)
 
   def _load_raw(self, raw: str):
@@ -203,9 +205,11 @@ class Spinner(HitObject):
     time: float = 0,
     type: int = 0,
     hit_sound: int = 0,
-    object_params: SpinnerObjectParams = SpinnerObjectParams(),
-    hit_sample: HitSample = HitSample()
+    object_params: Optional[SpinnerObjectParams] = None,
+    hit_sample: Optional[HitSample] = None
   ):
+    if object_params is None:
+      object_params = SpinnerObjectParams()
     super().__init__(raw=raw, x=x, y=y, time=time, type=type, hit_sound=hit_sound, object_params=object_params, hit_sample=hit_sample)
 
   def _load_raw(self, raw: str):
