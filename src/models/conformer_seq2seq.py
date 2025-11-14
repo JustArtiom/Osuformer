@@ -290,6 +290,7 @@ class ConformerSeq2Seq(nn.Module):
         attr_count = TokenAttr.COUNT
         generated = torch.zeros(batch_size, 1, attr_count, device=audio.device, dtype=torch.long)
         outputs: List[torch.Tensor] = []
+        finished = torch.zeros(batch_size, dtype=torch.bool, device=audio.device)
 
         for _ in range(max_steps):
             logits_list = self.decoder(memory, audio_mask, generated, None, temperature=temperature)
@@ -309,12 +310,13 @@ class ConformerSeq2Seq(nn.Module):
                 assembled[:, attr_idx] = attr_sample
 
             token_type = assembled[:, TokenAttr.TYPE]
-            empty_mask = token_type == TokenType.EMPTY
+            eos_mask = token_type == TokenType.EOS
             circle_mask = token_type == TokenType.CIRCLE
             slider_mask = token_type == TokenType.SLIDER
 
-            if empty_mask.any():
-                assembled[empty_mask, TokenAttr.START_X :] = 0
+            assembled[:, TokenAttr.DELTA] = torch.clamp(assembled[:, TokenAttr.DELTA], min=1)
+            if eos_mask.any():
+                assembled[eos_mask, TokenAttr.DELTA :] = 0
             if circle_mask.any():
                 assembled[circle_mask, TokenAttr.END_X :] = 0
             if slider_mask.any():
@@ -324,9 +326,16 @@ class ConformerSeq2Seq(nn.Module):
                 assembled[slider_mask, TokenAttr.SLIDES] = torch.clamp(
                     assembled[slider_mask, TokenAttr.SLIDES], min=1
                 )
+            else:
+                assembled[~slider_mask, TokenAttr.END_X :] = 0
             outputs.append(assembled)
             generated = torch.cat([generated, assembled.unsqueeze(1)], dim=1)
+            finished |= eos_mask
+            if finished.all():
+                break
 
+        if not outputs:
+            outputs.append(torch.zeros(batch_size, attr_count, device=audio.device, dtype=torch.long))
         return torch.stack(outputs, dim=1)
 
     def tokenizer_meta(self) -> dict:

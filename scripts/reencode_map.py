@@ -6,8 +6,6 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
-import numpy as np
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -66,7 +64,6 @@ def encode_tokens(
     beatmap: Beatmap,
     tokenizer: HitObjectTokenizer,
     base_time: float,
-    ticks_per_sample: int,
     tick_duration_ms: float,
     tick_tolerance_ms: float,
 ) -> Tuple[List[List[int]], float, float]:
@@ -76,34 +73,31 @@ def encode_tokens(
     min_time = min(float(getattr(ho, "time", 0.0)) for ho in hit_objects)
     max_time = max(float(getattr(ho, "time", 0.0)) for ho in hit_objects)
 
-    total_ticks = max(int(np.ceil((max_time - base_time) / tick_duration_ms)) + 2, ticks_per_sample)
-
-    tokens: List[List[int]] = [tokenizer.empty_token() for _ in range(total_ticks)]
-    occupied = np.zeros(total_ticks, dtype=bool)
+    tokens: List[List[int]] = []
+    prev_time = base_time
+    tick_ms = max(1e-6, tick_duration_ms)
 
     for ho in hit_objects:
         event_time = float(getattr(ho, "time", 0.0))
-        rel = (event_time - base_time) / max(1e-6, tick_duration_ms)
-        tick_idx = int(round(rel))
-        if tick_idx < 0 or tick_idx >= total_ticks:
-            continue
-        tick_time = base_time + tick_idx * tick_duration_ms
-        if abs(event_time - tick_time) > tick_tolerance_ms:
-            continue
-        if occupied[tick_idx]:
+        delta_ms = max(0.0, event_time - prev_time)
+        delta_ticks = int(round(delta_ms / tick_ms))
+        delta_ticks = max(0, min(delta_ticks, tokenizer.max_delta_ticks))
+        snapped_time = prev_time + delta_ticks * tick_ms
+        if abs(event_time - snapped_time) > tick_tolerance_ms:
             continue
 
         if isinstance(ho, Circle):
-            token = tokenizer.encode_circle(float(ho.x), float(ho.y))
+            token = tokenizer.encode_circle(float(ho.x), float(ho.y), delta_ticks)
         elif isinstance(ho, Slider):
             sv = effective_slider_sv(beatmap, event_time)
-            token = tokenizer.encode_slider(ho, tick_duration_ms, sv)
+            token = tokenizer.encode_slider(ho, tick_duration_ms, sv, delta_ticks)
         else:
             continue
 
-        tokens[tick_idx] = token
-        occupied[tick_idx] = True
+        tokens.append(token)
+        prev_time = snapped_time
 
+    tokens.append(tokenizer.eos_token())
     return tokens, min_time, max_time
 
 
@@ -127,16 +121,19 @@ def decode_tokens(
     beat_duration_ms = tick_duration_ms * data_cfg.get("ticks_per_beat", 8)
     blocked_until = float("-inf")
 
-    for idx, token in enumerate(tokens):
+    current_time = base_time
+    for token in tokens:
         decoded = tokenizer.decode_token(token)
         token_type = decoded["type"]
-        if token_type == TokenType.EMPTY:
-            continue
+        if token_type == TokenType.EOS:
+            break
         start_x = _clamp_coord(decoded.get("start_x"), width)
         start_y = _clamp_coord(decoded.get("start_y"), height)
         if start_x is None or start_y is None:
             continue
-        time_ms = int(round(base_time + idx * tick_duration_ms))
+        delta_ticks = decoded.get("delta_ticks", 0)
+        current_time += delta_ticks * tick_duration_ms
+        time_ms = int(round(current_time))
         if suppress_overlaps and time_ms < blocked_until:
             continue
 
@@ -252,7 +249,6 @@ def main() -> None:
     beat_duration_ms = 60000.0 / max(bpm, 1e-3)
     tick_duration_ms = beat_duration_ms / data_cfg.get("ticks_per_beat", 8)
     tick_tolerance_ms = float(data_cfg.get("tick_tolerance_ms", 3.0))
-    ticks_per_sample = data_cfg.get("beats_per_sample", 16) * data_cfg.get("ticks_per_beat", 8)
 
     base_time = min(offset, min(float(getattr(ho, "time", 0.0)) for ho in getattr(beatmap, "hit_objects", []) or [0.0]))
 
@@ -260,7 +256,6 @@ def main() -> None:
         beatmap,
         tokenizer,
         base_time=base_time,
-        ticks_per_sample=ticks_per_sample,
         tick_duration_ms=tick_duration_ms,
         tick_tolerance_ms=tick_tolerance_ms,
     )
@@ -272,7 +267,7 @@ def main() -> None:
     if args.print_empty:
         for idx, token in enumerate(tokens[: min(20_000, len(tokens))]):
             decoded = tokenizer.decode_token(token)
-            print(f"TICK {idx:05d}: {decoded}")
+            print(f"IDX {idx:05d}: {decoded}")
 
     suppress_overlaps = bool(data_cfg.get("suppress_overlap", True))
 

@@ -8,32 +8,34 @@ from src.osu import Slider
 
 
 class TokenType:
-    EMPTY = 0
+    EOS = 0
     CIRCLE = 1
     SLIDER = 2
 
 
 class TokenAttr:
     TYPE = 0
-    START_X = 1
-    START_Y = 2
-    END_X = 3
-    END_Y = 4
-    CTRL1_X = 5
-    CTRL1_Y = 6
-    CTRL2_X = 7
-    CTRL2_Y = 8
-    DURATION = 9
-    SLIDES = 10
-    CURVE_TYPE = 11
-    SLIDER_SV = 12
+    DELTA = 1
+    START_X = 2
+    START_Y = 3
+    END_X = 4
+    END_Y = 5
+    CTRL1_X = 6
+    CTRL1_Y = 7
+    CTRL2_X = 8
+    CTRL2_Y = 9
+    DURATION = 10
+    SLIDES = 11
+    CURVE_TYPE = 12
+    SLIDER_SV = 13
 
-    COUNT = 13
+    COUNT = 14
 
 
 @dataclass
 class TokenSpec:
     type_id: int
+    delta: int
     start_x: int
     start_y: int
     end_x: int
@@ -50,6 +52,7 @@ class TokenSpec:
     def to_list(self) -> List[int]:
         return [
             self.type_id,
+            self.delta,
             self.start_x,
             self.start_y,
             self.end_x,
@@ -75,11 +78,16 @@ class HitObjectTokenizer:
         self.max_control_points = int(data_cfg.get("max_slider_control_points", 2))
         self.sv_precision = int(data_cfg.get("slider_sv_precision", 100))
         self.max_sv = float(data_cfg.get("slider_sv_max", 4.0))
+        default_delta = data_cfg.get("beats_per_sample", 16) * data_cfg.get("ticks_per_beat", 8)
+        delta_override = data_cfg.get("max_delta_ticks")
+        self.max_delta_ticks = int(delta_override if delta_override is not None else default_delta)
+        self.max_delta_ticks = max(1, self.max_delta_ticks)
 
         self.max_x_bin = int(math.ceil(self.osu_width / self.bin_size))
         self.max_y_bin = int(math.ceil(self.osu_height / self.bin_size))
         self.x_bins = self.max_x_bin + 2  # include sentinel
         self.y_bins = self.max_y_bin + 2
+        self.delta_bins = self.max_delta_ticks + 2  # sentinel + range
         self.duration_bins = self.max_duration_ticks + 1  # include sentinel
         self.slide_bins = self.max_slides + 1  # include sentinel
         self.curve_types = data_cfg.get("slider_curve_types", ["L", "B", "P", "C"])
@@ -88,7 +96,8 @@ class HitObjectTokenizer:
         self.sv_bins = int(self.max_sv * self.sv_precision) + 2  # sentinel + range
 
         self.attribute_sizes = [
-            3,  # type (EMPTY, CIRCLE, SLIDER)
+            3,  # type (EOS, CIRCLE, SLIDER)
+            self.delta_bins,
             self.x_bins,
             self.y_bins,
             self.x_bins,
@@ -148,13 +157,29 @@ class HitObjectTokenizer:
 
     # ---------------- Public API ----------------
 
-    def empty_token(self) -> List[int]:
-        return TokenSpec(TokenType.EMPTY, *(0 for _ in range(TokenAttr.COUNT - 1))).to_list()
+    def pad_token(self) -> List[int]:
+        return TokenSpec(TokenType.EOS, *(0 for _ in range(TokenAttr.COUNT - 1))).to_list()
 
-    def encode_circle(self, x: float, y: float) -> List[int]:
+    def eos_token(self) -> List[int]:
+        return self.pad_token()
+
+    def empty_token(self) -> List[int]:
+        return self.pad_token()
+
+    def _encode_delta(self, delta_ticks: int) -> int:
+        clamped = max(0, min(int(round(delta_ticks)), self.max_delta_ticks))
+        return clamped + 1
+
+    def delta_from_id(self, delta_id: int) -> int:
+        if delta_id <= 0:
+            return 0
+        return delta_id - 1
+
+    def encode_circle(self, x: float, y: float, delta_ticks: int) -> List[int]:
         sx, sy = self._encode_coord_pair(x, y)
         spec = TokenSpec(
             type_id=TokenType.CIRCLE,
+            delta=self._encode_delta(delta_ticks),
             start_x=sx,
             start_y=sy,
             end_x=0,
@@ -170,7 +195,7 @@ class HitObjectTokenizer:
         )
         return spec.to_list()
 
-    def encode_slider(self, slider: Slider, tick_duration_ms: float, sv_multiplier: float) -> List[int]:
+    def encode_slider(self, slider: Slider, tick_duration_ms: float, sv_multiplier: float, delta_ticks: int) -> List[int]:
         start_x, start_y = self._encode_coord_pair(slider.x, slider.y)
         end_x_val, end_y_val = self._slider_end_point(slider)
         end_x, end_y = self._encode_coord_pair(end_x_val, end_y_val)
@@ -190,6 +215,7 @@ class HitObjectTokenizer:
 
         spec = TokenSpec(
             type_id=TokenType.SLIDER,
+            delta=self._encode_delta(delta_ticks),
             start_x=start_x,
             start_y=start_y,
             end_x=end_x,
@@ -216,9 +242,10 @@ class HitObjectTokenizer:
     def decode_token(self, token: Sequence[int]) -> dict:
         token_type = token[TokenAttr.TYPE]
         result = {"type": token_type}
-        if token_type == TokenType.EMPTY:
-            return result
 
+        result["delta_ticks"] = self.delta_from_id(token[TokenAttr.DELTA])
+        if token_type == TokenType.EOS:
+            return result
         result["start_x"] = self.coord_from_id(token[TokenAttr.START_X])
         result["start_y"] = self.coord_from_id(token[TokenAttr.START_Y])
 

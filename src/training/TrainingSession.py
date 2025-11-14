@@ -1,6 +1,4 @@
 import os
-from ..utils.file import collect_files, build_file_tree, dictify_files
-from ..audio import AUDIO_EXTENSIONS
 
 class TrainingSession:
   def __init__(self, config, resume_path: str | None = None):
@@ -30,8 +28,3 @@ class TrainingSession:
         if num > max_num:
           max_num = num
     return str(max_num + 1)
-  
-  def _load_files_path(self):
-    self.files = collect_files(self.dataset_path, [*AUDIO_EXTENSIONS, "*.mel.npz", "*.osu"])
-    self.file_tree = build_file_tree(self.files)
-    self.file_dict = dictify_files(self.file_tree)
