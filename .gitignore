@@ -9,3 +9,4 @@ checkpoints/
 /audio*.ogg.mel.npz
 /audio*.ogg.mel.png
 /audio*.generated.osu
+.env

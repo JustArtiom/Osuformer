@@ -723,16 +723,26 @@ class OsuBeatmapDataset(Dataset):
         tokens: List[List[int]] = []
         prev_time = chunk_start_ms
         tick_ms = max(tick_duration_ms, 1e-3)
+        chunk_cutoff = chunk_start_ms + max(0, ticks_per_sample - 1) * tick_ms
+        chunk_end_limit = chunk_start_ms + ticks_per_sample * tick_ms
+        emitted_event = False
 
         for ho in events:
             event_time = float(getattr(ho, "time", 0.0))
+            if event_time >= chunk_cutoff:
+                break
             delta_ms = max(0.0, event_time - prev_time)
             delta_ticks = int(round(delta_ms / tick_ms))
             delta_ticks = max(0, min(delta_ticks, self.tokenizer.max_delta_ticks))
+            if emitted_event:
+                delta_ticks = max(1, delta_ticks)
             snapped_time = prev_time + delta_ticks * tick_ms
             if abs(event_time - snapped_time) > self.tick_tolerance_ms:
                 continue
+            if snapped_time >= chunk_cutoff:
+                break
 
+            slider_duration_ticks = 0
             if isinstance(ho, Circle):
                 token = self.tokenizer.encode_circle(float(ho.x), float(ho.y), delta_ticks)
             elif isinstance(ho, Slider):
@@ -740,8 +750,17 @@ class OsuBeatmapDataset(Dataset):
                 token = self.tokenizer.encode_slider(ho, tick_duration_ms, sv, delta_ticks)
             else:
                 continue
+            if isinstance(ho, Slider):
+                duration_ms = float(getattr(getattr(ho, "object_params", None), "duration", 0.0) or 0.0)
+                slider_duration_ticks = max(1, int(round(duration_ms / tick_ms)))
+                if snapped_time + slider_duration_ticks * tick_ms > chunk_end_limit:
+                    break
             tokens.append(token)
-            prev_time = snapped_time
+            emitted_event = True
+            if isinstance(ho, Slider):
+                prev_time = snapped_time + slider_duration_ticks * tick_ms
+            else:
+                prev_time = snapped_time
 
         if not tokens and self.skip_empty:
             return None

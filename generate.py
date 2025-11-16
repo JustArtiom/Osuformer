@@ -25,6 +25,8 @@ class AudioChunk:
     tick_duration_ms: float
     ticks_per_sample: int
     beat_duration_ms: float
+    time_rounding_mode: str = "round"
+    time_rounding_threshold: float = 0.5
 
 
 def parse_args() -> argparse.Namespace:
@@ -112,6 +114,22 @@ def build_chunks(spec: MelSpec, data_cfg: dict, bpm: float, offset_ms: float) ->
     timeline_end = spec.times[-1] * 1000.0
     pad_value = float(spec.S_db.min())
 
+    rounding_mode = data_cfg.get("time_rounding_mode", "round")
+    if isinstance(rounding_mode, str):
+        rounding_mode = rounding_mode.lower()
+    else:
+        rounding_mode = "round"
+    custom_threshold = 0.5
+    if rounding_mode == "custom":
+        thresh = data_cfg.get("time_rounding_threshold", 0.5)
+        try:
+            custom_threshold = float(thresh)
+        except (TypeError, ValueError):
+            custom_threshold = 0.5
+        custom_threshold = max(0.0, min(1.0, custom_threshold))
+    if rounding_mode not in ("round", "floor", "ceil", "custom"):
+        rounding_mode = "round"
+
     chunks: List[AudioChunk] = []
     while start < timeline_end:
         start_frame = int(round(start / spec.frame_duration_ms))
@@ -134,6 +152,8 @@ def build_chunks(spec: MelSpec, data_cfg: dict, bpm: float, offset_ms: float) ->
                 tick_duration_ms=tick_duration_ms,
                 ticks_per_sample=ticks_per_sample,
                 beat_duration_ms=beat_duration_ms,
+                time_rounding_mode=rounding_mode,
+                time_rounding_threshold=custom_threshold,
             )
         )
         start += sample_hop_ms
@@ -145,6 +165,36 @@ def _clamp_coord(value: Optional[float], limit: int) -> Optional[int]:
     if value is None:
         return None
     return int(max(0, min(limit, round(value))))
+
+
+def _quantize_time(value: float, mode: str, threshold: float = 0.5) -> int:
+    if mode == "floor":
+        return int(math.floor(value))
+    if mode == "ceil":
+        return int(math.ceil(value))
+    if mode == "custom":
+        base = math.floor(value)
+        frac = value - base
+        if frac >= threshold:
+            return int(base + 1)
+        return int(base)
+    return int(round(value))
+
+
+def _quantize_slider_length(value: float, mode: str, threshold: float = 0.5) -> float | int:
+    if mode == "exact":
+        return value
+    if mode == "floor":
+        return math.floor(value)
+    if mode == "ceil":
+        return math.ceil(value)
+    if mode == "custom":
+        base = math.floor(value)
+        frac = value - base
+        return base + (1 if frac >= threshold else 0)
+    if mode == "round":
+        return int(round(value))
+    return value
 
 
 def tokens_to_hitobjects(
@@ -159,6 +209,17 @@ def tokens_to_hitobjects(
     height = data_cfg["osu_height"]
     blocked_until = float("-inf")
     current_time = float(chunk.start_ms)
+    emitted_event = False
+    cutoff_start = chunk.start_ms + max(0, chunk.ticks_per_sample - 1) * chunk.tick_duration_ms
+    cutoff_end = chunk.start_ms + chunk.ticks_per_sample * chunk.tick_duration_ms
+
+    rounding_mode = getattr(chunk, "time_rounding_mode", "round") or "round"
+    rounding_threshold = getattr(chunk, "time_rounding_threshold", 0.5)
+    length_mode = (data_cfg.get("slider_length_rounding_mode") or "exact").lower()
+    if length_mode not in ("exact", "round", "floor", "ceil", "custom"):
+        length_mode = "exact"
+    length_threshold = float(data_cfg.get("slider_length_rounding_threshold", 0.5) or 0.5)
+    length_threshold = max(0.0, min(1.0, length_threshold))
 
     for token in tokens.tolist():
         decoded = tokenizer.decode_token(token)
@@ -171,8 +232,13 @@ def tokens_to_hitobjects(
         if start_x is None or start_y is None:
             continue
         delta_ticks = decoded.get("delta_ticks", 0)
+        if emitted_event:
+            delta_ticks = max(1, delta_ticks)
         current_time += delta_ticks * chunk.tick_duration_ms
-        time_ms = int(round(current_time))
+        event_time = current_time
+        if event_time >= cutoff_start:
+            break
+        time_ms = _quantize_time(current_time, rounding_mode, rounding_threshold)
         if suppress_overlaps and time_ms < blocked_until:
             continue
 
@@ -186,6 +252,8 @@ def tokens_to_hitobjects(
                     "end_time": time_ms,
                 }
             )
+            emitted_event = True
+            current_time = float(time_ms)
             continue
 
         end_x = _clamp_coord(decoded.get("end_x"), width)
@@ -208,6 +276,8 @@ def tokens_to_hitobjects(
         if duration_ticks <= 0:
             continue
         duration_ms = duration_ticks * chunk.tick_duration_ms
+        if event_time + duration_ms > cutoff_end:
+            break
         slides = max(1, int(decoded.get("slides", 1)))
         beat_length = chunk.beat_duration_ms
         if beat_length <= 0:
@@ -215,6 +285,7 @@ def tokens_to_hitobjects(
         sv_factor = decoded.get("sv_factor") or 1.0
         slider_length = duration_ms * sv_factor * 100.0 / (beat_length * slides)
         slider_length = max(5.0, slider_length)
+        slider_length = _quantize_slider_length(float(slider_length), length_mode, length_threshold)
 
         events.append(
             {
@@ -225,13 +296,15 @@ def tokens_to_hitobjects(
                 "curve_type": decoded.get("curve_type") or "L",
                 "points": ctrl_points,
                 "slides": slides,
-                "length": int(round(slider_length)),
+                "length": slider_length,
                 "sv_factor": float(sv_factor),
                 "end_time": time_ms + int(round(duration_ms)),
             }
         )
         if suppress_overlaps:
             blocked_until = max(blocked_until, time_ms + duration_ms)
+        emitted_event = True
+        current_time = float(time_ms + duration_ms)
 
     return events
 
@@ -270,8 +343,13 @@ def format_hit_objects(events: Sequence[dict]) -> List[str]:
         elif event["type"] == "slider":
             points = "|".join(f"{x}:{y}" for x, y in event["points"])
             curve = f"{event['curve_type']}|{points}"
+            length = event.get("length")
+            if isinstance(length, float):
+                length_str = f"{length:.6f}".rstrip("0").rstrip(".")
+            else:
+                length_str = str(length)
             lines.append(
-                f"{event['x']},{event['y']},{event['time']},2,0,{curve},{event['slides']},{event['length']},0:0:0:0:"
+                f"{event['x']},{event['y']},{event['time']},2,0,{curve},{event['slides']},{length_str},0:0:0:0:"
             )
     return lines
 
