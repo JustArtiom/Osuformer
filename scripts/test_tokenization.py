@@ -70,15 +70,24 @@ def encode_chunk_tokens(
     tokens: List[List[int]] = []
     prev_time = chunk_start_ms
     tick_ms = max(1e-6, tick_duration_ms)
+    emitted_event = False
+    chunk_cutoff = chunk_start_ms + max(0, ticks_per_sample - 1) * tick_ms
+    chunk_end_limit = chunk_start_ms + ticks_per_sample * tick_ms
 
     for ho in events:
         event_time = float(getattr(ho, "time", 0.0))
+        if event_time >= chunk_cutoff:
+            break
         delta_ms = max(0.0, event_time - prev_time)
         delta_ticks = int(round(delta_ms / tick_ms))
         delta_ticks = max(0, min(delta_ticks, tokenizer.max_delta_ticks))
+        if emitted_event:
+            delta_ticks = max(1, delta_ticks)
         snapped_time = prev_time + delta_ticks * tick_ms
         if abs(event_time - snapped_time) > tick_tolerance_ms:
             continue
+        if snapped_time >= chunk_cutoff:
+            break
 
         if isinstance(ho, Circle):
             token = tokenizer.encode_circle(float(ho.x), float(ho.y), delta_ticks)
@@ -88,8 +97,20 @@ def encode_chunk_tokens(
         else:
             continue
 
+        if isinstance(ho, Slider):
+            duration_ms = float(getattr(getattr(ho, "object_params", None), "duration", 0.0) or 0.0)
+            duration_ticks = max(1, int(round(duration_ms / tick_ms)))
+            if snapped_time + duration_ticks * tick_ms > chunk_end_limit:
+                break
+        else:
+            duration_ticks = 0
+
         tokens.append(token)
-        prev_time = snapped_time
+        emitted_event = True
+        if isinstance(ho, Slider):
+            prev_time = snapped_time + duration_ticks * tick_ms
+        else:
+            prev_time = snapped_time
 
     tokens.append(tokenizer.eos_token())
     token_length = min(len(tokens), ticks_per_sample)
@@ -164,6 +185,11 @@ def main() -> None:
         current_time += delta_ticks * tick_duration_ms
         summary = summarize_token(raw)
         print(f"[IDX {idx:03d} | t={current_time:.2f} ms] {summary} -> {dec}")
+        if dec["type"] == TokenType.SLIDER:
+            duration_ticks = dec.get("duration_ticks", 0)
+            current_time += max(0, duration_ticks) * tick_duration_ms
+        elif dec["type"] == TokenType.CIRCLE:
+            current_time = float(current_time)
         if dec["type"] == TokenType.EOS and not args.print_empty:
             break
 

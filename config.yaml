@@ -18,25 +18,27 @@ data:
   default_bpm: 120.0
   merge_tolerance_ms: 8.0
   tick_tolerance_ms: 10.0
-  default_slider_multiplier: 1.4
   max_slider_ticks: 64
   slider_sv_precision: 100
   slider_sv_max: 4.0
   max_slides: 4
   max_slider_control_points: 2
   slider_curve_types: ["L", "B", "P", "C"]
-  suppress_overlap: false
+  time_rounding_mode: "round"  # round|floor|ceil|custom
+  time_rounding_threshold: 0.55  # used when mode=custom
+  slider_length_rounding_mode: "exact"  # exact|round|floor|ceil|custom
+  slider_length_rounding_threshold: 0.6 # used when mode=custom
+  suppress_overlap: true
   class_weights:
     empty_type: 2.0
     circle_type: 1.0
     slider_type: 1.0
-  eos_ramp_steps: 4
 
 filters:
   min_bpm: 80
   max_bpm: null
   min_star_rating: 4.0
-  max_star_rating: 6.0
+  max_star_rating: 6.5
   require_constant_bpm: true
   require_tick_alignment: true
   map_types: []
@@ -46,7 +48,7 @@ filters:
     stream_gap_distance: 80.0
     aim_jump_distance: 120.0
     aim_ratio: 0.3
-  min_rating: 8.5
+  min_rating: 7.5
   max_rating: null
 
 model:
@@ -59,15 +61,14 @@ model:
     conv_kernel: 31
     dropout: 0.1
   decoder:
-    num_layers: 8
+    num_layers: 10
     num_heads: 8
     ffn_dim: 512
     dropout: 0.1
-    max_seq_len: 128
 
 training:
   batch_size: 12
-  lr: 0.0001
+  lr: 0.00001
   num_epochs: 300
   device: "cuda"
   path: "checkpoints/"

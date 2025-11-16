@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import sys
 from pathlib import Path
@@ -13,6 +14,22 @@ if str(ROOT) not in sys.path:
 from src.data.tokenizer import HitObjectTokenizer, TokenAttr, TokenType
 from src.osu import Beatmap, Circle, Slider
 from src.utils.config import load_config
+
+
+def _quantize_slider_length(value: float, mode: str, threshold: float) -> float | int:
+    if mode == "exact":
+        return value
+    if mode == "floor":
+        return math.floor(value)
+    if mode == "ceil":
+        return math.ceil(value)
+    if mode == "custom":
+        base = math.floor(value)
+        frac = value - base
+        return base + (1 if frac >= threshold else 0)
+    if mode == "round":
+        return int(round(value))
+    return value
 
 
 def parse_args() -> argparse.Namespace:
@@ -76,12 +93,15 @@ def encode_tokens(
     tokens: List[List[int]] = []
     prev_time = base_time
     tick_ms = max(1e-6, tick_duration_ms)
+    emitted_event = False
 
     for ho in hit_objects:
         event_time = float(getattr(ho, "time", 0.0))
         delta_ms = max(0.0, event_time - prev_time)
         delta_ticks = int(round(delta_ms / tick_ms))
         delta_ticks = max(0, min(delta_ticks, tokenizer.max_delta_ticks))
+        if emitted_event:
+            delta_ticks = max(1, delta_ticks)
         snapped_time = prev_time + delta_ticks * tick_ms
         if abs(event_time - snapped_time) > tick_tolerance_ms:
             continue
@@ -95,7 +115,13 @@ def encode_tokens(
             continue
 
         tokens.append(token)
-        prev_time = snapped_time
+        emitted_event = True
+        if isinstance(ho, Slider):
+            duration_ms = float(getattr(getattr(ho, "object_params", None), "duration", 0.0) or 0.0)
+            duration_ticks = max(1, int(round(duration_ms / tick_ms)))
+            prev_time = snapped_time + duration_ticks * tick_ms
+        else:
+            prev_time = snapped_time
 
     tokens.append(tokenizer.eos_token())
     return tokens, min_time, max_time
@@ -121,6 +147,12 @@ def decode_tokens(
     beat_duration_ms = tick_duration_ms * data_cfg.get("ticks_per_beat", 8)
     blocked_until = float("-inf")
 
+    length_mode = (data_cfg.get("slider_length_rounding_mode") or "exact").lower()
+    if length_mode not in ("exact", "round", "floor", "ceil", "custom"):
+        length_mode = "exact"
+    length_threshold = float(data_cfg.get("slider_length_rounding_threshold", 0.5) or 0.5)
+    length_threshold = max(0.0, min(1.0, length_threshold))
+
     current_time = base_time
     for token in tokens:
         decoded = tokenizer.decode_token(token)
@@ -139,6 +171,7 @@ def decode_tokens(
 
         if token_type == TokenType.CIRCLE:
             events.append({"type": "circle", "time": time_ms, "x": start_x, "y": start_y, "end_time": time_ms})
+            current_time = float(time_ms)
             continue
 
         end_x = _clamp_coord(decoded.get("end_x"), width)
@@ -166,6 +199,8 @@ def decode_tokens(
         sv_factor = decoded.get("sv_factor") or 1.0
         slider_length = duration_ms * sv_factor * 100.0 / (beat_duration_ms * slides)
         slider_length = max(5.0, slider_length)
+        slider_length = _quantize_slider_length(float(slider_length), length_mode, length_threshold)
+        slider_length = float(slider_length)
 
         events.append(
             {
@@ -176,13 +211,14 @@ def decode_tokens(
                 "curve_type": decoded.get("curve_type") or "L",
                 "points": points,
                 "slides": slides,
-                "length": int(round(slider_length)),
+                "length": slider_length,
                 "sv_factor": float(sv_factor),
                 "end_time": time_ms + int(round(duration_ms)),
             }
         )
         if suppress_overlaps:
             blocked_until = max(blocked_until, time_ms + duration_ms)
+        current_time = float(time_ms + duration_ms)
 
     events.sort(key=lambda e: e["time"])
     return events
@@ -196,8 +232,13 @@ def format_hitobjects(events: Sequence[dict]) -> List[str]:
         elif event["type"] == "slider":
             points = "|".join(f"{x}:{y}" for x, y in event["points"])
             curve = f"{event['curve_type']}|{points}"
+            length = event.get("length")
+            if isinstance(length, float):
+                length_str = f"{length:.6f}".rstrip("0").rstrip(".")
+            else:
+                length_str = str(length)
             lines.append(
-                f"{event['x']},{event['y']},{event['time']},2,0,{curve},{event['slides']},{event['length']},0:0:0:0:"
+                f"{event['x']},{event['y']},{event['time']},2,0,{curve},{event['slides']},{length_str},0:0:0:0:"
             )
     return lines
 
