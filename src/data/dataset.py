@@ -721,46 +721,42 @@ class OsuBeatmapDataset(Dataset):
             return None
 
         tokens: List[List[int]] = []
-        prev_time = chunk_start_ms
         tick_ms = max(tick_duration_ms, 1e-3)
-        chunk_cutoff = chunk_start_ms + max(0, ticks_per_sample - 1) * tick_ms
-        chunk_end_limit = chunk_start_ms + ticks_per_sample * tick_ms
-        emitted_event = False
+        chunk_cutoff_tick = max(0, ticks_per_sample - 1)
+        chunk_end_tick = ticks_per_sample
+        required_tick = 0
 
         for ho in events:
             event_time = float(getattr(ho, "time", 0.0))
-            if event_time >= chunk_cutoff:
+            rel_ms = event_time - chunk_start_ms
+            tick_idx = int(round(rel_ms / tick_ms))
+            if tick_idx < 0:
+                tick_idx = 0
+            tick_idx = min(tick_idx, self.tokenizer.max_delta_ticks)
+            if tick_idx >= chunk_cutoff_tick:
                 break
-            delta_ms = max(0.0, event_time - prev_time)
-            delta_ticks = int(round(delta_ms / tick_ms))
-            delta_ticks = max(0, min(delta_ticks, self.tokenizer.max_delta_ticks))
-            if emitted_event:
-                delta_ticks = max(1, delta_ticks)
-            snapped_time = prev_time + delta_ticks * tick_ms
+            if tick_idx < required_tick:
+                continue
+            snapped_time = chunk_start_ms + tick_idx * tick_ms
             if abs(event_time - snapped_time) > self.tick_tolerance_ms:
                 continue
-            if snapped_time >= chunk_cutoff:
-                break
 
-            slider_duration_ticks = 0
             if isinstance(ho, Circle):
-                token = self.tokenizer.encode_circle(float(ho.x), float(ho.y), delta_ticks)
+                token = self.tokenizer.encode_circle(float(ho.x), float(ho.y), tick_idx)
+                end_tick = tick_idx
             elif isinstance(ho, Slider):
+                duration_ms = float(getattr(getattr(ho, "object_params", None), "duration", 0.0) or 0.0)
+                duration_ticks = max(1, int(round(duration_ms / tick_ms)))
+                end_tick = tick_idx + duration_ticks
+                if end_tick > chunk_end_tick:
+                    break
                 sv = self._effective_slider_sv(beatmap, event_time)
-                token = self.tokenizer.encode_slider(ho, tick_duration_ms, sv, delta_ticks)
+                token = self.tokenizer.encode_slider(ho, tick_duration_ms, sv, tick_idx)
             else:
                 continue
-            if isinstance(ho, Slider):
-                duration_ms = float(getattr(getattr(ho, "object_params", None), "duration", 0.0) or 0.0)
-                slider_duration_ticks = max(1, int(round(duration_ms / tick_ms)))
-                if snapped_time + slider_duration_ticks * tick_ms > chunk_end_limit:
-                    break
+
             tokens.append(token)
-            emitted_event = True
-            if isinstance(ho, Slider):
-                prev_time = snapped_time + slider_duration_ticks * tick_ms
-            else:
-                prev_time = snapped_time
+            required_tick = min(chunk_end_tick, end_tick + 1)
 
         if not tokens and self.skip_empty:
             return None

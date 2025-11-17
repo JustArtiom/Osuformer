@@ -208,8 +208,6 @@ def tokens_to_hitobjects(
     width = data_cfg["osu_width"]
     height = data_cfg["osu_height"]
     blocked_until = float("-inf")
-    current_time = float(chunk.start_ms)
-    emitted_event = False
     cutoff_start = chunk.start_ms + max(0, chunk.ticks_per_sample - 1) * chunk.tick_duration_ms
     cutoff_end = chunk.start_ms + chunk.ticks_per_sample * chunk.tick_duration_ms
 
@@ -231,14 +229,13 @@ def tokens_to_hitobjects(
         start_y = _clamp_coord(decoded.get("start_y"), height)
         if start_x is None or start_y is None:
             continue
-        delta_ticks = decoded.get("delta_ticks", 0)
-        if emitted_event:
-            delta_ticks = max(1, delta_ticks)
-        current_time += delta_ticks * chunk.tick_duration_ms
-        event_time = current_time
+        tick_idx = decoded.get("tick_index", decoded.get("delta_ticks"))
+        if tick_idx is None:
+            continue
+        event_time = chunk.start_ms + tick_idx * chunk.tick_duration_ms
         if event_time >= cutoff_start:
             break
-        time_ms = _quantize_time(current_time, rounding_mode, rounding_threshold)
+        time_ms = _quantize_time(event_time, rounding_mode, rounding_threshold)
         if suppress_overlaps and time_ms < blocked_until:
             continue
 
@@ -252,8 +249,8 @@ def tokens_to_hitobjects(
                     "end_time": time_ms,
                 }
             )
-            emitted_event = True
-            current_time = float(time_ms)
+            if suppress_overlaps:
+                blocked_until = max(blocked_until, time_ms + chunk.tick_duration_ms)
             continue
 
         end_x = _clamp_coord(decoded.get("end_x"), width)
@@ -302,9 +299,7 @@ def tokens_to_hitobjects(
             }
         )
         if suppress_overlaps:
-            blocked_until = max(blocked_until, time_ms + duration_ms)
-        emitted_event = True
-        current_time = float(time_ms + duration_ms)
+            blocked_until = max(blocked_until, time_ms + duration_ms + chunk.tick_duration_ms)
 
     return events
 

@@ -91,37 +91,38 @@ def encode_tokens(
     max_time = max(float(getattr(ho, "time", 0.0)) for ho in hit_objects)
 
     tokens: List[List[int]] = []
-    prev_time = base_time
     tick_ms = max(1e-6, tick_duration_ms)
-    emitted_event = False
+    chunk_end_tick = tokenizer.max_delta_ticks
+    required_tick = 0
 
     for ho in hit_objects:
         event_time = float(getattr(ho, "time", 0.0))
-        delta_ms = max(0.0, event_time - prev_time)
-        delta_ticks = int(round(delta_ms / tick_ms))
-        delta_ticks = max(0, min(delta_ticks, tokenizer.max_delta_ticks))
-        if emitted_event:
-            delta_ticks = max(1, delta_ticks)
-        snapped_time = prev_time + delta_ticks * tick_ms
+        tick_idx = int(round((event_time - base_time) / tick_ms))
+        if tick_idx < 0:
+            tick_idx = 0
+        tick_idx = min(tick_idx, tokenizer.max_delta_ticks)
+        if tick_idx < required_tick:
+            continue
+        snapped_time = base_time + tick_idx * tick_ms
         if abs(event_time - snapped_time) > tick_tolerance_ms:
             continue
 
         if isinstance(ho, Circle):
-            token = tokenizer.encode_circle(float(ho.x), float(ho.y), delta_ticks)
+            token = tokenizer.encode_circle(float(ho.x), float(ho.y), tick_idx)
+            end_tick = tick_idx
         elif isinstance(ho, Slider):
+            duration_ms = float(getattr(getattr(ho, "object_params", None), "duration", 0.0) or 0.0)
+            duration_ticks = max(1, int(round(duration_ms / tick_ms)))
+            end_tick = tick_idx + duration_ticks
+            if end_tick > chunk_end_tick:
+                break
             sv = effective_slider_sv(beatmap, event_time)
-            token = tokenizer.encode_slider(ho, tick_duration_ms, sv, delta_ticks)
+            token = tokenizer.encode_slider(ho, tick_duration_ms, sv, tick_idx)
         else:
             continue
 
         tokens.append(token)
-        emitted_event = True
-        if isinstance(ho, Slider):
-            duration_ms = float(getattr(getattr(ho, "object_params", None), "duration", 0.0) or 0.0)
-            duration_ticks = max(1, int(round(duration_ms / tick_ms)))
-            prev_time = snapped_time + duration_ticks * tick_ms
-        else:
-            prev_time = snapped_time
+        required_tick = min(chunk_end_tick, end_tick + 1)
 
     tokens.append(tokenizer.eos_token())
     return tokens, min_time, max_time
@@ -163,15 +164,18 @@ def decode_tokens(
         start_y = _clamp_coord(decoded.get("start_y"), height)
         if start_x is None or start_y is None:
             continue
-        delta_ticks = decoded.get("delta_ticks", 0)
-        current_time += delta_ticks * tick_duration_ms
+        tick_idx = decoded.get("tick_index", decoded.get("delta_ticks"))
+        if tick_idx is None:
+            continue
+        current_time = base_time + tick_idx * tick_duration_ms
         time_ms = int(round(current_time))
         if suppress_overlaps and time_ms < blocked_until:
             continue
 
         if token_type == TokenType.CIRCLE:
             events.append({"type": "circle", "time": time_ms, "x": start_x, "y": start_y, "end_time": time_ms})
-            current_time = float(time_ms)
+            if suppress_overlaps:
+                blocked_until = max(blocked_until, time_ms + tick_duration_ms)
             continue
 
         end_x = _clamp_coord(decoded.get("end_x"), width)
@@ -217,8 +221,7 @@ def decode_tokens(
             }
         )
         if suppress_overlaps:
-            blocked_until = max(blocked_until, time_ms + duration_ms)
-        current_time = float(time_ms + duration_ms)
+            blocked_until = max(blocked_until, time_ms + duration_ms + tick_duration_ms)
 
     events.sort(key=lambda e: e["time"])
     return events

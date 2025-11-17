@@ -78,7 +78,8 @@ class HitObjectTokenizer:
         self.max_control_points = int(data_cfg.get("max_slider_control_points", 2))
         self.sv_precision = int(data_cfg.get("slider_sv_precision", 100))
         self.max_sv = float(data_cfg.get("slider_sv_max", 4.0))
-        default_delta = data_cfg.get("beats_per_sample", 16) * data_cfg.get("ticks_per_beat", 8)
+        self.seq_len = data_cfg.get("beats_per_sample", 16) * data_cfg.get("ticks_per_beat", 8)
+        default_delta = self.seq_len
         delta_override = data_cfg.get("max_delta_ticks")
         self.max_delta_ticks = int(delta_override if delta_override is not None else default_delta)
         self.max_delta_ticks = max(1, self.max_delta_ticks)
@@ -166,20 +167,20 @@ class HitObjectTokenizer:
     def empty_token(self) -> List[int]:
         return self.pad_token()
 
-    def _encode_delta(self, delta_ticks: int) -> int:
-        clamped = max(0, min(int(round(delta_ticks)), self.max_delta_ticks))
+    def _encode_tick_index(self, tick_index: int) -> int:
+        clamped = max(0, min(int(round(tick_index)), self.max_delta_ticks))
         return clamped + 1
 
-    def delta_from_id(self, delta_id: int) -> int:
+    def tick_from_id(self, delta_id: int) -> int:
         if delta_id <= 0:
             return 0
         return delta_id - 1
 
-    def encode_circle(self, x: float, y: float, delta_ticks: int) -> List[int]:
+    def encode_circle(self, x: float, y: float, tick_index: int) -> List[int]:
         sx, sy = self._encode_coord_pair(x, y)
         spec = TokenSpec(
             type_id=TokenType.CIRCLE,
-            delta=self._encode_delta(delta_ticks),
+            delta=self._encode_tick_index(tick_index),
             start_x=sx,
             start_y=sy,
             end_x=0,
@@ -195,7 +196,7 @@ class HitObjectTokenizer:
         )
         return spec.to_list()
 
-    def encode_slider(self, slider: Slider, tick_duration_ms: float, sv_multiplier: float, delta_ticks: int) -> List[int]:
+    def encode_slider(self, slider: Slider, tick_duration_ms: float, sv_multiplier: float, tick_index: int) -> List[int]:
         start_x, start_y = self._encode_coord_pair(slider.x, slider.y)
         end_x_val, end_y_val = self._slider_end_point(slider)
         end_x, end_y = self._encode_coord_pair(end_x_val, end_y_val)
@@ -215,7 +216,7 @@ class HitObjectTokenizer:
 
         spec = TokenSpec(
             type_id=TokenType.SLIDER,
-            delta=self._encode_delta(delta_ticks),
+            delta=self._encode_tick_index(tick_index),
             start_x=start_x,
             start_y=start_y,
             end_x=end_x,
@@ -243,7 +244,10 @@ class HitObjectTokenizer:
         token_type = token[TokenAttr.TYPE]
         result = {"type": token_type}
 
-        result["delta_ticks"] = self.delta_from_id(token[TokenAttr.DELTA])
+        tick_index = self.tick_from_id(token[TokenAttr.DELTA])
+        result["tick_index"] = tick_index
+        # Backwards compatibility for code paths still expecting delta_ticks terminology.
+        result["delta_ticks"] = tick_index
         if token_type == TokenType.EOS:
             return result
         result["start_x"] = self.coord_from_id(token[TokenAttr.START_X])
