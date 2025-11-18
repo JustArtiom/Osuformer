@@ -10,11 +10,13 @@ data:
   osu_width: 512
   osu_height: 384
   position_bin_size: 8
+  use_bpm_feature: true
+  bpm_normalization: 300.0
   max_delta_ticks: null
   prep_num_workers: 4
   max_frames_per_sample: 4096
   normalize_audio: true
-  skip_empty_chunks: false
+  skip_empty_chunks: true
   default_bpm: 120.0
   merge_tolerance_ms: 8.0
   tick_tolerance_ms: 10.0
@@ -24,21 +26,24 @@ data:
   max_slides: 4
   max_slider_control_points: 2
   slider_curve_types: ["L", "B", "P", "C"]
+  max_editor_bookmarks: 256
   time_rounding_mode: "round"  # round|floor|ceil|custom
   time_rounding_threshold: 0.55  # used when mode=custom
   slider_length_rounding_mode: "exact"  # exact|round|floor|ceil|custom
   slider_length_rounding_threshold: 0.6 # used when mode=custom
   suppress_overlap: true
   class_weights:
-    empty_type: 2.0
-    circle_type: 1.0
-    slider_type: 1.0
+    empty_type: 0.9
+    circle_type: 1.05
+    slider_type: 1.05
 
 filters:
   min_bpm: 80
-  max_bpm: null
-  min_star_rating: 4.0
-  max_star_rating: 6.5
+  max_bpm: 300
+  min_star_rating: 5
+  max_star_rating: 7.5
+  min_rating: 6.5
+  max_rating: null
   require_constant_bpm: true
   require_tick_alignment: true
   map_types: []
@@ -48,22 +53,20 @@ filters:
     stream_gap_distance: 80.0
     aim_jump_distance: 120.0
     aim_ratio: 0.3
-  min_rating: 7.5
-  max_rating: null
 
 model:
   encoder:
     type: conformer
-    d_model: 256
+    d_model: 384
     num_layers: 6
     num_heads: 4
-    ffn_dim: 512
+    ffn_dim: 1536
     conv_kernel: 31
     dropout: 0.1
   decoder:
     num_layers: 10
     num_heads: 8
-    ffn_dim: 512
+    ffn_dim: 1536
     dropout: 0.1
 
 training:

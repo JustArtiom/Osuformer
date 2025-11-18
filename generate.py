@@ -27,6 +27,7 @@ class AudioChunk:
     beat_duration_ms: float
     time_rounding_mode: str = "round"
     time_rounding_threshold: float = 0.5
+    bpm_feature: float = 0.0
 
 
 def parse_args() -> argparse.Namespace:
@@ -89,6 +90,9 @@ def build_chunks(spec: MelSpec, data_cfg: dict, bpm: float, offset_ms: float) ->
     sample_hop_beats = data_cfg.get("sample_hop_beats", max(1, beats_per_sample // 2))
     ticks_per_sample = beats_per_sample * ticks_per_beat
     normalize_audio = data_cfg.get("normalize_audio", True)
+    use_bpm_feature = bool(data_cfg.get("use_bpm_feature", False))
+    bpm_norm = float(data_cfg.get("bpm_normalization", 300.0) or 1.0)
+    bpm_feature_value = float(bpm) / bpm_norm if use_bpm_feature else 0.0
 
     beat_duration_ms = 60000.0 / max(bpm, 1e-3)
     chunk_duration_ms = beats_per_sample * beat_duration_ms
@@ -142,6 +146,9 @@ def build_chunks(spec: MelSpec, data_cfg: dict, bpm: float, offset_ms: float) ->
         audio = torch.from_numpy(mel_slice.T).unsqueeze(0).float()
         if normalize_audio:
             audio = (audio - mean) / std
+        if use_bpm_feature:
+            bpm_column = torch.full((1, audio.shape[1], 1), bpm_feature_value, dtype=audio.dtype)
+            audio = torch.cat([audio, bpm_column], dim=2)
 
         mask = torch.arange(frames_per_chunk).unsqueeze(0) >= valid_frames
         chunks.append(
@@ -154,6 +161,7 @@ def build_chunks(spec: MelSpec, data_cfg: dict, bpm: float, offset_ms: float) ->
                 beat_duration_ms=beat_duration_ms,
                 time_rounding_mode=rounding_mode,
                 time_rounding_threshold=custom_threshold,
+                bpm_feature=bpm_feature_value,
             )
         )
         start += sample_hop_ms
@@ -210,6 +218,7 @@ def tokens_to_hitobjects(
     blocked_until = float("-inf")
     cutoff_start = chunk.start_ms + max(0, chunk.ticks_per_sample - 1) * chunk.tick_duration_ms
     cutoff_end = chunk.start_ms + chunk.ticks_per_sample * chunk.tick_duration_ms
+    current_tick = 0
 
     rounding_mode = getattr(chunk, "time_rounding_mode", "round") or "round"
     rounding_threshold = getattr(chunk, "time_rounding_threshold", 0.5)
@@ -229,10 +238,13 @@ def tokens_to_hitobjects(
         start_y = _clamp_coord(decoded.get("start_y"), height)
         if start_x is None or start_y is None:
             continue
-        tick_idx = decoded.get("tick_index", decoded.get("delta_ticks"))
-        if tick_idx is None:
+        delta_ticks = decoded.get("tick_index", decoded.get("delta_ticks"))
+        if delta_ticks is None:
             continue
-        event_time = chunk.start_ms + tick_idx * chunk.tick_duration_ms
+        current_tick += max(0, int(delta_ticks))
+        if current_tick >= chunk.ticks_per_sample:
+            break
+        event_time = chunk.start_ms + current_tick * chunk.tick_duration_ms
         if event_time >= cutoff_start:
             break
         time_ms = _quantize_time(event_time, rounding_mode, rounding_threshold)
@@ -486,7 +498,6 @@ def main() -> None:
 
     spec = load_or_create_mel(audio_path, data_cfg)
     chunks = build_chunks(spec, data_cfg, bpm, offset)
-    bookmark_times = sorted({int(round(chunk.start_ms)) for chunk in chunks})
 
     model = ConformerSeq2Seq(config).to(device)
     model.load_state_dict(payload["model_state"])
@@ -527,6 +538,11 @@ def main() -> None:
     beat_length = 60000.0 / max(bpm, 1e-3)
 
     timing_lines = build_timing_points(offset, beat_length, discrete_events)
+    bookmark_times = sorted({int(event["time"]) for event in discrete_events})
+    max_bookmarks = int(data_cfg.get("max_editor_bookmarks", 256) or 0)
+    if max_bookmarks > 0 and len(bookmark_times) > max_bookmarks:
+        step = max(1, len(bookmark_times) // max_bookmarks)
+        bookmark_times = bookmark_times[::step]
 
     if template_path and template_path.exists():
         output_text = template_path.read_text(encoding="utf-8")
