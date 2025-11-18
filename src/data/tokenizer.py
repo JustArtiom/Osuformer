@@ -28,8 +28,10 @@ class TokenAttr:
     SLIDES = 11
     CURVE_TYPE = 12
     SLIDER_SV = 13
+    DISTANCE = 14
+    ANGLE = 15
 
-    COUNT = 14
+    COUNT = 16
 
 
 @dataclass
@@ -48,6 +50,8 @@ class TokenSpec:
     slides: int
     curve_type: int
     slider_sv: int
+    distance: int
+    angle: int
 
     def to_list(self) -> List[int]:
         return [
@@ -65,6 +69,8 @@ class TokenSpec:
             self.slides,
             self.curve_type,
             self.slider_sv,
+            self.distance,
+            self.angle,
         ]
 
 
@@ -83,12 +89,18 @@ class HitObjectTokenizer:
         delta_override = data_cfg.get("max_delta_ticks")
         self.max_delta_ticks = int(delta_override if delta_override is not None else default_delta)
         self.max_delta_ticks = max(1, self.max_delta_ticks)
+        self.distance_bin_size = float(data_cfg.get("distance_bin_size", 8.0) or 8.0)
+        self.max_distance = float(data_cfg.get("max_distance") or math.hypot(self.osu_width, self.osu_height))
+        angle_bins = int(data_cfg.get("angle_bins", 72))
+        self.angle_bins_count = max(4, angle_bins)
 
         self.max_x_bin = int(math.ceil(self.osu_width / self.bin_size))
         self.max_y_bin = int(math.ceil(self.osu_height / self.bin_size))
         self.x_bins = self.max_x_bin + 2  # include sentinel
         self.y_bins = self.max_y_bin + 2
         self.delta_bins = self.max_delta_ticks + 2  # sentinel + range
+        self.distance_bins = int(self.max_distance / max(self.distance_bin_size, 1e-6)) + 2
+        self.angle_bins = self.angle_bins_count + 1
         self.duration_bins = self.max_duration_ticks + 1  # include sentinel
         self.slide_bins = self.max_slides + 1  # include sentinel
         self.curve_types = data_cfg.get("slider_curve_types", ["L", "B", "P", "C"])
@@ -111,6 +123,8 @@ class HitObjectTokenizer:
             self.slide_bins,
             self.curve_bins,
             self.sv_bins,
+            self.distance_bins,
+            self.angle_bins,
         ]
 
     # ---------------- Quantization helpers ----------------
@@ -176,7 +190,24 @@ class HitObjectTokenizer:
             return 0
         return delta_id - 1
 
-    def encode_circle(self, x: float, y: float, tick_index: int) -> List[int]:
+    def _encode_distance_value(self, distance: float) -> int:
+        if distance is None:
+            return 0
+        clamped = max(0.0, min(float(distance), self.max_distance))
+        bin_idx = int(round(clamped / max(self.distance_bin_size, 1e-6)))
+        bin_idx = max(0, min(bin_idx, self.distance_bins - 2))
+        return bin_idx + 1
+
+    def _encode_angle_value(self, angle_rad: float) -> int:
+        if angle_rad is None:
+            return 0
+        two_pi = 2 * math.pi
+        angle = float(angle_rad) % two_pi
+        bin_idx = int(round(angle / two_pi * (self.angle_bins - 2)))
+        bin_idx = max(0, min(bin_idx, self.angle_bins - 2))
+        return bin_idx + 1
+
+    def encode_circle(self, x: float, y: float, tick_index: int, distance: float = 0.0, angle: float = 0.0) -> List[int]:
         sx, sy = self._encode_coord_pair(x, y)
         spec = TokenSpec(
             type_id=TokenType.CIRCLE,
@@ -193,10 +224,20 @@ class HitObjectTokenizer:
             slides=0,
             curve_type=0,
             slider_sv=0,
+            distance=self._encode_distance_value(distance),
+            angle=self._encode_angle_value(angle),
         )
         return spec.to_list()
 
-    def encode_slider(self, slider: Slider, tick_duration_ms: float, sv_multiplier: float, tick_index: int) -> List[int]:
+    def encode_slider(
+        self,
+        slider: Slider,
+        tick_duration_ms: float,
+        sv_multiplier: float,
+        tick_index: int,
+        distance: float = 0.0,
+        angle: float = 0.0,
+    ) -> List[int]:
         start_x, start_y = self._encode_coord_pair(slider.x, slider.y)
         end_x_val, end_y_val = self._slider_end_point(slider)
         end_x, end_y = self._encode_coord_pair(end_x_val, end_y_val)
@@ -229,6 +270,8 @@ class HitObjectTokenizer:
             slides=slides,
             curve_type=self._slider_curve_type_id(slider),
             slider_sv=sv_id,
+            distance=self._encode_distance_value(distance),
+            angle=self._encode_angle_value(angle),
         )
         return spec.to_list()
 
@@ -265,6 +308,13 @@ class HitObjectTokenizer:
             result["curve_type"] = self._curve_type_from_id(token[TokenAttr.CURVE_TYPE])
             result["sv_factor"] = self.sv_from_id(token[TokenAttr.SLIDER_SV])
 
+        distance_id = token[TokenAttr.DISTANCE]
+        angle_id = token[TokenAttr.ANGLE]
+        result["distance_id"] = distance_id
+        result["distance"] = self.distance_from_id(distance_id)
+        result["angle_id"] = angle_id
+        result["angle"] = self.angle_from_id(angle_id)
+
         return result
 
     def _curve_type_from_id(self, idx: int) -> str:
@@ -286,3 +336,14 @@ class HitObjectTokenizer:
         if sv_id <= 0:
             return None
         return min(self.max_sv, sv_id / self.sv_precision)
+
+    def distance_from_id(self, distance_id: int) -> float:
+        if distance_id <= 0:
+            return 0.0
+        return min(self.max_distance, (distance_id - 1) * self.distance_bin_size)
+
+    def angle_from_id(self, angle_id: int) -> float:
+        if angle_id <= 0:
+            return 0.0
+        fraction = (angle_id - 1) / max(1, self.angle_bins - 1)
+        return fraction * 2 * math.pi

@@ -5,7 +5,7 @@ import math
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Sequence, Tuple, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -95,6 +95,19 @@ def encode_tokens(
     max_tick = tokenizer.max_delta_ticks
     required_tick = 0
     prev_tick = 0
+    prev_point: Optional[Tuple[float, float]] = None
+
+    def slider_end_point(slider: Slider) -> Tuple[float, float]:
+        end_point = (float(slider.x), float(slider.y))
+        if slider.object_params and slider.object_params.curves:
+            curve_points: List[Tuple[float, float]] = []
+            for curve in slider.object_params.curves:
+                curve_points.extend([(float(px), float(py)) for px, py in curve.curve_points])
+            if curve_points:
+                end_point = curve_points[-1]
+        if slider.object_params and slider.object_params.slides % 2 == 0:
+            end_point = (float(slider.x), float(slider.y))
+        return float(end_point[0]), float(end_point[1])
 
     for ho in hit_objects:
         event_time = float(getattr(ho, "time", 0.0))
@@ -109,8 +122,23 @@ def encode_tokens(
             continue
         delta_ticks = max(0, min(event_tick - prev_tick, tokenizer.max_delta_ticks))
 
+        start_point = (float(getattr(ho, "x", 0.0)), float(getattr(ho, "y", 0.0)))
+        if isinstance(ho, Slider):
+            end_point = slider_end_point(ho)
+        else:
+            end_point = start_point
+
+        if prev_point is None:
+            dist = 0.0
+            angle = 0.0
+        else:
+            dx = start_point[0] - prev_point[0]
+            dy = start_point[1] - prev_point[1]
+            dist = math.hypot(dx, dy)
+            angle = math.atan2(dy, dx)
+
         if isinstance(ho, Circle):
-            token = tokenizer.encode_circle(float(ho.x), float(ho.y), delta_ticks)
+            token = tokenizer.encode_circle(float(ho.x), float(ho.y), delta_ticks, dist, angle)
             end_tick = event_tick
         elif isinstance(ho, Slider):
             duration_ms = float(getattr(getattr(ho, "object_params", None), "duration", 0.0) or 0.0)
@@ -119,12 +147,13 @@ def encode_tokens(
             if end_tick > max_tick:
                 break
             sv = effective_slider_sv(beatmap, event_time)
-            token = tokenizer.encode_slider(ho, tick_duration_ms, sv, delta_ticks)
+            token = tokenizer.encode_slider(ho, tick_duration_ms, sv, delta_ticks, dist, angle)
         else:
             continue
 
         tokens.append(token)
         prev_tick = event_tick
+        prev_point = end_point
         required_tick = min(max_tick, end_tick + 1)
 
     tokens.append(tokenizer.eos_token())

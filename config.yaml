@@ -13,6 +13,9 @@ data:
   use_bpm_feature: true
   bpm_normalization: 300.0
   max_delta_ticks: null
+  distance_bin_size: 8.0
+  max_distance: null
+  angle_bins: 72
   prep_num_workers: 4
   max_frames_per_sample: 4096
   normalize_audio: true
@@ -80,6 +83,7 @@ training:
   weight_decay: 0.0001
   grad_clip: 1.0
   use_amp: true
+  spatial_loss_weight: 0.1
 
 paths:
   data: "dataset"
