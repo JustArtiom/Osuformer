@@ -232,7 +232,6 @@ def tokens_to_hitobjects(
     blocked_until = float("-inf")
     cutoff_start = chunk.start_ms + max(0, chunk.ticks_per_sample - 1) * chunk.tick_duration_ms
     cutoff_end = chunk.start_ms + chunk.ticks_per_sample * chunk.tick_duration_ms
-    current_tick = 0
 
     rounding_mode = getattr(chunk, "time_rounding_mode", "round") or "round"
     rounding_threshold = getattr(chunk, "time_rounding_threshold", 0.5)
@@ -252,13 +251,12 @@ def tokens_to_hitobjects(
         start_y = _clamp_coord(decoded.get("start_y"), height)
         if start_x is None or start_y is None:
             continue
-        delta_ticks = decoded.get("tick_index", decoded.get("delta_ticks"))
-        if delta_ticks is None:
+        tick_idx = decoded.get("tick_index")
+        if tick_idx is None:
             continue
-        current_tick += max(0, int(delta_ticks))
-        if current_tick >= chunk.ticks_per_sample:
+        if tick_idx >= chunk.ticks_per_sample:
             break
-        event_time = chunk.start_ms + current_tick * chunk.tick_duration_ms
+        event_time = chunk.start_ms + tick_idx * chunk.tick_duration_ms
         if event_time >= cutoff_start:
             break
         time_ms = _quantize_time(event_time, rounding_mode, rounding_threshold)

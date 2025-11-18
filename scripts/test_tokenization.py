@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 import sys
 import math
-from typing import List, Sequence, Optional
+from typing import List, Sequence, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -73,8 +73,8 @@ def encode_chunk_tokens(
     chunk_cutoff_tick = max(0, ticks_per_sample - 1)
     chunk_end_tick = ticks_per_sample
     required_tick = 0
-    prev_tick = 0
-    prev_point: Optional[Tuple[float, float]] = None
+    prev_finish_tick = 0
+    prev_point: Optional[tuple[float, float]] = None
 
     def slider_end_point(slider: Slider) -> Tuple[float, float]:
         end_point = (float(slider.x), float(slider.y))
@@ -93,7 +93,7 @@ def encode_chunk_tokens(
         event_tick = int(round((event_time - chunk_start_ms) / tick_ms))
         if event_tick < 0:
             event_tick = 0
-        event_tick = min(event_tick, tokenizer.max_delta_ticks)
+        event_tick = min(event_tick, chunk_end_tick - 1)
         if event_tick < required_tick:
             event_tick = required_tick
         if event_tick >= chunk_cutoff_tick:
@@ -101,7 +101,7 @@ def encode_chunk_tokens(
         snapped_time = chunk_start_ms + event_tick * tick_ms
         if abs(event_time - snapped_time) > tick_tolerance_ms:
             continue
-        delta_ticks = max(0, min(event_tick - prev_tick, tokenizer.max_delta_ticks))
+        delta_ticks = max(0, min(event_tick - prev_finish_tick, tokenizer.max_delta_ticks))
         start_point = (float(getattr(ho, "x", 0.0)), float(getattr(ho, "y", 0.0)))
         if isinstance(ho, Slider):
             end_point = slider_end_point(ho)
@@ -118,7 +118,7 @@ def encode_chunk_tokens(
             angle = math.atan2(dy, dx)
 
         if isinstance(ho, Circle):
-            token = tokenizer.encode_circle(float(ho.x), float(ho.y), delta_ticks, dist, angle)
+            token = tokenizer.encode_circle(float(ho.x), float(ho.y), event_tick, delta_ticks, dist, angle)
             end_tick = event_tick
         elif isinstance(ho, Slider):
             duration_ms = float(getattr(getattr(ho, "object_params", None), "duration", 0.0) or 0.0)
@@ -127,12 +127,12 @@ def encode_chunk_tokens(
             if end_tick > chunk_end_tick:
                 break
             sv = effective_slider_sv(beatmap, event_time)
-            token = tokenizer.encode_slider(ho, tick_duration_ms, sv, delta_ticks, dist, angle)
+            token = tokenizer.encode_slider(ho, tick_duration_ms, sv, event_tick, delta_ticks, dist, angle)
         else:
             continue
 
         tokens.append(token)
-        prev_tick = event_tick
+        prev_finish_tick = end_tick
         prev_point = end_point
         required_tick = min(chunk_end_tick, end_tick + 1)
 
@@ -151,19 +151,24 @@ def decode_token(tokenizer: HitObjectTokenizer, token: Sequence[int]) -> dict:
     return decoded
 
 
-def summarize_token(token: Sequence[int]) -> str:
+def summarize_token(tokenizer: HitObjectTokenizer, token: Sequence[int]) -> str:
     ttype = token[TokenAttr.TYPE]
     if ttype == TokenType.EOS:
         return "EOS"
     if ttype == TokenType.CIRCLE:
+        tick = tokenizer.tick_from_id(token[TokenAttr.TICK])
+        delta = tokenizer.delta_from_id(token[TokenAttr.DELTA])
         return (
-            f"CIRCLE T={token[TokenAttr.DELTA]} D={token[TokenAttr.DISTANCE]} A={token[TokenAttr.ANGLE]} "
+            f"CIRCLE tick={tick} Δ={delta} "
+            f"D={token[TokenAttr.DISTANCE]} A={token[TokenAttr.ANGLE]} "
             f"start=({token[TokenAttr.START_X]},{token[TokenAttr.START_Y]})"
         )
     if ttype == TokenType.SLIDER:
+        tick = tokenizer.tick_from_id(token[TokenAttr.TICK])
+        delta = tokenizer.delta_from_id(token[TokenAttr.DELTA])
         return (
             "SLIDER "
-            f"T={token[TokenAttr.DELTA]} "
+            f"tick={tick} Δ={delta} "
             f"D={token[TokenAttr.DISTANCE]} "
             f"A={token[TokenAttr.ANGLE]} "
             f"start=({token[TokenAttr.START_X]},{token[TokenAttr.START_Y]}) "
@@ -210,10 +215,10 @@ def main() -> None:
 
     current_tick = 0
     for idx, (raw, dec) in enumerate(zip(tokens, decoded)):
-        tick_idx = dec.get("tick_index", dec.get("delta_ticks", 0))
-        current_tick += max(0, int(tick_idx or 0))
+        tick_idx = int(dec.get("tick_index", 0))
+        current_tick = tick_idx
         current_time = start + current_tick * tick_duration_ms
-        summary = summarize_token(raw)
+        summary = summarize_token(tokenizer, raw)
         print(f"[IDX {idx:03d} | t={current_time:.2f} ms] {summary} -> {dec}")
         if dec["type"] == TokenType.EOS and not args.print_empty:
             break

@@ -111,6 +111,8 @@ def run_epoch(
                 target = tokens[..., attr_idx]
                 if attr_idx == TokenAttr.TYPE:
                     attr_mask = valid_mask
+                elif attr_idx == TokenAttr.TICK:
+                    attr_mask = valid_mask
                 elif attr_idx == TokenAttr.DELTA:
                     attr_mask = valid_mask & (type_targets != TokenType.EOS)
                 elif attr_idx in (TokenAttr.START_X, TokenAttr.START_Y):
