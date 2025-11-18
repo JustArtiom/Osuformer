@@ -3,7 +3,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
-from typing import List, Sequence
+import math
+from typing import List, Sequence, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -73,6 +74,19 @@ def encode_chunk_tokens(
     chunk_end_tick = ticks_per_sample
     required_tick = 0
     prev_tick = 0
+    prev_point: Optional[Tuple[float, float]] = None
+
+    def slider_end_point(slider: Slider) -> Tuple[float, float]:
+        end_point = (float(slider.x), float(slider.y))
+        if slider.object_params and slider.object_params.curves:
+            curve_points: List[Tuple[float, float]] = []
+            for curve in slider.object_params.curves:
+                curve_points.extend([(float(px), float(py)) for px, py in curve.curve_points])
+            if curve_points:
+                end_point = curve_points[-1]
+        if slider.object_params and slider.object_params.slides % 2 == 0:
+            end_point = (float(slider.x), float(slider.y))
+        return float(end_point[0]), float(end_point[1])
 
     for ho in events:
         event_time = float(getattr(ho, "time", 0.0))
@@ -88,9 +102,23 @@ def encode_chunk_tokens(
         if abs(event_time - snapped_time) > tick_tolerance_ms:
             continue
         delta_ticks = max(0, min(event_tick - prev_tick, tokenizer.max_delta_ticks))
+        start_point = (float(getattr(ho, "x", 0.0)), float(getattr(ho, "y", 0.0)))
+        if isinstance(ho, Slider):
+            end_point = slider_end_point(ho)
+        else:
+            end_point = start_point
+
+        if prev_point is None:
+            dist = 0.0
+            angle = 0.0
+        else:
+            dx = start_point[0] - prev_point[0]
+            dy = start_point[1] - prev_point[1]
+            dist = math.hypot(dx, dy)
+            angle = math.atan2(dy, dx)
 
         if isinstance(ho, Circle):
-            token = tokenizer.encode_circle(float(ho.x), float(ho.y), delta_ticks)
+            token = tokenizer.encode_circle(float(ho.x), float(ho.y), delta_ticks, dist, angle)
             end_tick = event_tick
         elif isinstance(ho, Slider):
             duration_ms = float(getattr(getattr(ho, "object_params", None), "duration", 0.0) or 0.0)
@@ -99,12 +127,13 @@ def encode_chunk_tokens(
             if end_tick > chunk_end_tick:
                 break
             sv = effective_slider_sv(beatmap, event_time)
-            token = tokenizer.encode_slider(ho, tick_duration_ms, sv, delta_ticks)
+            token = tokenizer.encode_slider(ho, tick_duration_ms, sv, delta_ticks, dist, angle)
         else:
             continue
 
         tokens.append(token)
         prev_tick = event_tick
+        prev_point = end_point
         required_tick = min(chunk_end_tick, end_tick + 1)
 
     tokens.append(tokenizer.eos_token())
@@ -127,11 +156,16 @@ def summarize_token(token: Sequence[int]) -> str:
     if ttype == TokenType.EOS:
         return "EOS"
     if ttype == TokenType.CIRCLE:
-        return f"CIRCLE T={token[TokenAttr.DELTA]} start=({token[TokenAttr.START_X]},{token[TokenAttr.START_Y]})"
+        return (
+            f"CIRCLE T={token[TokenAttr.DELTA]} D={token[TokenAttr.DISTANCE]} A={token[TokenAttr.ANGLE]} "
+            f"start=({token[TokenAttr.START_X]},{token[TokenAttr.START_Y]})"
+        )
     if ttype == TokenType.SLIDER:
         return (
             "SLIDER "
             f"T={token[TokenAttr.DELTA]} "
+            f"D={token[TokenAttr.DISTANCE]} "
+            f"A={token[TokenAttr.ANGLE]} "
             f"start=({token[TokenAttr.START_X]},{token[TokenAttr.START_Y]}) "
             f"end=({token[TokenAttr.END_X]},{token[TokenAttr.END_Y]}) "
             f"dur={token[TokenAttr.DURATION]} slides={token[TokenAttr.SLIDES]} "

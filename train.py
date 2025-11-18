@@ -19,13 +19,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from contextlib import nullcontext
 
 from src.data import OsuBeatmapDataset, osu_collate, split_train_val_files
 from src.data.tokenizer import TokenAttr, TokenType
 from src.models import ConformerSeq2Seq
 from src.training import TrainingSession
 from src.utils.config import load_config
-from torch.cuda.amp import autocast
 
 
 def parse_args() -> argparse.Namespace:
@@ -63,8 +63,9 @@ def run_epoch(
     optimizer: Optional[torch.optim.Optimizer] = None,
     *,
     amp_enabled: bool = False,
-    scaler: Optional[torch.cuda.amp.GradScaler] = None,
+    scaler: Optional[torch.amp.GradScaler] = None,
     class_weights: Optional[Dict[str, float]] = None,
+    spatial_loss_weight: float = 0.0,
 ) -> Dict[str, float]:
     is_train = optimizer is not None
     model.train(is_train)
@@ -86,9 +87,17 @@ def run_epoch(
         tokens = batch["tokens"].to(device)
         audio_mask = batch["audio_mask"].to(device)
         token_mask = batch["token_mask"].to(device)
+        spatial_targets = batch.get("spatial_targets")
+        if spatial_targets is not None:
+            spatial_targets = spatial_targets.to(device)
 
-        with autocast(enabled=amp_enabled):
-            attr_logits = model(audio, audio_mask, tokens, token_mask)
+        if amp_enabled:
+            autocast_ctx = torch.amp.autocast("cuda")
+        else:
+            autocast_ctx = nullcontext()
+
+        with autocast_ctx:
+            attr_logits, spatial_pred = model(audio, audio_mask, tokens, token_mask)
             valid_mask = ~token_mask
             type_targets = tokens[..., TokenAttr.TYPE]
 
@@ -158,6 +167,16 @@ def run_epoch(
                 loss = torch.tensor(0.0, device=device, requires_grad=True)
             else:
                 loss = torch.stack(attr_losses).mean()
+
+            spatial_loss = torch.tensor(0.0, device=device)
+            spatial_weight = spatial_loss_weight
+            if spatial_weight > 0 and spatial_pred is not None and spatial_targets is not None:
+                spatial_mask = valid_mask & (type_targets != TokenType.EOS)
+                mask = spatial_mask.unsqueeze(-1).float()
+                diff = spatial_pred - spatial_targets
+                denom = mask.sum().clamp_min(1.0)
+                spatial_loss = (diff.pow(2) * mask).sum() / denom
+                loss = loss + spatial_weight * spatial_loss
 
         if is_train:
             optimizer.zero_grad()
@@ -235,6 +254,7 @@ def main() -> None:
     args = parse_args()
     config = load_config(args.config)
     training_cfg = config["training"]
+    checkpoint_root = Path(training_cfg["path"]).expanduser().resolve()
 
     resume_checkpoint_path = Path(args.checkpoint).expanduser().resolve() if args.checkpoint else None
     resume_dir = resume_checkpoint_path.parent if resume_checkpoint_path else None
@@ -319,6 +339,8 @@ def main() -> None:
             optimizer=optimizer,
             amp_enabled=use_amp,
             scaler=scaler,
+            class_weights=config["data"].get("class_weights"),
+            spatial_loss_weight=training_cfg.get("spatial_loss_weight", 0.0),
         )
         val_metrics = run_epoch(
             model,
@@ -328,6 +350,8 @@ def main() -> None:
             optimizer=None,
             amp_enabled=use_amp,
             scaler=None,
+            class_weights=config["data"].get("class_weights"),
+            spatial_loss_weight=training_cfg.get("spatial_loss_weight", 0.0),
         )
 
         train_history.append(train_metrics)
@@ -343,6 +367,7 @@ def main() -> None:
             )
 
         checkpoint_metrics = val_metrics.copy()
+        session.ensure_created()
 
         latest_path = Path(session.path) / "latest.pt"
         save_checkpoint(

@@ -182,6 +182,8 @@ class HitObjectDecoder(nn.Module):
         self.positional_encoding = PositionalEncoding(d_model, dropout)
         self.bos = nn.Parameter(torch.zeros(d_model))
         self.attr_heads = nn.ModuleList([nn.Linear(d_model, size) for size in self.attr_sizes])
+        self.distance_head = nn.Linear(d_model, 1)
+        self.angle_head = nn.Linear(d_model, 2)
 
     def _causal_mask(self, size: int, device: torch.device) -> torch.Tensor:
         mask = torch.triu(torch.ones(size, size, device=device), diagonal=1).bool()
@@ -226,7 +228,10 @@ class HitObjectDecoder(nn.Module):
                 temp = max(temperature, 1e-4)
                 logits = logits / temp
             logits_list.append(logits)
-        return logits_list
+        distance_pred = torch.sigmoid(self.distance_head(decoded))
+        angle_pred = torch.tanh(self.angle_head(decoded))
+        spatial_pred = torch.cat([distance_pred, angle_pred], dim=-1)
+        return logits_list, spatial_pred
 
 
 class ConformerSeq2Seq(nn.Module):
@@ -273,8 +278,8 @@ class ConformerSeq2Seq(nn.Module):
         memory = self.encoder(audio, audio_mask)
         if targets is None:
             raise ValueError("Targets are required for training forward pass")
-        attr_logits = self.decoder(memory, audio_mask, targets, target_mask, temperature=temperature)
-        return attr_logits
+        attr_logits, spatial_pred = self.decoder(memory, audio_mask, targets, target_mask, temperature=temperature)
+        return attr_logits, spatial_pred
 
     @torch.no_grad()
     def generate(
@@ -295,7 +300,7 @@ class ConformerSeq2Seq(nn.Module):
         finished = torch.zeros(batch_size, dtype=torch.bool, device=audio.device)
 
         for _ in range(max_steps):
-            logits_list = self.decoder(memory, audio_mask, generated, None, temperature=temperature)
+            logits_list, _ = self.decoder(memory, audio_mask, generated, None, temperature=temperature)
             type_logits = logits_list[TokenAttr.TYPE][:, -1, :]
             type_probs = F.softmax(type_logits, dim=-1)
             type_sample = torch.multinomial(type_probs, num_samples=1).squeeze(-1)
