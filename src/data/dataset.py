@@ -115,6 +115,7 @@ class OsuBeatmapDataset(Dataset):
         self.tick_tolerance_ms = float(self.data_cfg.get("tick_tolerance_ms", 3.0))
         self.use_bpm_feature = bool(self.data_cfg.get("use_bpm_feature", False))
         self.bpm_normalization = float(self.data_cfg.get("bpm_normalization", 300.0) or 1.0)
+        self.use_rms_feature = bool(self.data_cfg.get("use_rms_feature", False))
         self.max_distance_value = float(
             self.data_cfg.get("max_distance") or math.hypot(self.data_cfg["osu_width"], self.data_cfg["osu_height"])
         )
@@ -655,6 +656,7 @@ class OsuBeatmapDataset(Dataset):
             "attr_sizes": self.attr_sizes,
             "use_bpm_feature": self.use_bpm_feature,
             "bpm_normalization": self.bpm_normalization,
+            "use_rms_feature": self.use_rms_feature,
             "distance_bin_size": self.data_cfg.get("distance_bin_size"),
             "max_distance": self.data_cfg.get("max_distance"),
             "angle_bins": self.data_cfg.get("angle_bins"),
@@ -871,6 +873,18 @@ class OsuBeatmapDataset(Dataset):
             pad_value = float(spec.S_db.min())
             mel_slice = np.pad(mel_slice, ((0, 0), (0, pad_width)), constant_values=pad_value)
 
+        rms_tensor = None
+        if self.use_rms_feature:
+            rms_np = np.sqrt(np.mean(np.square(mel_slice), axis=0)).astype(np.float32)
+            rms_np = np.log1p(rms_np)
+            mean_rms = rms_np.mean()
+            std_rms = rms_np.std()
+            if std_rms > 1e-6:
+                rms_np = (rms_np - mean_rms) / std_rms
+            else:
+                rms_np = rms_np - mean_rms
+            rms_tensor = torch.from_numpy(rms_np).unsqueeze(1)
+
         mel = torch.from_numpy(mel_slice.T).float()
         audio_length = valid_frames
 
@@ -885,9 +899,14 @@ class OsuBeatmapDataset(Dataset):
             else np.zeros((self.seq_len, 3), dtype=np.float32)
         )
 
+        feature_cols: List[torch.Tensor] = []
         if self.use_bpm_feature:
             bpm_column = torch.full((mel.shape[0], 1), float(descriptor.bpm_feature), dtype=mel.dtype)
-            mel = torch.cat([mel, bpm_column], dim=1)
+            feature_cols.append(bpm_column)
+        if self.use_rms_feature and rms_tensor is not None:
+            feature_cols.append(rms_tensor.to(mel.dtype))
+        if feature_cols:
+            mel = torch.cat([mel] + feature_cols, dim=1)
 
         return {
             "audio": mel,

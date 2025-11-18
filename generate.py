@@ -90,6 +90,7 @@ def build_chunks(spec: MelSpec, data_cfg: dict, bpm: float, offset_ms: float) ->
     sample_hop_beats = data_cfg.get("sample_hop_beats", max(1, beats_per_sample // 2))
     ticks_per_sample = beats_per_sample * ticks_per_beat
     normalize_audio = data_cfg.get("normalize_audio", True)
+    use_rms_feature = bool(data_cfg.get("use_rms_feature", False))
     use_bpm_feature = bool(data_cfg.get("use_bpm_feature", False))
     bpm_norm = float(data_cfg.get("bpm_normalization", 300.0) or 1.0)
     bpm_feature_value = float(bpm) / bpm_norm if use_bpm_feature else 0.0
@@ -142,10 +143,23 @@ def build_chunks(spec: MelSpec, data_cfg: dict, bpm: float, offset_ms: float) ->
         if valid_frames < frames_per_chunk:
             pad = frames_per_chunk - valid_frames
             mel_slice = np.pad(mel_slice, ((0, 0), (0, pad)), constant_values=pad_value)
+        rms_tensor = None
+        if use_rms_feature:
+            rms_np = np.sqrt(np.mean(np.square(mel_slice), axis=0)).astype(np.float32)
+            rms_np = np.log1p(rms_np)
+            mean_rms = rms_np.mean()
+            std_rms = rms_np.std()
+            if std_rms > 1e-6:
+                rms_np = (rms_np - mean_rms) / std_rms
+            else:
+                rms_np = rms_np - mean_rms
+            rms_tensor = torch.from_numpy(rms_np).view(1, -1, 1).float()
 
         audio = torch.from_numpy(mel_slice.T).unsqueeze(0).float()
         if normalize_audio:
             audio = (audio - mean) / std
+        if use_rms_feature and rms_tensor is not None:
+            audio = torch.cat([audio, rms_tensor], dim=2)
         if use_bpm_feature:
             bpm_column = torch.full((1, audio.shape[1], 1), bpm_feature_value, dtype=audio.dtype)
             audio = torch.cat([audio, bpm_column], dim=2)
@@ -488,7 +502,9 @@ def main() -> None:
         print("[WARN] Checkpoint missing tokenizer metadata; falling back to config.yaml settings.")
     data_cfg_override = tokenizer_meta.get("data_cfg")
     if data_cfg_override:
-        config["data"] = data_cfg_override
+        merged_cfg = config["data"].copy()
+        merged_cfg.update(data_cfg_override)
+        config["data"] = merged_cfg
     data_cfg = config["data"]
     tokenizer = HitObjectTokenizer(data_cfg)
     suppress_overlaps = bool(data_cfg.get("suppress_overlap", True))
@@ -538,11 +554,23 @@ def main() -> None:
     beat_length = 60000.0 / max(bpm, 1e-3)
 
     timing_lines = build_timing_points(offset, beat_length, discrete_events)
-    bookmark_times = sorted({int(event["time"]) for event in discrete_events})
-    max_bookmarks = int(data_cfg.get("max_editor_bookmarks", 256) or 0)
-    if max_bookmarks > 0 and len(bookmark_times) > max_bookmarks:
-        step = max(1, len(bookmark_times) // max_bookmarks)
-        bookmark_times = bookmark_times[::step]
+    bookmark_mode = (data_cfg.get("bookmark_mode") or "events").lower()
+    if bookmark_mode == "chunk":
+        bookmark_times = sorted({int(round(chunk.start_ms)) for chunk in chunks})
+        max_bookmarks = int(data_cfg.get("max_editor_bookmarks", 256) or 0)
+        if max_bookmarks > 0 and len(bookmark_times) > max_bookmarks:
+            step = max(1, len(bookmark_times) // max_bookmarks)
+            bookmark_times = bookmark_times[::step]
+    elif bookmark_mode == "none":
+        bookmark_times = []
+    else:
+        bookmark_times = sorted({int(event["time"]) for event in discrete_events})
+        if not bookmark_times and chunks:
+            bookmark_times = sorted({int(round(chunk.start_ms)) for chunk in chunks})
+        max_bookmarks = int(data_cfg.get("max_editor_bookmarks", 256) or 0)
+        if max_bookmarks > 0 and len(bookmark_times) > max_bookmarks:
+            step = max(1, len(bookmark_times) // max_bookmarks)
+            bookmark_times = bookmark_times[::step]
 
     if template_path and template_path.exists():
         output_text = template_path.read_text(encoding="utf-8")

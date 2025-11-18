@@ -12,6 +12,7 @@ data:
   position_bin_size: 8
   use_bpm_feature: true
   bpm_normalization: 300.0
+  use_rms_feature: true
   max_delta_ticks: null
   distance_bin_size: 8.0
   max_distance: null
@@ -30,6 +31,7 @@ data:
   max_slider_control_points: 2
   slider_curve_types: ["L", "B", "P", "C"]
   max_editor_bookmarks: 256
+  bookmark_mode: "chunk"  # chunk|events|none
   time_rounding_mode: "round"  # round|floor|ceil|custom
   time_rounding_threshold: 0.55  # used when mode=custom
   slider_length_rounding_mode: "exact"  # exact|round|floor|ceil|custom
