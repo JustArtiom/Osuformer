@@ -25,7 +25,7 @@ from src.data.tokenizer import TokenAttr, TokenType
 from src.models import ConformerSeq2Seq
 from src.training import TrainingSession
 from src.utils.config import load_config
-from torch.cuda.amp import GradScaler, autocast
+from torch.cuda.amp import autocast
 
 
 def parse_args() -> argparse.Namespace:
@@ -63,7 +63,7 @@ def run_epoch(
     optimizer: Optional[torch.optim.Optimizer] = None,
     *,
     amp_enabled: bool = False,
-    scaler: Optional[GradScaler] = None,
+    scaler: Optional[torch.cuda.amp.GradScaler] = None,
     class_weights: Optional[Dict[str, float]] = None,
 ) -> Dict[str, float]:
     is_train = optimizer is not None
@@ -279,7 +279,7 @@ def main() -> None:
         weight_decay=training_cfg.get("weight_decay", 1e-4),
     )
     use_amp = bool(training_cfg.get("use_amp", False)) and device.type == "cuda"
-    scaler = GradScaler(enabled=use_amp)
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp) if use_amp else None
 
     metrics_path = Path(session.path) / "metrics.json"
     train_history: List[Dict[str, float]] = []

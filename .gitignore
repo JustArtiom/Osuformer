@@ -10,3 +10,4 @@ checkpoints/
 /audio*.ogg.mel.png
 /audio*.generated.osu
 .env
+cache/

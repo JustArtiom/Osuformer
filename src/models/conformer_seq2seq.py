@@ -236,8 +236,10 @@ class ConformerSeq2Seq(nn.Module):
         decoder_cfg = config["model"]["decoder"]
         data_cfg = config["data"]
 
+        input_dim = data_cfg["n_mels"] + (1 if data_cfg.get("use_bpm_feature") else 0)
+
         self.encoder = ConformerEncoder(
-            input_dim=data_cfg["n_mels"],
+            input_dim=input_dim,
             d_model=encoder_cfg["d_model"],
             num_layers=encoder_cfg["num_layers"],
             num_heads=encoder_cfg["num_heads"],
@@ -294,7 +296,6 @@ class ConformerSeq2Seq(nn.Module):
 
         for _ in range(max_steps):
             logits_list = self.decoder(memory, audio_mask, generated, None, temperature=temperature)
-            next_attrs: List[torch.Tensor] = []
             type_logits = logits_list[TokenAttr.TYPE][:, -1, :]
             type_probs = F.softmax(type_logits, dim=-1)
             type_sample = torch.multinomial(type_probs, num_samples=1).squeeze(-1)
