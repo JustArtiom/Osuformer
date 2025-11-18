@@ -324,9 +324,12 @@ class ConformerSeq2Seq(nn.Module):
             circle_mask = token_type == TokenType.CIRCLE
             slider_mask = token_type == TokenType.SLIDER
 
+            assembled[:, TokenAttr.TICK] = torch.clamp(
+                assembled[:, TokenAttr.TICK], min=1, max=self.seq_len + 1
+            )
             assembled[:, TokenAttr.DELTA] = torch.clamp(assembled[:, TokenAttr.DELTA], min=1)
             if eos_mask.any():
-                assembled[eos_mask, TokenAttr.DELTA :] = 0
+                assembled[eos_mask, TokenAttr.TICK :] = 0
             if circle_mask.any():
                 assembled[circle_mask, TokenAttr.END_X :] = 0
             if slider_mask.any():

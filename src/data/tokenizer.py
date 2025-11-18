@@ -15,28 +15,30 @@ class TokenType:
 
 class TokenAttr:
     TYPE = 0
-    DELTA = 1
-    START_X = 2
-    START_Y = 3
-    END_X = 4
-    END_Y = 5
-    CTRL1_X = 6
-    CTRL1_Y = 7
-    CTRL2_X = 8
-    CTRL2_Y = 9
-    DURATION = 10
-    SLIDES = 11
-    CURVE_TYPE = 12
-    SLIDER_SV = 13
-    DISTANCE = 14
-    ANGLE = 15
+    TICK = 1
+    DELTA = 2
+    START_X = 3
+    START_Y = 4
+    END_X = 5
+    END_Y = 6
+    CTRL1_X = 7
+    CTRL1_Y = 8
+    CTRL2_X = 9
+    CTRL2_Y = 10
+    DURATION = 11
+    SLIDES = 12
+    CURVE_TYPE = 13
+    SLIDER_SV = 14
+    DISTANCE = 15
+    ANGLE = 16
 
-    COUNT = 16
+    COUNT = 17
 
 
 @dataclass
 class TokenSpec:
     type_id: int
+    tick: int
     delta: int
     start_x: int
     start_y: int
@@ -56,6 +58,7 @@ class TokenSpec:
     def to_list(self) -> List[int]:
         return [
             self.type_id,
+            self.tick,
             self.delta,
             self.start_x,
             self.start_y,
@@ -98,6 +101,7 @@ class HitObjectTokenizer:
         self.max_y_bin = int(math.ceil(self.osu_height / self.bin_size))
         self.x_bins = self.max_x_bin + 2  # include sentinel
         self.y_bins = self.max_y_bin + 2
+        self.tick_bins = self.seq_len + 2
         self.delta_bins = self.max_delta_ticks + 2  # sentinel + range
         self.distance_bins = int(self.max_distance / max(self.distance_bin_size, 1e-6)) + 2
         self.angle_bins = self.angle_bins_count + 1
@@ -110,6 +114,7 @@ class HitObjectTokenizer:
 
         self.attribute_sizes = [
             3,  # type (EOS, CIRCLE, SLIDER)
+            self.tick_bins,
             self.delta_bins,
             self.x_bins,
             self.y_bins,
@@ -182,13 +187,22 @@ class HitObjectTokenizer:
         return self.pad_token()
 
     def _encode_tick_index(self, tick_index: int) -> int:
-        clamped = max(0, min(int(round(tick_index)), self.max_delta_ticks))
+        clamped = max(0, min(int(round(tick_index)), self.seq_len))
         return clamped + 1
 
-    def tick_from_id(self, delta_id: int) -> int:
+    def tick_from_id(self, tick_id: int) -> int:
+        if tick_id <= 0:
+            return 0
+        return min(self.seq_len, tick_id - 1)
+
+    def _encode_delta_index(self, delta_ticks: int) -> int:
+        clamped = max(0, min(int(round(delta_ticks)), self.max_delta_ticks))
+        return clamped + 1
+
+    def delta_from_id(self, delta_id: int) -> int:
         if delta_id <= 0:
             return 0
-        return delta_id - 1
+        return min(self.max_delta_ticks, delta_id - 1)
 
     def _encode_distance_value(self, distance: float) -> int:
         if distance is None:
@@ -207,11 +221,20 @@ class HitObjectTokenizer:
         bin_idx = max(0, min(bin_idx, self.angle_bins - 2))
         return bin_idx + 1
 
-    def encode_circle(self, x: float, y: float, tick_index: int, distance: float = 0.0, angle: float = 0.0) -> List[int]:
+    def encode_circle(
+        self,
+        x: float,
+        y: float,
+        tick_index: int,
+        delta_ticks: int,
+        distance: float = 0.0,
+        angle: float = 0.0,
+    ) -> List[int]:
         sx, sy = self._encode_coord_pair(x, y)
         spec = TokenSpec(
             type_id=TokenType.CIRCLE,
-            delta=self._encode_tick_index(tick_index),
+            tick=self._encode_tick_index(tick_index),
+            delta=self._encode_delta_index(delta_ticks),
             start_x=sx,
             start_y=sy,
             end_x=0,
@@ -235,6 +258,7 @@ class HitObjectTokenizer:
         tick_duration_ms: float,
         sv_multiplier: float,
         tick_index: int,
+        delta_ticks: int,
         distance: float = 0.0,
         angle: float = 0.0,
     ) -> List[int]:
@@ -257,7 +281,8 @@ class HitObjectTokenizer:
 
         spec = TokenSpec(
             type_id=TokenType.SLIDER,
-            delta=self._encode_tick_index(tick_index),
+            tick=self._encode_tick_index(tick_index),
+            delta=self._encode_delta_index(delta_ticks),
             start_x=start_x,
             start_y=start_y,
             end_x=end_x,
@@ -287,10 +312,10 @@ class HitObjectTokenizer:
         token_type = token[TokenAttr.TYPE]
         result = {"type": token_type}
 
-        tick_index = self.tick_from_id(token[TokenAttr.DELTA])
+        tick_index = self.tick_from_id(token[TokenAttr.TICK])
         result["tick_index"] = tick_index
-        # Backwards compatibility for code paths still expecting delta_ticks terminology.
-        result["delta_ticks"] = tick_index
+        delta_ticks = self.delta_from_id(token[TokenAttr.DELTA])
+        result["delta_ticks"] = delta_ticks
         if token_type == TokenType.EOS:
             return result
         result["start_x"] = self.coord_from_id(token[TokenAttr.START_X])

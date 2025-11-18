@@ -775,6 +775,7 @@ class OsuBeatmapDataset(Dataset):
         chunk_end_tick = ticks_per_sample
         required_tick = 0
         prev_tick = 0
+        prev_finish_tick = 0
         prev_point: Optional[Tuple[float, float]] = None
         spatial_values: List[Tuple[float, float, float]] = []
 
@@ -784,7 +785,7 @@ class OsuBeatmapDataset(Dataset):
             event_tick = int(round(rel_ms / tick_ms))
             if event_tick < 0:
                 event_tick = 0
-            event_tick = min(event_tick, self.tokenizer.max_delta_ticks)
+            event_tick = min(event_tick, chunk_end_tick - 1)
             if event_tick < required_tick:
                 event_tick = required_tick
             if event_tick >= chunk_cutoff_tick:
@@ -792,7 +793,7 @@ class OsuBeatmapDataset(Dataset):
             snapped_time = chunk_start_ms + event_tick * tick_ms
             if abs(event_time - snapped_time) > self.tick_tolerance_ms:
                 continue
-            delta_ticks = max(0, min(event_tick - prev_tick, self.tokenizer.max_delta_ticks))
+            delta_ticks = max(0, min(event_tick - prev_finish_tick, self.tokenizer.max_delta_ticks))
 
             start_point = (float(getattr(ho, "x", 0.0)), float(getattr(ho, "y", 0.0)))
             if isinstance(ho, Circle):
@@ -814,7 +815,14 @@ class OsuBeatmapDataset(Dataset):
             spatial_values.append((dist_norm, math.cos(angle), math.sin(angle)))
 
             if isinstance(ho, Circle):
-                token = self.tokenizer.encode_circle(float(ho.x), float(ho.y), delta_ticks, dist, angle)
+                token = self.tokenizer.encode_circle(
+                    float(ho.x),
+                    float(ho.y),
+                    event_tick,
+                    delta_ticks,
+                    dist,
+                    angle,
+                )
                 end_tick = event_tick
             elif isinstance(ho, Slider):
                 duration_ms = float(getattr(getattr(ho, "object_params", None), "duration", 0.0) or 0.0)
@@ -823,12 +831,21 @@ class OsuBeatmapDataset(Dataset):
                 if end_tick > chunk_end_tick:
                     break
                 sv = self._effective_slider_sv(beatmap, event_time)
-                token = self.tokenizer.encode_slider(ho, tick_duration_ms, sv, delta_ticks, dist, angle)
+                token = self.tokenizer.encode_slider(
+                    ho,
+                    tick_duration_ms,
+                    sv,
+                    event_tick,
+                    delta_ticks,
+                    dist,
+                    angle,
+                )
             else:
                 continue
 
             tokens.append(token)
             prev_tick = event_tick
+            prev_finish_tick = end_tick
             required_tick = min(chunk_end_tick, end_tick + 1)
             prev_point = end_point
 

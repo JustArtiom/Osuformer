@@ -92,9 +92,9 @@ def encode_tokens(
 
     tokens: List[List[int]] = []
     tick_ms = max(1e-6, tick_duration_ms)
-    max_tick = tokenizer.max_delta_ticks
+    max_tick = tokenizer.seq_len
     required_tick = 0
-    prev_tick = 0
+    prev_finish_tick = 0
     prev_point: Optional[Tuple[float, float]] = None
 
     def slider_end_point(slider: Slider) -> Tuple[float, float]:
@@ -114,13 +114,13 @@ def encode_tokens(
         event_tick = int(round((event_time - base_time) / tick_ms))
         if event_tick < 0:
             event_tick = 0
-        event_tick = min(event_tick, max_tick)
+        event_tick = min(event_tick, max_tick - 1)
         if event_tick < required_tick:
             event_tick = required_tick
         snapped_time = base_time + event_tick * tick_ms
         if abs(event_time - snapped_time) > tick_tolerance_ms:
             continue
-        delta_ticks = max(0, min(event_tick - prev_tick, tokenizer.max_delta_ticks))
+        delta_ticks = max(0, min(event_tick - prev_finish_tick, tokenizer.max_delta_ticks))
 
         start_point = (float(getattr(ho, "x", 0.0)), float(getattr(ho, "y", 0.0)))
         if isinstance(ho, Slider):
@@ -138,7 +138,7 @@ def encode_tokens(
             angle = math.atan2(dy, dx)
 
         if isinstance(ho, Circle):
-            token = tokenizer.encode_circle(float(ho.x), float(ho.y), delta_ticks, dist, angle)
+            token = tokenizer.encode_circle(float(ho.x), float(ho.y), event_tick, delta_ticks, dist, angle)
             end_tick = event_tick
         elif isinstance(ho, Slider):
             duration_ms = float(getattr(getattr(ho, "object_params", None), "duration", 0.0) or 0.0)
@@ -147,12 +147,12 @@ def encode_tokens(
             if end_tick > max_tick:
                 break
             sv = effective_slider_sv(beatmap, event_time)
-            token = tokenizer.encode_slider(ho, tick_duration_ms, sv, delta_ticks, dist, angle)
+            token = tokenizer.encode_slider(ho, tick_duration_ms, sv, event_tick, delta_ticks, dist, angle)
         else:
             continue
 
         tokens.append(token)
-        prev_tick = event_tick
+        prev_finish_tick = end_tick
         prev_point = end_point
         required_tick = min(max_tick, end_tick + 1)
 
@@ -196,7 +196,7 @@ def decode_tokens(
         start_y = _clamp_coord(decoded.get("start_y"), height)
         if start_x is None or start_y is None:
             continue
-        tick_idx = decoded.get("tick_index", decoded.get("delta_ticks"))
+        tick_idx = decoded.get("tick_index")
         if tick_idx is None:
             continue
         current_tick += max(0, int(tick_idx))
