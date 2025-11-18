@@ -44,6 +44,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional base path for dataset caches (.train.npz/.val.npz). If provided, caches are reused.",
     )
+    parser.add_argument(
+        "--freeze-encoder",
+        action="store_true",
+        help="Freeze encoder weights (no gradient updates). Useful for fine-tuning the decoder only.",
+    )
     return parser.parse_args()
 
 
@@ -293,8 +298,17 @@ def main() -> None:
     )
 
     model = ConformerSeq2Seq(config).to(device)
+    if args.freeze_encoder:
+        for param in model.encoder.parameters():
+            param.requires_grad = False
+        print("[INFO] Freezing encoder parameters (decoder-only training).")
+
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    if not trainable_params:
+        raise RuntimeError("No trainable parameters remain after freezing. Check --freeze-encoder usage.")
+
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        trainable_params,
         lr=training_cfg["lr"],
         weight_decay=training_cfg.get("weight_decay", 1e-4),
     )
@@ -312,7 +326,10 @@ def main() -> None:
         print(f"[INFO] Resuming from checkpoint: {resume_checkpoint_path}")
         payload = torch.load(resume_checkpoint_path, map_location=device)
         model.load_state_dict(payload["model_state"])
-        optimizer.load_state_dict(payload["optimizer_state"])
+        if args.freeze_encoder:
+            print("[INFO] Skipping optimizer state load because encoder is frozen.")
+        else:
+            optimizer.load_state_dict(payload["optimizer_state"])
         start_epoch = int(payload.get("epoch", 0)) + 1
         if metrics_path.exists():
             with open(metrics_path, "r", encoding="utf-8") as f:
