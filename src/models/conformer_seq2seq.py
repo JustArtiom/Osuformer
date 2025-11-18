@@ -241,7 +241,11 @@ class ConformerSeq2Seq(nn.Module):
         decoder_cfg = config["model"]["decoder"]
         data_cfg = config["data"]
 
-        input_dim = data_cfg["n_mels"] + (1 if data_cfg.get("use_bpm_feature") else 0)
+        input_dim = data_cfg["n_mels"]
+        if data_cfg.get("use_bpm_feature"):
+            input_dim += 1
+        if data_cfg.get("use_rms_feature"):
+            input_dim += 1
 
         self.encoder = ConformerEncoder(
             input_dim=input_dim,

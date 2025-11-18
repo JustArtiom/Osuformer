@@ -269,8 +269,8 @@ def main() -> None:
 
     train_files, val_files = split_train_val_files(config)
     cache_base = Path(args.map_cache).expanduser().resolve() if args.map_cache else None
-    train_cache = cache_base.with_suffix(".train.npz") if cache_base else None
-    val_cache = cache_base.with_suffix(".val.npz") if cache_base else None
+    train_cache = Path(str(cache_base) + ".train.npz") if cache_base else None
+    val_cache = Path(str(cache_base) + ".val.npz") if cache_base else None
 
     train_dataset = OsuBeatmapDataset(config, split="train", osu_files=train_files, cache_path=train_cache)
     val_dataset = OsuBeatmapDataset(config, split="val", osu_files=val_files, cache_path=val_cache)
