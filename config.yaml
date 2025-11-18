@@ -45,7 +45,7 @@ data:
 filters:
   min_bpm: 80
   max_bpm: 300
-  min_star_rating: 5
+  min_star_rating: 6
   max_star_rating: 7.5
   min_rating: 6.5
   max_rating: null
@@ -72,7 +72,7 @@ model:
     num_layers: 10
     num_heads: 8
     ffn_dim: 1536
-    dropout: 0.1
+    dropout: 0.2
 
 training:
   batch_size: 12
