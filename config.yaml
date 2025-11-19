@@ -75,7 +75,7 @@ model:
     dropout: 0.1
 
 training:
-  batch_size: 12
+  batch_size: 36
   lr: 0.00001
   num_epochs: 300
   device: "cuda"
@@ -86,8 +86,11 @@ training:
   grad_clip: 1.0
   use_amp: true
   spatial_loss_weight: 0.1
+  distributed:
+    enabled: false
+    backend: "nccl"
 
 paths:
-  data: "dataset"
+  data: "/beegfs/general/ac23ac/dataset"
   include: ["*.osu", "*.wav", "*.mp3", "*.ogg", "*.flac"]
   exclude: ["_*", ]

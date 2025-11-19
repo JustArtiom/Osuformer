@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Dict, List, Optional
 import time
@@ -17,7 +18,10 @@ except ImportError:  # pragma: no cover
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 from contextlib import nullcontext
 
@@ -49,6 +53,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Freeze encoder weights (no gradient updates). Useful for fine-tuning the decoder only.",
     )
+    parser.add_argument(
+        "--distributed",
+        action="store_true",
+        help="Enable DistributedDataParallel. Launch with torchrun and set --distributed to true.",
+    )
+    parser.add_argument(
+        "--ddp-backend",
+        type=str,
+        default=None,
+        help="Override the DDP backend (defaults to training.distributed.backend).",
+    )
     return parser.parse_args()
 
 
@@ -58,6 +73,12 @@ def resolve_device(preferred: str) -> torch.device:
         print("[WARN] CUDA requested but not available. Falling back to CPU.")
         preferred = "cpu"
     return torch.device(preferred)
+
+
+def unwrap_model(model: nn.Module) -> nn.Module:
+    if isinstance(model, DDP):
+        return model.module
+    return model
 
 
 def run_epoch(
@@ -71,6 +92,8 @@ def run_epoch(
     scaler: Optional[torch.amp.GradScaler] = None,
     class_weights: Optional[Dict[str, float]] = None,
     spatial_loss_weight: float = 0.0,
+    is_main_process: bool = True,
+    distributed: bool = False,
 ) -> Dict[str, float]:
     is_train = optimizer is not None
     model.train(is_train)
@@ -80,7 +103,12 @@ def run_epoch(
     total_batch_time = 0.0
     total_data_time = 0.0
 
-    iterator = tqdm(dataloader, desc="Train" if is_train else "Eval", leave=False)
+    iterator = tqdm(
+        dataloader,
+        desc="Train" if is_train else "Eval",
+        leave=False,
+        disable=not is_main_process,
+    )
     data_start = time.perf_counter()
     for batch in iterator:
         now = time.perf_counter()
@@ -211,12 +239,27 @@ def run_epoch(
         iterator.set_postfix(loss=loss.item(), data=data_elapsed, batch=batch_elapsed)
         data_start = time.perf_counter()
 
-    return {
+    if distributed:
+        stats = torch.tensor(
+            [
+                total_loss,
+                float(total_samples),
+                total_batch_time,
+                float(batch_count),
+                total_data_time,
+            ],
+            device=device,
+        )
+        dist.all_reduce(stats, op=dist.ReduceOp.SUM)
+        total_loss, total_samples, total_batch_time, batch_count, total_data_time = stats.tolist()
+
+    metrics = {
         "loss": (total_loss / total_samples) if total_samples else 0.0,
         "avg_batch_time": total_batch_time / batch_count if batch_count else 0.0,
         "avg_data_time": total_data_time / batch_count if batch_count else 0.0,
         "samples_per_sec": (total_samples / total_batch_time) if total_batch_time > 0 else 0.0,
     }
+    return metrics
 
 
 def save_checkpoint(
@@ -263,12 +306,42 @@ def main() -> None:
     training_cfg = config["training"]
     checkpoint_root = Path(training_cfg["path"]).expanduser().resolve()
 
+    dist_cfg = training_cfg.get("distributed", {})
+    if isinstance(dist_cfg, bool):
+        dist_cfg = {"enabled": dist_cfg}
+    distributed_enabled = bool(args.distributed or dist_cfg.get("enabled", False))
+    ddp_backend = args.ddp_backend or dist_cfg.get("backend", "nccl")
+
+    rank = 0
+    world_size = 1
+    local_rank = 0
+
+    if distributed_enabled:
+        if not dist.is_available():
+            raise RuntimeError("torch.distributed is not available in this PyTorch build.")
+        dist.init_process_group(backend=ddp_backend)
+        world_size = dist.get_world_size()
+        rank = dist.get_rank()
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        if training_cfg.get("device", "cuda") != "cuda":
+            raise ValueError("Distributed training requires training.device to be 'cuda'.")
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA is not available but distributed training was requested.")
+        torch.cuda.set_device(local_rank)
+        device = torch.device("cuda", local_rank)
+    else:
+        device = resolve_device(training_cfg.get("device", "cpu"))
+
+    is_main_process = rank == 0
+
     resume_checkpoint_path = Path(args.checkpoint).expanduser().resolve() if args.checkpoint else None
     resume_dir = resume_checkpoint_path.parent if resume_checkpoint_path else None
     session = TrainingSession(config, resume_path=str(resume_dir) if resume_dir else None)
-    print(f"[INFO] Session directory: {session.path}")
+    if is_main_process:
+        print(f"[INFO] Session directory: {session.path}")
+        if distributed_enabled:
+            print(f"[INFO] Using DistributedDataParallel with world size {world_size} (backend={ddp_backend}).")
 
-    device = resolve_device(training_cfg.get("device", "cpu"))
     batch_size = training_cfg["batch_size"]
     num_epochs = args.epochs or training_cfg["num_epochs"]
     num_workers = training_cfg.get("num_workers", 0)
@@ -282,10 +355,22 @@ def main() -> None:
     train_dataset = OsuBeatmapDataset(config, split="train", osu_files=train_files, cache_path=train_cache)
     val_dataset = OsuBeatmapDataset(config, split="val", osu_files=val_files, cache_path=val_cache)
 
+    train_sampler = (
+        DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=True)
+        if distributed_enabled
+        else None
+    )
+    val_sampler = (
+        DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False)
+        if distributed_enabled
+        else None
+    )
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=not distributed_enabled,
+        sampler=train_sampler,
         num_workers=num_workers,
         pin_memory=device.type == "cuda",
         collate_fn=osu_collate,
@@ -294,6 +379,7 @@ def main() -> None:
         val_dataset,
         batch_size=batch_size,
         shuffle=False,
+        sampler=val_sampler,
         num_workers=num_workers,
         pin_memory=device.type == "cuda",
         collate_fn=osu_collate,
@@ -303,7 +389,8 @@ def main() -> None:
     if args.freeze_encoder:
         for param in model.encoder.parameters():
             param.requires_grad = False
-        print("[INFO] Freezing encoder parameters (decoder-only training).")
+        if is_main_process:
+            print("[INFO] Freezing encoder parameters (decoder-only training).")
 
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     if not trainable_params:
@@ -317,6 +404,13 @@ def main() -> None:
     use_amp = bool(training_cfg.get("use_amp", False)) and device.type == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp) if use_amp else None
 
+    if distributed_enabled:
+        model = DDP(
+            model,
+            device_ids=[local_rank] if device.type == "cuda" else None,
+            output_device=local_rank if device.type == "cuda" else None,
+        )
+
     metrics_path = Path(session.path) / "metrics.json"
     train_history: List[Dict[str, float]] = []
     val_history: List[Dict[str, float]] = []
@@ -325,11 +419,13 @@ def main() -> None:
     if resume_checkpoint_path:
         if not resume_checkpoint_path.exists():
             raise FileNotFoundError(f"Checkpoint '{resume_checkpoint_path}' not found.")
-        print(f"[INFO] Resuming from checkpoint: {resume_checkpoint_path}")
+        if is_main_process:
+            print(f"[INFO] Resuming from checkpoint: {resume_checkpoint_path}")
         payload = torch.load(resume_checkpoint_path, map_location=device)
-        model.load_state_dict(payload["model_state"])
+        unwrap_model(model).load_state_dict(payload["model_state"])
         if args.freeze_encoder:
-            print("[INFO] Skipping optimizer state load because encoder is frozen.")
+            if is_main_process:
+                print("[INFO] Skipping optimizer state load because encoder is frozen.")
         else:
             optimizer.load_state_dict(payload["optimizer_state"])
         start_epoch = int(payload.get("epoch", 0)) + 1
@@ -345,11 +441,17 @@ def main() -> None:
     )
 
     if start_epoch > num_epochs:
-        print(f"[INFO] Checkpoint epoch ({start_epoch - 1}) >= target epochs ({num_epochs}). Nothing to do.")
+        if is_main_process:
+            print(f"[INFO] Checkpoint epoch ({start_epoch - 1}) >= target epochs ({num_epochs}). Nothing to do.")
+        if distributed_enabled:
+            dist.destroy_process_group()
         return
 
     for epoch in range(start_epoch, num_epochs + 1):
-        print(f"[INFO] Epoch {epoch}/{num_epochs}")
+        if train_sampler is not None:
+            train_sampler.set_epoch(epoch)
+        if is_main_process:
+            print(f"[INFO] Epoch {epoch}/{num_epochs}")
         train_metrics = run_epoch(
             model,
             train_loader,
@@ -360,6 +462,8 @@ def main() -> None:
             scaler=scaler,
             class_weights=config["data"].get("class_weights"),
             spatial_loss_weight=training_cfg.get("spatial_loss_weight", 0.0),
+            is_main_process=is_main_process,
+            distributed=distributed_enabled,
         )
         val_metrics = run_epoch(
             model,
@@ -371,49 +475,59 @@ def main() -> None:
             scaler=None,
             class_weights=config["data"].get("class_weights"),
             spatial_loss_weight=training_cfg.get("spatial_loss_weight", 0.0),
+            is_main_process=is_main_process,
+            distributed=distributed_enabled,
         )
 
         train_history.append(train_metrics)
         val_history.append(val_metrics)
 
-        current_lr = optimizer.param_groups[0]["lr"]
-        print(f"       Train Loss: {train_metrics['loss']:.4f} | Val Loss: {val_metrics['loss']:.4f} | LR: {current_lr:.6f}")
-        if train_metrics.get("avg_batch_time", 0.0) > 0:
+        if is_main_process:
+            current_lr = optimizer.param_groups[0]["lr"]
             print(
-                "       Throughput: "
-                f"{train_metrics['samples_per_sec']:.2f} samples/s "
-                f"(batch {train_metrics['avg_batch_time']:.3f}s | data {train_metrics['avg_data_time']:.3f}s)"
+                f"       Train Loss: {train_metrics['loss']:.4f} | Val Loss: {val_metrics['loss']:.4f} | LR: {current_lr:.6f}"
             )
+            if train_metrics.get("avg_batch_time", 0.0) > 0:
+                print(
+                    "       Throughput: "
+                    f"{train_metrics['samples_per_sec']:.2f} samples/s "
+                    f"(batch {train_metrics['avg_batch_time']:.3f}s | data {train_metrics['avg_data_time']:.3f}s)"
+                )
 
         checkpoint_metrics = val_metrics.copy()
-        session.ensure_created()
-
-        latest_path = Path(session.path) / "latest.pt"
-        save_checkpoint(
-            latest_path,
-            model,
-            optimizer,
-            epoch,
-            checkpoint_metrics,
-            tokenizer_meta=model.tokenizer_meta(),
-        )
-        if val_metrics["loss"] < best_val:
-            best_val = val_metrics["loss"]
+        if is_main_process:
+            session.ensure_created()
+            latest_path = Path(session.path) / "latest.pt"
+            base_model = unwrap_model(model)
             save_checkpoint(
-                Path(session.path) / "best.pt",
-                model,
+                latest_path,
+                base_model,
                 optimizer,
                 epoch,
                 checkpoint_metrics,
-                tokenizer_meta=model.tokenizer_meta(),
+                tokenizer_meta=base_model.tokenizer_meta(),
             )
+            if val_metrics["loss"] < best_val:
+                best_val = val_metrics["loss"]
+                save_checkpoint(
+                    Path(session.path) / "best.pt",
+                    base_model,
+                    optimizer,
+                    epoch,
+                    checkpoint_metrics,
+                    tokenizer_meta=base_model.tokenizer_meta(),
+                )
 
-        with open(metrics_path, "w", encoding="utf-8") as f:
-            json.dump({"train": train_history, "val": val_history}, f, indent=2)
+            with open(metrics_path, "w", encoding="utf-8") as f:
+                json.dump({"train": train_history, "val": val_history}, f, indent=2)
 
-        plot_curves(train_history, val_history, Path(session.path) / "loss_curve.png")
+            plot_curves(train_history, val_history, Path(session.path) / "loss_curve.png")
 
-    print("[INFO] Training complete.")
+    if is_main_process:
+        print("[INFO] Training complete.")
+
+    if distributed_enabled:
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":

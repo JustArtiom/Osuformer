@@ -21,6 +21,12 @@ Py: 3.9+
    ```
    Training uses the Conformer + seq2seq architecture defined in `src/models/` and writes checkpoints + metrics under `checkpoints/<session-id>/`. Install `torch`, `librosa`, and optionally `matplotlib` to enable curve plotting.
 
+   To train on multiple GPUs, either set `training.distributed.enabled: true` in `config.yaml` or pass `--distributed` on the CLI and launch with `torchrun`. For example, to train on three GPUs:
+   ```bash
+   torchrun --nproc_per_node=3 train.py --config config.yaml --distributed
+   ```
+   The script will initialize DistributedDataParallel automatically and keep checkpoints/metrics synchronized from rank 0.
+
 3. **Generate a beatmap**
    ```bash
    python3 generate.py \
