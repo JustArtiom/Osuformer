@@ -11,3 +11,4 @@ checkpoints/
 /audio*.generated.osu
 .env
 cache/
+*.tar.gz
