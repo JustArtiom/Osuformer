@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import re
 from dataclasses import dataclass, field
+from collections import Counter
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
@@ -35,6 +36,7 @@ class GenDiagnostics:
     tokens: int = 0
     delta_mismatches: int = 0
     delta_abs_error: float = 0.0
+    delta_error_hist: Counter = field(default_factory=Counter)
     angle_count: int = 0
     angle_abs_error: float = 0.0
     angle_within: int = 0
@@ -254,8 +256,10 @@ def analyze_tokens(tokens: torch.Tensor, chunk: AudioChunk, tokenizer: HitObject
         delta_target = max(0, tick_idx - prev_finish_tick)
 
         stats.tokens += 1
-        stats.delta_abs_error += abs(delta_pred - delta_target)
-        if delta_pred != delta_target:
+        abs_err = abs(delta_pred - delta_target)
+        stats.delta_abs_error += abs_err
+        stats.delta_error_hist[int(abs_err)] += 1
+        if abs_err != 0:
             stats.delta_mismatches += 1
 
         start_x = decoded.get("start_x")
@@ -667,6 +671,15 @@ def main() -> None:
     if diagnostics.tokens > 0:
         delta_pct = 100.0 * diagnostics.delta_mismatches / diagnostics.tokens
         delta_mae = diagnostics.delta_abs_error / diagnostics.tokens
+        hist_items = sorted(diagnostics.delta_error_hist.items(), key=lambda kv: kv[0])
+        hist_lines = []
+        max_bins = 12
+        for idx, (err_val, count) in enumerate(hist_items):
+            if idx >= max_bins:
+                remaining = sum(c for _, c in hist_items[idx:])
+                hist_lines.append(f">={err_val}({remaining})")
+                break
+            hist_lines.append(f"{err_val}:{count}")
         if diagnostics.angle_count > 0:
             angle_mae = diagnostics.angle_abs_error / diagnostics.angle_count
             angle_mae_deg = math.degrees(angle_mae)
@@ -679,6 +692,8 @@ def main() -> None:
             f"  - delta ticks mismatch: {diagnostics.delta_mismatches}/{diagnostics.tokens} "
             f"({delta_pct:.2f}%), MAE {delta_mae:.2f} ticks"
         )
+        if hist_lines:
+            print("  - delta error histogram (ticks): " + " | ".join(hist_lines))
         if diagnostics.angle_count > 0:
             print(
                 f"  - start-angle error: {angle_mae_deg:.2f}° MAE, "
