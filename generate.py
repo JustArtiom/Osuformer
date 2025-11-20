@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import argparse
 import re
-from dataclasses import dataclass, field
-from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
@@ -24,23 +23,10 @@ class AudioChunk:
     mask: torch.Tensor
     start_ms: float
     tick_duration_ms: float
-    ticks_per_sample: int
+    total_ticks: int
+    context_ticks: int
+    target_ticks: int
     beat_duration_ms: float
-    time_rounding_mode: str = "round"
-    time_rounding_threshold: float = 0.5
-    bpm_feature: float = 0.0
-
-
-@dataclass
-class GenDiagnostics:
-    tokens: int = 0
-    delta_mismatches: int = 0
-    delta_abs_error: float = 0.0
-    delta_error_hist: Counter = field(default_factory=Counter)
-    angle_count: int = 0
-    angle_abs_error: float = 0.0
-    angle_within: int = 0
-    previews: List[dict] = field(default_factory=list)
 
 
 def parse_args() -> argparse.Namespace:
@@ -70,16 +56,16 @@ def resolve_device(name: str) -> torch.device:
     return torch.device(name)
 
 
-def load_or_create_mel(audio_path: Path, data_cfg: dict) -> MelSpec:
+def load_or_create_mel(audio_path: Path, audio_cfg: dict) -> MelSpec:
     npz_path = Path(str(audio_path) + ".mel.npz")
     if not npz_path.exists():
         prepare_audio(
             str(audio_path),
-            data_cfg["sample_rate"],
-            data_cfg["hop_ms"],
-            data_cfg["win_ms"],
-            data_cfg["n_mels"],
-            data_cfg["n_fft"],
+            audio_cfg["sample_rate"],
+            audio_cfg["hop_ms"],
+            audio_cfg["win_ms"],
+            audio_cfg["n_mels"],
+            audio_cfg["n_fft"],
             force=False,
         )
     return MelSpec.load_npz(str(npz_path))
@@ -97,25 +83,26 @@ def get_timing_from_template(template_path: Path) -> Tuple[float, float]:
     return bpm, offset
 
 
-def build_chunks(spec: MelSpec, data_cfg: dict, bpm: float, offset_ms: float) -> List[AudioChunk]:
-    beats_per_sample = data_cfg.get("beats_per_sample", 16)
-    ticks_per_beat = data_cfg.get("ticks_per_beat", 8)
-    sample_hop_beats = data_cfg.get("sample_hop_beats", max(1, beats_per_sample // 2))
-    ticks_per_sample = beats_per_sample * ticks_per_beat
-    normalize_audio = data_cfg.get("normalize_audio", True)
-    use_rms_feature = bool(data_cfg.get("use_rms_feature", False))
-    use_bpm_feature = bool(data_cfg.get("use_bpm_feature", False))
-    bpm_norm = float(data_cfg.get("bpm_normalization", 300.0) or 1.0)
-    bpm_feature_value = float(bpm) / bpm_norm if use_bpm_feature else 0.0
+def build_chunks(spec: MelSpec, data_cfg: dict, audio_cfg: dict, bpm: float, offset_ms: float) -> List[AudioChunk]:
+    ticks_per_beat = int(data_cfg.get("ticks_per_beat", 4))
+    context_beats = int(data_cfg.get("context_beats", 8))
+    target_beats = int(data_cfg.get("target_beats", 16))
+    total_beats = context_beats + target_beats
+    sample_hop_beats = int(data_cfg.get("sample_hop_beats", target_beats))
+    sample_hop_beats = max(1, sample_hop_beats)
+
+    total_ticks = total_beats * ticks_per_beat
+    context_ticks = context_beats * ticks_per_beat
+    target_ticks = target_beats * ticks_per_beat
 
     beat_duration_ms = 60000.0 / max(bpm, 1e-3)
-    chunk_duration_ms = beats_per_sample * beat_duration_ms
+    chunk_duration_ms = total_beats * beat_duration_ms
     sample_hop_ms = sample_hop_beats * beat_duration_ms
     tick_duration_ms = beat_duration_ms / ticks_per_beat
     frames_per_chunk = max(1, int(round(chunk_duration_ms / spec.frame_duration_ms)))
     raw_frames_per_chunk = frames_per_chunk
     frame_stride = 1
-    max_frames = data_cfg.get("max_frames_per_sample")
+    max_frames = audio_cfg.get("max_frames_per_sample")
     if max_frames and max_frames > 0 and raw_frames_per_chunk > max_frames:
         frame_stride = int(math.ceil(raw_frames_per_chunk / max_frames))
         frames_per_chunk = int(math.ceil(raw_frames_per_chunk / frame_stride))
@@ -124,6 +111,7 @@ def build_chunks(spec: MelSpec, data_cfg: dict, bpm: float, offset_ms: float) ->
             f"{frames_per_chunk} (stride {frame_stride})"
         )
 
+    normalize_audio = bool(audio_cfg.get("normalize_audio", True))
     if normalize_audio:
         mean = torch.from_numpy(spec.S_db.mean(axis=1).astype(np.float32)).view(1, 1, -1)
         std = torch.from_numpy(np.maximum(spec.S_db.std(axis=1).astype(np.float32), 1e-5)).view(1, 1, -1)
@@ -131,22 +119,6 @@ def build_chunks(spec: MelSpec, data_cfg: dict, bpm: float, offset_ms: float) ->
     start = max(0.0, offset_ms)
     timeline_end = spec.times[-1] * 1000.0
     pad_value = float(spec.S_db.min())
-
-    rounding_mode = data_cfg.get("time_rounding_mode", "round")
-    if isinstance(rounding_mode, str):
-        rounding_mode = rounding_mode.lower()
-    else:
-        rounding_mode = "round"
-    custom_threshold = 0.5
-    if rounding_mode == "custom":
-        thresh = data_cfg.get("time_rounding_threshold", 0.5)
-        try:
-            custom_threshold = float(thresh)
-        except (TypeError, ValueError):
-            custom_threshold = 0.5
-        custom_threshold = max(0.0, min(1.0, custom_threshold))
-    if rounding_mode not in ("round", "floor", "ceil", "custom"):
-        rounding_mode = "round"
 
     chunks: List[AudioChunk] = []
     while start < timeline_end:
@@ -156,26 +128,10 @@ def build_chunks(spec: MelSpec, data_cfg: dict, bpm: float, offset_ms: float) ->
         if valid_frames < frames_per_chunk:
             pad = frames_per_chunk - valid_frames
             mel_slice = np.pad(mel_slice, ((0, 0), (0, pad)), constant_values=pad_value)
-        rms_tensor = None
-        if use_rms_feature:
-            rms_np = np.sqrt(np.mean(np.square(mel_slice), axis=0)).astype(np.float32)
-            rms_np = np.log1p(rms_np)
-            mean_rms = rms_np.mean()
-            std_rms = rms_np.std()
-            if std_rms > 1e-6:
-                rms_np = (rms_np - mean_rms) / std_rms
-            else:
-                rms_np = rms_np - mean_rms
-            rms_tensor = torch.from_numpy(rms_np).view(1, -1, 1).float()
 
         audio = torch.from_numpy(mel_slice.T).unsqueeze(0).float()
         if normalize_audio:
             audio = (audio - mean) / std
-        if use_rms_feature and rms_tensor is not None:
-            audio = torch.cat([audio, rms_tensor], dim=2)
-        if use_bpm_feature:
-            bpm_column = torch.full((1, audio.shape[1], 1), bpm_feature_value, dtype=audio.dtype)
-            audio = torch.cat([audio, bpm_column], dim=2)
 
         mask = torch.arange(frames_per_chunk).unsqueeze(0) >= valid_frames
         chunks.append(
@@ -184,11 +140,10 @@ def build_chunks(spec: MelSpec, data_cfg: dict, bpm: float, offset_ms: float) ->
                 mask=mask,
                 start_ms=start,
                 tick_duration_ms=tick_duration_ms,
-                ticks_per_sample=ticks_per_sample,
+                total_ticks=total_ticks,
+                context_ticks=context_ticks,
+                target_ticks=target_ticks,
                 beat_duration_ms=beat_duration_ms,
-                time_rounding_mode=rounding_mode,
-                time_rounding_threshold=custom_threshold,
-                bpm_feature=bpm_feature_value,
             )
         )
         start += sample_hop_ms
@@ -232,183 +187,138 @@ def _quantize_slider_length(value: float, mode: str, threshold: float = 0.5) -> 
     return value
 
 
-def _angle_diff(a: float, b: float) -> float:
-    """Smallest absolute angular difference (radians)."""
-    return abs((a - b + math.pi) % (2 * math.pi) - math.pi)
-
-
-def analyze_tokens(tokens: torch.Tensor, chunk: AudioChunk, tokenizer: HitObjectTokenizer, stats: GenDiagnostics) -> None:
-    """Accumulate simple consistency diagnostics for a generated chunk."""
-    prev_finish_tick = 0
-    prev_point: Optional[Tuple[float, float]] = None
-    preview_limit = 8
-
-    type_names = {TokenType.EOS: "EOS", TokenType.CIRCLE: "circle", TokenType.SLIDER: "slider"}
-
-    for raw in tokens.tolist():
-        decoded = tokenizer.decode_token(raw)
-        token_type = decoded.get("type")
-        if token_type == TokenType.EOS:
-            break
-
-        tick_idx = int(decoded.get("tick_index", 0))
-        delta_pred = int(decoded.get("delta_ticks", 0))
-        delta_target = max(0, tick_idx - prev_finish_tick)
-
-        stats.tokens += 1
-        abs_err = abs(delta_pred - delta_target)
-        stats.delta_abs_error += abs_err
-        stats.delta_error_hist[int(abs_err)] += 1
-        if abs_err != 0:
-            stats.delta_mismatches += 1
-
-        start_x = decoded.get("start_x")
-        start_y = decoded.get("start_y")
-        geom_angle = None
-        pred_angle = decoded.get("angle") or 0.0
-
-        if start_x is not None and start_y is not None and prev_point is not None:
-            dx = start_x - prev_point[0]
-            dy = start_y - prev_point[1]
-            geom_angle = math.atan2(dy, dx)
-            diff = _angle_diff(pred_angle, geom_angle)
-            stats.angle_abs_error += diff
-            stats.angle_count += 1
-            if diff <= math.radians(22.5):
-                stats.angle_within += 1
-        else:
-            diff = None
-
-        if len(stats.previews) < preview_limit and start_x is not None and start_y is not None:
-            stats.previews.append(
-                {
-                    "time_ms": chunk.start_ms + tick_idx * chunk.tick_duration_ms,
-                    "type": type_names.get(token_type, str(token_type)),
-                    "pos": (start_x, start_y),
-                    "pred_angle_deg": math.degrees(pred_angle),
-                    "geom_angle_deg": math.degrees(geom_angle) if geom_angle is not None else None,
-                    "angle_err_deg": math.degrees(diff) if diff is not None else None,
-                    "delta_pred": delta_pred,
-                    "delta_target": delta_target,
-                }
-            )
-
-        duration_ticks = 0
-        if token_type == TokenType.SLIDER:
-            duration_ticks = int(decoded.get("duration_ticks") or 0)
-            duration_ticks = max(1, duration_ticks)
-
-        prev_finish_tick = max(prev_finish_tick, tick_idx + duration_ticks)
-        prev_point = (start_x, start_y) if start_x is not None and start_y is not None else prev_point
-
-
 def tokens_to_hitobjects(
-    tokens: torch.Tensor,
+    events: List[dict],
     chunk: AudioChunk,
-    tokenizer: HitObjectTokenizer,
     data_cfg: dict,
     suppress_overlaps: bool = True,
 ) -> List[dict]:
-    events: List[dict] = []
     width = data_cfg["osu_width"]
     height = data_cfg["osu_height"]
-    blocked_until = float("-inf")
-    cutoff_start = chunk.start_ms + max(0, chunk.ticks_per_sample - 1) * chunk.tick_duration_ms
-    cutoff_end = chunk.start_ms + chunk.ticks_per_sample * chunk.tick_duration_ms
+    rounding_mode = (data_cfg.get("time_rounding_mode") or "round").lower()
+    if rounding_mode not in ("round", "floor", "ceil", "custom"):
+        rounding_mode = "round"
+    rounding_threshold = float(data_cfg.get("time_rounding_threshold", 0.5) or 0.5)
+    rounding_threshold = max(0.0, min(1.0, rounding_threshold))
 
-    rounding_mode = getattr(chunk, "time_rounding_mode", "round") or "round"
-    rounding_threshold = getattr(chunk, "time_rounding_threshold", 0.5)
     length_mode = (data_cfg.get("slider_length_rounding_mode") or "exact").lower()
     if length_mode not in ("exact", "round", "floor", "ceil", "custom"):
         length_mode = "exact"
     length_threshold = float(data_cfg.get("slider_length_rounding_threshold", 0.5) or 0.5)
     length_threshold = max(0.0, min(1.0, length_threshold))
 
-    for token in tokens.tolist():
-        decoded = tokenizer.decode_token(token)
-        token_type = decoded["type"]
-        if token_type == TokenType.EOS:
-            break
+    target_start_ms = chunk.start_ms + chunk.context_ticks * chunk.tick_duration_ms
+    cutoff_end = chunk.start_ms + chunk.total_ticks * chunk.tick_duration_ms
+    blocked_until = float("-inf")
+    results: List[dict] = []
 
-        start_x = _clamp_coord(decoded.get("start_x"), width)
-        start_y = _clamp_coord(decoded.get("start_y"), height)
-        if start_x is None or start_y is None:
+    for event in events:
+        time_ms = float(event.get("time", 0.0))
+        if time_ms < target_start_ms:
             continue
-        tick_idx = decoded.get("tick_index")
-        if tick_idx is None:
-            continue
-        if tick_idx >= chunk.ticks_per_sample:
+        if time_ms >= cutoff_end:
             break
-        event_time = chunk.start_ms + tick_idx * chunk.tick_duration_ms
-        if event_time >= cutoff_start:
-            break
-        time_ms = _quantize_time(event_time, rounding_mode, rounding_threshold)
         if suppress_overlaps and time_ms < blocked_until:
             continue
 
-        if token_type == TokenType.CIRCLE:
-            events.append(
+        if event.get("type") == "circle":
+            x = _clamp_coord(event.get("x"), width)
+            y = _clamp_coord(event.get("y"), height)
+            if x is None or y is None:
+                continue
+            quant_time = _quantize_time(time_ms, rounding_mode, rounding_threshold)
+            results.append(
                 {
                     "type": "circle",
-                    "time": time_ms,
-                    "x": start_x,
-                    "y": start_y,
-                    "end_time": time_ms,
+                    "time": quant_time,
+                    "x": x,
+                    "y": y,
+                    "end_time": quant_time,
                 }
             )
             if suppress_overlaps:
-                blocked_until = max(blocked_until, time_ms + chunk.tick_duration_ms)
+                blocked_until = max(blocked_until, quant_time + chunk.tick_duration_ms)
             continue
 
-        end_x = _clamp_coord(decoded.get("end_x"), width)
-        end_y = _clamp_coord(decoded.get("end_y"), height)
-        if end_x is None or end_y is None:
+        if event.get("type") != "slider":
             continue
 
-        ctrl_points: List[Tuple[int, int]] = []
-        ctrl1_x = _clamp_coord(decoded.get("ctrl1_x"), width)
-        ctrl1_y = _clamp_coord(decoded.get("ctrl1_y"), height)
-        ctrl2_x = _clamp_coord(decoded.get("ctrl2_x"), width)
-        ctrl2_y = _clamp_coord(decoded.get("ctrl2_y"), height)
-        if ctrl1_x is not None and ctrl1_y is not None:
-            ctrl_points.append((ctrl1_x, ctrl1_y))
-        if ctrl2_x is not None and ctrl2_y is not None:
-            ctrl_points.append((ctrl2_x, ctrl2_y))
-        ctrl_points.append((end_x, end_y))
-
-        duration_ticks = decoded.get("duration_ticks", 0)
+        x = _clamp_coord(event.get("x"), width)
+        y = _clamp_coord(event.get("y"), height)
+        if x is None or y is None:
+            continue
+        duration_ticks = max(0, int(event.get("duration_ticks", 0)))
         if duration_ticks <= 0:
             continue
         duration_ms = duration_ticks * chunk.tick_duration_ms
-        if event_time + duration_ms > cutoff_end:
-            break
-        slides = max(1, int(decoded.get("slides", 1)))
+        if time_ms + duration_ms > cutoff_end:
+            continue
+
+        slides = max(1, int(event.get("slides", 1)))
+        sv_factor = float(event.get("sv") or event.get("sv_factor") or 1.0)
+        curve_type = event.get("curve_type") or "L"
+        points: List[Tuple[int, int]] = []
+        for px, py in event.get("points", []):
+            cx = _clamp_coord(px, width)
+            cy = _clamp_coord(py, height)
+            if cx is not None and cy is not None:
+                points.append((cx, cy))
+        if not points:
+            continue
+
         beat_length = chunk.beat_duration_ms
         if beat_length <= 0:
             continue
-        sv_factor = decoded.get("sv_factor") or 1.0
         slider_length = duration_ms * sv_factor * 100.0 / (beat_length * slides)
         slider_length = max(5.0, slider_length)
         slider_length = _quantize_slider_length(float(slider_length), length_mode, length_threshold)
 
-        events.append(
+        quant_time = _quantize_time(time_ms, rounding_mode, rounding_threshold)
+        results.append(
             {
                 "type": "slider",
-                "time": time_ms,
-                "x": start_x,
-                "y": start_y,
-                "curve_type": decoded.get("curve_type") or "L",
-                "points": ctrl_points,
+                "time": quant_time,
+                "x": x,
+                "y": y,
+                "curve_type": curve_type,
+                "points": points,
                 "slides": slides,
                 "length": slider_length,
                 "sv_factor": float(sv_factor),
-                "end_time": time_ms + int(round(duration_ms)),
+                "end_time": quant_time + int(round(duration_ms)),
             }
         )
         if suppress_overlaps:
-            blocked_until = max(blocked_until, time_ms + duration_ms + chunk.tick_duration_ms)
+            blocked_until = max(blocked_until, quant_time + duration_ms + chunk.tick_duration_ms)
 
-    return events
+    return results
+
+
+def extract_context_tokens(
+    sequence: torch.Tensor,
+    tokenizer: HitObjectTokenizer,
+    chunk: AudioChunk,
+) -> torch.Tensor:
+    context_tokens: List[List[int]] = []
+    target_start = chunk.target_ticks
+    context_limit = chunk.context_ticks
+    for token in sequence.tolist():
+        if token[TokenAttr.TYPE] == TokenType.EOS:
+            break
+        tick = tokenizer.tick_from_id(token[TokenAttr.TICK])
+        if tick < target_start:
+            continue
+        shifted = tick - target_start
+        if shifted >= context_limit:
+            continue
+        token_copy = list(token)
+        token_copy[TokenAttr.TICK] = tokenizer.encode_tick(shifted)
+        context_tokens.append(token_copy)
+    if not context_tokens:
+        return torch.zeros(1, 0, TokenAttr.COUNT, dtype=torch.long)
+    return torch.tensor(context_tokens, dtype=torch.long).unsqueeze(0)
+
+
 
 
 def merge_events(events: List[dict], tolerance_ms: float, suppress_overlaps: bool = True) -> List[dict]:
@@ -587,14 +497,15 @@ def main() -> None:
         merged_cfg.update(data_cfg_override)
         config["data"] = merged_cfg
     data_cfg = config["data"]
+    audio_cfg = config["audio"]
     tokenizer = HitObjectTokenizer(data_cfg)
     suppress_overlaps = bool(data_cfg.get("suppress_overlap", True))
 
     bpm = bpm or data_cfg.get("default_bpm", 120.0)
     offset = offset if offset is not None else 0.0
 
-    spec = load_or_create_mel(audio_path, data_cfg)
-    chunks = build_chunks(spec, data_cfg, bpm, offset)
+    spec = load_or_create_mel(audio_path, audio_cfg)
+    chunks = build_chunks(spec, data_cfg, audio_cfg, bpm, offset)
 
     model = ConformerSeq2Seq(config).to(device)
     model.load_state_dict(payload["model_state"])
@@ -605,26 +516,42 @@ def main() -> None:
         )
     model.eval()
 
-    all_events: List[Tuple[float, float, float]] = []
-    diagnostics = GenDiagnostics()
+    all_events: List[dict] = []
+    context_tokens = torch.zeros(1, 0, TokenAttr.COUNT, dtype=torch.long)
     for chunk in chunks:
         audio = chunk.audio.to(device)
         mask = chunk.mask.to(device)
+        prompt = context_tokens if context_tokens.size(1) > 0 else None
+        prompt_tensor = prompt.to(device) if prompt is not None else None
+        remaining = tokenizer.seq_len - (prompt.size(1) if prompt is not None else 0)
+        remaining = max(0, remaining)
         preds = model.generate(
             audio,
             mask,
-            max_steps=chunk.ticks_per_sample,
+            prompt=prompt_tensor,
+            max_steps=remaining,
             temperature=args.temperature,
         )
+        generated = preds[0].cpu()
+        if prompt is not None and prompt.size(1) > 0:
+            full_sequence = torch.cat([prompt.cpu()[0], generated], dim=0)
+        else:
+            full_sequence = generated
+
+        detok_events = tokenizer.detokenize(
+            full_sequence.tolist(),
+            chunk_start_ms=chunk.start_ms,
+            tick_duration_ms=chunk.tick_duration_ms,
+            cutoff_tick=chunk.total_ticks,
+        )
         chunk_events = tokens_to_hitobjects(
-            preds[0].cpu(),
+            detok_events,
             chunk,
-            tokenizer,
             data_cfg,
             suppress_overlaps=suppress_overlaps,
         )
         all_events.extend(chunk_events)
-        analyze_tokens(preds[0].cpu(), chunk, tokenizer, diagnostics)
+        context_tokens = extract_context_tokens(full_sequence, tokenizer, chunk)
 
     tolerance_ms = data_cfg.get("merge_tolerance_ms", chunks[0].tick_duration_ms if chunks else 10.0)
     discrete_events = merge_events(
@@ -667,58 +594,6 @@ def main() -> None:
 
     output_path.write_text(output_text, encoding="utf-8")
     print(f"[INFO] Generated {len(hitobject_lines)} hitobjects → {output_path}")
-
-    if diagnostics.tokens > 0:
-        delta_pct = 100.0 * diagnostics.delta_mismatches / diagnostics.tokens
-        delta_mae = diagnostics.delta_abs_error / diagnostics.tokens
-        hist_items = sorted(diagnostics.delta_error_hist.items(), key=lambda kv: kv[0])
-        hist_lines = []
-        max_bins = 12
-        for idx, (err_val, count) in enumerate(hist_items):
-            if idx >= max_bins:
-                remaining = sum(c for _, c in hist_items[idx:])
-                hist_lines.append(f">={err_val}({remaining})")
-                break
-            hist_lines.append(f"{err_val}:{count}")
-        if diagnostics.angle_count > 0:
-            angle_mae = diagnostics.angle_abs_error / diagnostics.angle_count
-            angle_mae_deg = math.degrees(angle_mae)
-            angle_within_pct = 100.0 * diagnostics.angle_within / diagnostics.angle_count
-        else:
-            angle_mae_deg = 0.0
-            angle_within_pct = 0.0
-        print("[INFO] Generation diagnostics:")
-        print(
-            f"  - delta ticks mismatch: {diagnostics.delta_mismatches}/{diagnostics.tokens} "
-            f"({delta_pct:.2f}%), MAE {delta_mae:.2f} ticks"
-        )
-        if hist_lines:
-            print("  - delta error histogram (ticks): " + " | ".join(hist_lines))
-        if diagnostics.angle_count > 0:
-            print(
-                f"  - start-angle error: {angle_mae_deg:.2f}° MAE, "
-                f"within 22.5°: {diagnostics.angle_within}/{diagnostics.angle_count} "
-                f"({angle_within_pct:.2f}%)"
-            )
-        if diagnostics.previews:
-            print("  - sample events:")
-            for entry in diagnostics.previews:
-                pos_str = f"({entry['pos'][0]:.1f},{entry['pos'][1]:.1f})"
-                angle_str = (
-                    f"{entry['geom_angle_deg']:.1f}°"
-                    if entry["geom_angle_deg"] is not None
-                    else "n/a"
-                )
-                err_str = (
-                    f"{entry['angle_err_deg']:.1f}°"
-                    if entry["angle_err_deg"] is not None
-                    else "n/a"
-                )
-                print(
-                    f"    t={entry['time_ms']:.1f}ms type={entry['type']} pos={pos_str} "
-                    f"δ={entry['delta_pred']} (target {entry['delta_target']}) "
-                    f"pred_angle={entry['pred_angle_deg']:.1f}° geom_angle={angle_str} err={err_str}"
-                )
 
 
 if __name__ == "__main__":

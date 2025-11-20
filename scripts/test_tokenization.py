@@ -3,15 +3,14 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
-import math
-from typing import List, Sequence, Optional, Tuple
+from typing import List, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.data.tokenizer import HitObjectTokenizer, TokenAttr, TokenType
-from src.osu import Beatmap, Circle, Slider
+from src.osu import Beatmap
 from src.utils.config import load_config
 
 
@@ -23,12 +22,12 @@ def parse_args() -> argparse.Namespace:
         "--chunk-index",
         type=int,
         default=0,
-        help="Which chunk (0-based) to inspect. Uses beats_per_sample/sample_hop_beats from config.",
+        help="Which chunk (0-based) to inspect. Uses context/target/sample_hop beats from config.",
     )
     parser.add_argument(
         "--print-empty",
         action="store_true",
-        help="If set, also print ticks that contain the EMPTY token.",
+        help="If set, also print ticks that only contain padding.",
     )
     return parser.parse_args()
 
@@ -58,6 +57,30 @@ def effective_slider_sv(beatmap: Beatmap, time_ms: float) -> float:
     return max(1e-3, base_sv * sv_mult)
 
 
+def _limit_token_count(tokens: List[List[int]], limit: int) -> List[List[int]]:
+    trimmed: List[List[int]] = []
+    idx = 0
+    while idx < len(tokens) and len(trimmed) < limit:
+        token = tokens[idx]
+        token_type = token[TokenAttr.TYPE]
+        if token_type == TokenType.SLIDER:
+            group_end = idx + 1
+            while group_end < len(tokens) and tokens[group_end][TokenAttr.TYPE] == TokenType.SLIDER_PATH:
+                group_end += 1
+            group_size = group_end - idx
+            if len(trimmed) + group_size > limit:
+                break
+            trimmed.extend(tokens[idx:group_end])
+            idx = group_end
+            continue
+        if token_type == TokenType.SLIDER_PATH:
+            idx += 1
+            continue
+        trimmed.append(token)
+        idx += 1
+    return trimmed
+
+
 def encode_chunk_tokens(
     beatmap: Beatmap,
     hit_objects: Sequence[object],
@@ -67,115 +90,52 @@ def encode_chunk_tokens(
     tokenizer: HitObjectTokenizer,
     tick_tolerance_ms: float,
 ) -> tuple[List[List[int]], int]:
-    events = sorted(hit_objects, key=lambda h: float(getattr(h, "time", 0.0)))
-    tokens: List[List[int]] = []
-    tick_ms = max(1e-6, tick_duration_ms)
-    chunk_cutoff_tick = max(0, ticks_per_sample - 1)
-    chunk_end_tick = ticks_per_sample
-    required_tick = 0
-    prev_finish_tick = 0
-    prev_point: Optional[tuple[float, float]] = None
-
-    def slider_end_point(slider: Slider) -> Tuple[float, float]:
-        end_point = (float(slider.x), float(slider.y))
-        if slider.object_params and slider.object_params.curves:
-            curve_points: List[Tuple[float, float]] = []
-            for curve in slider.object_params.curves:
-                curve_points.extend([(float(px), float(py)) for px, py in curve.curve_points])
-            if curve_points:
-                end_point = curve_points[-1]
-        if slider.object_params and slider.object_params.slides % 2 == 0:
-            end_point = (float(slider.x), float(slider.y))
-        return float(end_point[0]), float(end_point[1])
-
-    for ho in events:
-        event_time = float(getattr(ho, "time", 0.0))
-        event_tick = int(round((event_time - chunk_start_ms) / tick_ms))
-        if event_tick < 0:
-            event_tick = 0
-        event_tick = min(event_tick, chunk_end_tick - 1)
-        if event_tick < required_tick:
-            event_tick = required_tick
-        if event_tick >= chunk_cutoff_tick:
-            break
-        snapped_time = chunk_start_ms + event_tick * tick_ms
-        if abs(event_time - snapped_time) > tick_tolerance_ms:
-            continue
-        delta_ticks = max(0, min(event_tick - prev_finish_tick, tokenizer.max_delta_ticks))
-        start_point = (float(getattr(ho, "x", 0.0)), float(getattr(ho, "y", 0.0)))
-        if isinstance(ho, Slider):
-            end_point = slider_end_point(ho)
-        else:
-            end_point = start_point
-
-        if prev_point is None:
-            dist = 0.0
-            angle = 0.0
-        else:
-            dx = start_point[0] - prev_point[0]
-            dy = start_point[1] - prev_point[1]
-            dist = math.hypot(dx, dy)
-            angle = math.atan2(dy, dx)
-
-        if isinstance(ho, Circle):
-            token = tokenizer.encode_circle(float(ho.x), float(ho.y), event_tick, delta_ticks, dist, angle)
-            end_tick = event_tick
-        elif isinstance(ho, Slider):
-            duration_ms = float(getattr(getattr(ho, "object_params", None), "duration", 0.0) or 0.0)
-            duration_ticks = max(1, int(round(duration_ms / tick_ms)))
-            end_tick = event_tick + duration_ticks
-            if end_tick > chunk_end_tick:
-                break
-            sv = effective_slider_sv(beatmap, event_time)
-            token = tokenizer.encode_slider(ho, tick_duration_ms, sv, event_tick, delta_ticks, dist, angle)
-        else:
-            continue
-
-        tokens.append(token)
-        prev_finish_tick = end_tick
-        prev_point = end_point
-        required_tick = min(chunk_end_tick, end_tick + 1)
-
+    if not hit_objects:
+        return [], 0
+    tokens = tokenizer.tokenize(
+        hit_objects,
+        chunk_start_ms=chunk_start_ms,
+        tick_duration_ms=tick_duration_ms,
+        max_ticks=ticks_per_sample,
+        slider_sv_lookup=lambda slider: effective_slider_sv(beatmap, float(getattr(slider, "time", 0.0))),
+        tick_tolerance_ms=tick_tolerance_ms,
+    )
+    tokens = _limit_token_count(tokens, max(1, ticks_per_sample - 1))
     tokens.append(tokenizer.eos_token())
     token_length = min(len(tokens), ticks_per_sample)
     tokens = tokens[:token_length]
-    if tokens[-1][TokenAttr.TYPE] != TokenType.EOS:
+    if tokens and tokens[-1][TokenAttr.TYPE] != TokenType.EOS:
         tokens[-1] = tokenizer.eos_token()
     while len(tokens) < ticks_per_sample:
         tokens.append(tokenizer.pad_token())
     return tokens, token_length
 
 
-def decode_token(tokenizer: HitObjectTokenizer, token: Sequence[int]) -> dict:
-    decoded = tokenizer.decode_token(token)
-    return decoded
-
-
 def summarize_token(tokenizer: HitObjectTokenizer, token: Sequence[int]) -> str:
     ttype = token[TokenAttr.TYPE]
     if ttype == TokenType.EOS:
         return "EOS"
+    tick = tokenizer.tick_from_id(token[TokenAttr.TICK])
     if ttype == TokenType.CIRCLE:
-        tick = tokenizer.tick_from_id(token[TokenAttr.TICK])
-        delta = tokenizer.delta_from_id(token[TokenAttr.DELTA])
-        return (
-            f"CIRCLE tick={tick} Δ={delta} "
-            f"D={token[TokenAttr.DISTANCE]} A={token[TokenAttr.ANGLE]} "
-            f"start=({token[TokenAttr.START_X]},{token[TokenAttr.START_Y]})"
-        )
+        x = tokenizer.coord_from_id(token[TokenAttr.X])
+        y = tokenizer.coord_from_id(token[TokenAttr.Y])
+        return f"CIRCLE tick={tick} pos=({x},{y})"
     if ttype == TokenType.SLIDER:
-        tick = tokenizer.tick_from_id(token[TokenAttr.TICK])
-        delta = tokenizer.delta_from_id(token[TokenAttr.DELTA])
+        duration = token[TokenAttr.DURATION] - 1
+        slides = token[TokenAttr.SLIDES] - 1
+        curve = token[TokenAttr.CURVE_TYPE]
+        sv = token[TokenAttr.SLIDER_SV]
+        x = tokenizer.coord_from_id(token[TokenAttr.X])
+        y = tokenizer.coord_from_id(token[TokenAttr.Y])
         return (
             "SLIDER "
-            f"tick={tick} Δ={delta} "
-            f"D={token[TokenAttr.DISTANCE]} "
-            f"A={token[TokenAttr.ANGLE]} "
-            f"start=({token[TokenAttr.START_X]},{token[TokenAttr.START_Y]}) "
-            f"end=({token[TokenAttr.END_X]},{token[TokenAttr.END_Y]}) "
-            f"dur={token[TokenAttr.DURATION]} slides={token[TokenAttr.SLIDES]} "
-            f"sv={token[TokenAttr.SLIDER_SV]}"
+            f"tick={tick} pos=({x},{y}) "
+            f"dur_ticks={duration} slides={slides} curve={curve} sv={sv}"
         )
+    if ttype == TokenType.SLIDER_PATH:
+        x = tokenizer.coord_from_id(token[TokenAttr.X])
+        y = tokenizer.coord_from_id(token[TokenAttr.Y])
+        return f"SLIDER_PATH tick={tick} pos=({x},{y})"
     return f"UNKNOWN type={ttype}"
 
 
@@ -189,39 +149,39 @@ def main() -> None:
     beatmap = Beatmap(file_path=str(osu_path))
 
     bpm, offset = get_primary_bpm_and_offset(beatmap, data_cfg.get("default_bpm", 120.0))
-    beats_per_sample = data_cfg.get("beats_per_sample", 16)
-    ticks_per_beat = data_cfg.get("ticks_per_beat", 8)
-    sample_hop_beats = data_cfg.get("sample_hop_beats", max(1, beats_per_sample // 2))
-    ticks_per_sample = beats_per_sample * ticks_per_beat
+    context_beats = data_cfg.get("context_beats", 8)
+    target_beats = data_cfg.get("target_beats", 16)
+    total_beats = context_beats + target_beats
+    ticks_per_beat = data_cfg.get("ticks_per_beat", 4)
+    sample_hop_beats = data_cfg.get("sample_hop_beats", target_beats)
+    ticks_per_sample = total_beats * ticks_per_beat
 
     beat_duration_ms = 60000.0 / max(bpm, 1e-3)
-    chunk_duration_ms = beats_per_sample * beat_duration_ms
+    chunk_duration_ms = total_beats * beat_duration_ms
     sample_hop_ms = sample_hop_beats * beat_duration_ms
     tick_duration_ms = beat_duration_ms / ticks_per_beat
-    tick_tolerance_ms = float(data_cfg.get("tick_tolerance_ms", 3.0))
 
-    start = max(0.0, offset) + args.chunk_index * sample_hop_ms
-    end = start + chunk_duration_ms
-    hit_objects = filter_hit_objects(getattr(beatmap, "hit_objects", []), start, end)
+    chunk_index = max(0, args.chunk_index)
+    chunk_start = max(0.0, offset) + chunk_index * sample_hop_ms
+    chunk_end = chunk_start + chunk_duration_ms
 
-    print(f"[INFO] BPM={bpm:.2f}, offset={offset:.2f} ms")
-    print(f"[INFO] Chunk {args.chunk_index}: start={start:.2f} ms, end={end:.2f} ms")
-    print(f"[INFO] Hit objects in window: {len(hit_objects)} (total map: {len(getattr(beatmap, 'hit_objects', []))})")
-
+    hit_objects = filter_hit_objects(getattr(beatmap, "hit_objects", []), chunk_start, chunk_end)
     tokens, token_length = encode_chunk_tokens(
-        beatmap, hit_objects, start, ticks_per_sample, tick_duration_ms, tokenizer, tick_tolerance_ms
+        beatmap,
+        hit_objects,
+        chunk_start,
+        ticks_per_sample,
+        tick_duration_ms,
+        tokenizer,
+        tick_tolerance_ms=float(data_cfg.get("tick_tolerance_ms", 10.0)),
     )
-    decoded = [decode_token(tokenizer, token) for token in tokens[:token_length]]
 
-    current_tick = 0
-    for idx, (raw, dec) in enumerate(zip(tokens, decoded)):
-        tick_idx = int(dec.get("tick_index", 0))
-        current_tick = tick_idx
-        current_time = start + current_tick * tick_duration_ms
-        summary = summarize_token(tokenizer, raw)
-        print(f"[IDX {idx:03d} | t={current_time:.2f} ms] {summary} -> {dec}")
-        if dec["type"] == TokenType.EOS and not args.print_empty:
-            break
+    print(f"Chunk #{chunk_index} | start={chunk_start:.2f}ms end={chunk_end:.2f}ms | tokens={token_length}")
+    for idx, token in enumerate(tokens):
+        summary = summarize_token(tokenizer, token)
+        if not summary and not args.print_empty:
+            continue
+        print(f"[{idx:03d}] {summary}")
 
 
 if __name__ == "__main__":

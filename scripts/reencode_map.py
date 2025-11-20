@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.data.tokenizer import HitObjectTokenizer, TokenAttr, TokenType
-from src.osu import Beatmap, Circle, Slider
+from src.osu import Beatmap, Slider
 from src.utils.config import load_config
 
 
@@ -77,6 +77,32 @@ def effective_slider_sv(beatmap: Beatmap, time_ms: float) -> float:
     return max(1e-3, base_sv * sv_mult)
 
 
+def _limit_token_count(tokens: List[List[int]], limit: int) -> List[List[int]]:
+    if limit <= 0:
+        return []
+    trimmed: List[List[int]] = []
+    idx = 0
+    while idx < len(tokens) and len(trimmed) < limit:
+        token = tokens[idx]
+        token_type = token[TokenAttr.TYPE]
+        if token_type == TokenType.SLIDER:
+            group_end = idx + 1
+            while group_end < len(tokens) and tokens[group_end][TokenAttr.TYPE] == TokenType.SLIDER_PATH:
+                group_end += 1
+            group_size = group_end - idx
+            if len(trimmed) + group_size > limit:
+                break
+            trimmed.extend(tokens[idx:group_end])
+            idx = group_end
+            continue
+        if token_type == TokenType.SLIDER_PATH:
+            idx += 1
+            continue
+        trimmed.append(token)
+        idx += 1
+    return trimmed
+
+
 def encode_tokens(
     beatmap: Beatmap,
     tokenizer: HitObjectTokenizer,
@@ -90,72 +116,15 @@ def encode_tokens(
     min_time = min(float(getattr(ho, "time", 0.0)) for ho in hit_objects)
     max_time = max(float(getattr(ho, "time", 0.0)) for ho in hit_objects)
 
-    tokens: List[List[int]] = []
-    tick_ms = max(1e-6, tick_duration_ms)
-    max_tick = tokenizer.seq_len
-    required_tick = 0
-    prev_finish_tick = 0
-    prev_point: Optional[Tuple[float, float]] = None
-
-    def slider_end_point(slider: Slider) -> Tuple[float, float]:
-        end_point = (float(slider.x), float(slider.y))
-        if slider.object_params and slider.object_params.curves:
-            curve_points: List[Tuple[float, float]] = []
-            for curve in slider.object_params.curves:
-                curve_points.extend([(float(px), float(py)) for px, py in curve.curve_points])
-            if curve_points:
-                end_point = curve_points[-1]
-        if slider.object_params and slider.object_params.slides % 2 == 0:
-            end_point = (float(slider.x), float(slider.y))
-        return float(end_point[0]), float(end_point[1])
-
-    for ho in hit_objects:
-        event_time = float(getattr(ho, "time", 0.0))
-        event_tick = int(round((event_time - base_time) / tick_ms))
-        if event_tick < 0:
-            event_tick = 0
-        event_tick = min(event_tick, max_tick - 1)
-        if event_tick < required_tick:
-            event_tick = required_tick
-        snapped_time = base_time + event_tick * tick_ms
-        if abs(event_time - snapped_time) > tick_tolerance_ms:
-            continue
-        delta_ticks = max(0, min(event_tick - prev_finish_tick, tokenizer.max_delta_ticks))
-
-        start_point = (float(getattr(ho, "x", 0.0)), float(getattr(ho, "y", 0.0)))
-        if isinstance(ho, Slider):
-            end_point = slider_end_point(ho)
-        else:
-            end_point = start_point
-
-        if prev_point is None:
-            dist = 0.0
-            angle = 0.0
-        else:
-            dx = start_point[0] - prev_point[0]
-            dy = start_point[1] - prev_point[1]
-            dist = math.hypot(dx, dy)
-            angle = math.atan2(dy, dx)
-
-        if isinstance(ho, Circle):
-            token = tokenizer.encode_circle(float(ho.x), float(ho.y), event_tick, delta_ticks, dist, angle)
-            end_tick = event_tick
-        elif isinstance(ho, Slider):
-            duration_ms = float(getattr(getattr(ho, "object_params", None), "duration", 0.0) or 0.0)
-            duration_ticks = max(1, int(round(duration_ms / tick_ms)))
-            end_tick = event_tick + duration_ticks
-            if end_tick > max_tick:
-                break
-            sv = effective_slider_sv(beatmap, event_time)
-            token = tokenizer.encode_slider(ho, tick_duration_ms, sv, event_tick, delta_ticks, dist, angle)
-        else:
-            continue
-
-        tokens.append(token)
-        prev_finish_tick = end_tick
-        prev_point = end_point
-        required_tick = min(max_tick, end_tick + 1)
-
+    tokens = tokenizer.tokenize(
+        hit_objects,
+        chunk_start_ms=base_time,
+        tick_duration_ms=tick_duration_ms,
+        max_ticks=tokenizer.seq_len,
+        slider_sv_lookup=lambda slider: effective_slider_sv(beatmap, float(getattr(slider, "time", 0.0))),
+        tick_tolerance_ms=tick_tolerance_ms,
+    )
+    tokens = _limit_token_count(tokens, max(1, tokenizer.seq_len - 1))
     tokens.append(tokenizer.eos_token())
     return tokens, min_time, max_time
 
@@ -174,81 +143,73 @@ def decode_tokens(
     data_cfg: dict,
     suppress_overlaps: bool = True,
 ) -> List[dict]:
-    events: List[dict] = []
     width = data_cfg["osu_width"]
     height = data_cfg["osu_height"]
-    beat_duration_ms = tick_duration_ms * data_cfg.get("ticks_per_beat", 8)
-    blocked_until = float("-inf")
-
+    beat_duration_ms = tick_duration_ms * data_cfg.get("ticks_per_beat", 4)
     length_mode = (data_cfg.get("slider_length_rounding_mode") or "exact").lower()
     if length_mode not in ("exact", "round", "floor", "ceil", "custom"):
         length_mode = "exact"
     length_threshold = float(data_cfg.get("slider_length_rounding_threshold", 0.5) or 0.5)
     length_threshold = max(0.0, min(1.0, length_threshold))
 
-    current_tick = 0
-    for token in tokens:
-        decoded = tokenizer.decode_token(token)
-        token_type = decoded["type"]
-        if token_type == TokenType.EOS:
-            break
-        start_x = _clamp_coord(decoded.get("start_x"), width)
-        start_y = _clamp_coord(decoded.get("start_y"), height)
-        if start_x is None or start_y is None:
-            continue
-        tick_idx = decoded.get("tick_index")
-        if tick_idx is None:
-            continue
-        current_tick += max(0, int(tick_idx))
-        current_time = base_time + current_tick * tick_duration_ms
-        time_ms = int(round(current_time))
-        if suppress_overlaps and time_ms < blocked_until:
-            continue
-
-        if token_type == TokenType.CIRCLE:
-            events.append({"type": "circle", "time": time_ms, "x": start_x, "y": start_y, "end_time": time_ms})
+    detok_events = tokenizer.detokenize(
+        tokens,
+        chunk_start_ms=base_time,
+        tick_duration_ms=tick_duration_ms,
+        cutoff_tick=tokenizer.seq_len,
+    )
+    events: List[dict] = []
+    blocked_until = float("-inf")
+    for event in detok_events:
+        time_ms = int(round(float(event.get("time", 0.0))))
+        if event.get("type") == "circle":
+            x = _clamp_coord(event.get("x"), width)
+            y = _clamp_coord(event.get("y"), height)
+            if x is None or y is None:
+                continue
+            if suppress_overlaps and time_ms < blocked_until:
+                continue
+            events.append({"type": "circle", "time": time_ms, "x": x, "y": y, "end_time": time_ms})
             if suppress_overlaps:
                 blocked_until = max(blocked_until, time_ms + tick_duration_ms)
             continue
 
-        end_x = _clamp_coord(decoded.get("end_x"), width)
-        end_y = _clamp_coord(decoded.get("end_y"), height)
-        if end_x is None or end_y is None:
+        if event.get("type") != "slider":
             continue
-
-        points: List[Tuple[int, int]] = []
-        ctrl1_x = _clamp_coord(decoded.get("ctrl1_x"), width)
-        ctrl1_y = _clamp_coord(decoded.get("ctrl1_y"), height)
-        ctrl2_x = _clamp_coord(decoded.get("ctrl2_x"), width)
-        ctrl2_y = _clamp_coord(decoded.get("ctrl2_y"), height)
-        if ctrl1_x is not None and ctrl1_y is not None:
-            points.append((ctrl1_x, ctrl1_y))
-        if ctrl2_x is not None and ctrl2_y is not None:
-            points.append((ctrl2_x, ctrl2_y))
-        points.append((end_x, end_y))
-
-        duration_ticks = decoded.get("duration_ticks", 0)
+        x = _clamp_coord(event.get("x"), width)
+        y = _clamp_coord(event.get("y"), height)
+        if x is None or y is None:
+            continue
+        duration_ticks = max(0, int(event.get("duration_ticks", 0)))
         if duration_ticks <= 0:
             continue
-
         duration_ms = duration_ticks * tick_duration_ms
-        slides = max(1, int(decoded.get("slides", 1)))
-        sv_factor = decoded.get("sv_factor") or 1.0
-        slider_length = duration_ms * sv_factor * 100.0 / (beat_duration_ms * slides)
+        slides = max(1, int(event.get("slides", 1)))
+        sv_factor = float(event.get("sv") or event.get("sv_factor") or 1.0)
+        curve_type = event.get("curve_type") or "L"
+        points: List[Tuple[int, int]] = []
+        for px, py in event.get("points", []):
+            cx = _clamp_coord(px, width)
+            cy = _clamp_coord(py, height)
+            if cx is not None and cy is not None:
+                points.append((cx, cy))
+        if not points:
+            continue
+        slider_length = duration_ms * sv_factor * 100.0 / (max(beat_duration_ms, 1e-3) * slides)
         slider_length = max(5.0, slider_length)
         slider_length = _quantize_slider_length(float(slider_length), length_mode, length_threshold)
-        slider_length = float(slider_length)
-
+        if suppress_overlaps and time_ms < blocked_until:
+            continue
         events.append(
             {
                 "type": "slider",
                 "time": time_ms,
-                "x": start_x,
-                "y": start_y,
-                "curve_type": decoded.get("curve_type") or "L",
+                "x": x,
+                "y": y,
+                "curve_type": curve_type,
                 "points": points,
                 "slides": slides,
-                "length": slider_length,
+                "length": float(slider_length),
                 "sv_factor": float(sv_factor),
                 "end_time": time_ms + int(round(duration_ms)),
             }
