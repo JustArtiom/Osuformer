@@ -17,7 +17,7 @@ data:
   distance_bin_size: 8.0
   max_distance: null
   angle_bins: 72
-  prep_num_workers: 4
+  prep_num_workers: 1
   max_frames_per_sample: 4096
   normalize_audio: true
   skip_empty_chunks: true
@@ -45,9 +45,9 @@ data:
 filters:
   min_bpm: 80
   max_bpm: 300
-  min_star_rating: 5
-  max_star_rating: 7.5
-  min_rating: 6.5
+  min_star_rating: 5.5
+  max_star_rating: 6.5
+  min_rating: null
   max_rating: null
   require_constant_bpm: true
   require_tick_alignment: true
@@ -75,13 +75,13 @@ model:
     dropout: 0.1
 
 training:
-  batch_size: 36
+  batch_size: 40
   lr: 0.00001
   num_epochs: 300
   device: "cuda"
   path: "checkpoints/"
   val_split: 0.2
-  num_workers: 5
+  num_workers: 1
   weight_decay: 0.0001
   grad_clip: 1.0
   use_amp: true
@@ -91,6 +91,6 @@ training:
     backend: "nccl"
 
 paths:
-  data: "/beegfs/general/ac23ac/dataset"
+  data: "/beegfs/general/ac23acn/dataset"
   include: ["*.osu", "*.wav", "*.mp3", "*.ogg", "*.flac"]
   exclude: ["_*", ]
