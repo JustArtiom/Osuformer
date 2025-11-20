@@ -32,6 +32,27 @@ from src.training import TrainingSession
 from src.utils.config import load_config
 
 
+def log_dataset_summary(dataset: OsuBeatmapDataset, split: str) -> None:
+    sample_count = len(dataset)
+    tokenizer = getattr(dataset, "tokenizer", None)
+    attr_sizes = getattr(tokenizer, "attribute_sizes", []) if tokenizer else []
+    print(
+        f"[INFO] Dataset[{split}] samples={sample_count} ticks_per_sample={dataset.seq_len} "
+        f"context_beats={dataset.context_beats} target_beats={dataset.target_beats}"
+    )
+    print(
+        f"[INFO] Dataset[{split}] tokenizer attr_sizes={attr_sizes} sequence_len={getattr(tokenizer, 'seq_len', 'n/a')}"
+    )
+    if dataset.samples:
+        descriptor = dataset.samples[0]
+        print(
+            f"[INFO] Sample[{split}] audio_frames={descriptor.frames_per_chunk} "
+            f"token_len={descriptor.token_length} loss_mask_shape={descriptor.loss_mask.shape}"
+        )
+    else:
+        print(f"[INFO] Dataset[{split}] has no cached samples yet.")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train the osu! beatmap generator model.")
     parser.add_argument("--config", type=str, default="config.yaml", help="Path to the config file.")
@@ -91,7 +112,6 @@ def run_epoch(
     amp_enabled: bool = False,
     scaler: Optional[torch.amp.GradScaler] = None,
     class_weights: Optional[Dict[str, float]] = None,
-    spatial_loss_weight: float = 0.0,
     is_main_process: bool = True,
     distributed: bool = False,
 ) -> Dict[str, float]:
@@ -110,7 +130,7 @@ def run_epoch(
         disable=not is_main_process,
     )
     data_start = time.perf_counter()
-    for batch in iterator:
+    for batch_idx, batch in enumerate(iterator):
         now = time.perf_counter()
         data_elapsed = now - data_start
         total_data_time += data_elapsed
@@ -120,9 +140,7 @@ def run_epoch(
         tokens = batch["tokens"].to(device)
         audio_mask = batch["audio_mask"].to(device)
         token_mask = batch["token_mask"].to(device)
-        spatial_targets = batch.get("spatial_targets")
-        if spatial_targets is not None:
-            spatial_targets = spatial_targets.to(device)
+        loss_mask = batch["loss_mask"].to(device)
 
         if amp_enabled:
             autocast_ctx = torch.amp.autocast("cuda")
@@ -130,8 +148,8 @@ def run_epoch(
             autocast_ctx = nullcontext()
 
         with autocast_ctx:
-            attr_logits, spatial_pred = model(audio, audio_mask, tokens, token_mask)
-            valid_mask = ~token_mask
+            attr_logits = model(audio, audio_mask, tokens, token_mask)
+            valid_mask = (~token_mask) & loss_mask
             type_targets = tokens[..., TokenAttr.TYPE]
 
             attr_losses: List[torch.Tensor] = []
@@ -139,19 +157,9 @@ def run_epoch(
                 target = tokens[..., attr_idx]
                 if attr_idx == TokenAttr.TYPE:
                     attr_mask = valid_mask
-                elif attr_idx == TokenAttr.TICK:
-                    attr_mask = valid_mask
-                elif attr_idx == TokenAttr.DELTA:
-                    attr_mask = valid_mask & (type_targets != TokenType.EOS)
-                elif attr_idx in (TokenAttr.START_X, TokenAttr.START_Y):
+                elif attr_idx in (TokenAttr.TICK, TokenAttr.X, TokenAttr.Y):
                     attr_mask = valid_mask & (type_targets != TokenType.EOS)
                 elif attr_idx in (
-                    TokenAttr.END_X,
-                    TokenAttr.END_Y,
-                    TokenAttr.CTRL1_X,
-                    TokenAttr.CTRL1_Y,
-                    TokenAttr.CTRL2_X,
-                    TokenAttr.CTRL2_Y,
                     TokenAttr.DURATION,
                     TokenAttr.SLIDES,
                     TokenAttr.CURVE_TYPE,
@@ -169,7 +177,7 @@ def run_epoch(
                 flat_target = target.view(-1)
                 kwargs = {}
                 if attr_idx == TokenAttr.TYPE:
-                    counts = torch.bincount(flat_target, minlength=3).float()
+                    counts = torch.bincount(flat_target, minlength=4).float()
                     total = counts.sum().clamp_min(1.0)
                     freq = counts / total
                     empty_freq = freq[TokenType.EOS].clamp_min(1e-6)
@@ -181,7 +189,7 @@ def run_epoch(
                     weight_circle *= ratio
                     weight_slider *= ratio
                     weights = torch.tensor(
-                        [weight_empty, weight_circle, weight_slider],
+                        [weight_empty, weight_circle, weight_slider, weight_slider],
                         device=device,
                         dtype=torch.float32,
                     )
@@ -203,15 +211,6 @@ def run_epoch(
             else:
                 loss = torch.stack(attr_losses).mean()
 
-            spatial_loss = torch.tensor(0.0, device=device)
-            spatial_weight = spatial_loss_weight
-            if spatial_weight > 0 and spatial_pred is not None and spatial_targets is not None:
-                spatial_mask = valid_mask & (type_targets != TokenType.EOS)
-                mask = spatial_mask.unsqueeze(-1).float()
-                diff = spatial_pred - spatial_targets
-                denom = mask.sum().clamp_min(1.0)
-                spatial_loss = (diff.pow(2) * mask).sum() / denom
-                loss = loss + spatial_weight * spatial_loss
 
         if is_train:
             optimizer.zero_grad()
@@ -354,6 +353,9 @@ def main() -> None:
 
     train_dataset = OsuBeatmapDataset(config, split="train", osu_files=train_files, cache_path=train_cache)
     val_dataset = OsuBeatmapDataset(config, split="val", osu_files=val_files, cache_path=val_cache)
+    if is_main_process:
+        log_dataset_summary(train_dataset, "train")
+        log_dataset_summary(val_dataset, "val")
 
     train_sampler = (
         DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=True)
@@ -461,7 +463,6 @@ def main() -> None:
             amp_enabled=use_amp,
             scaler=scaler,
             class_weights=config["data"].get("class_weights"),
-            spatial_loss_weight=training_cfg.get("spatial_loss_weight", 0.0),
             is_main_process=is_main_process,
             distributed=distributed_enabled,
         )
@@ -474,7 +475,6 @@ def main() -> None:
             amp_enabled=use_amp,
             scaler=None,
             class_weights=config["data"].get("class_weights"),
-            spatial_loss_weight=training_cfg.get("spatial_loss_weight", 0.0),
             is_main_process=is_main_process,
             distributed=distributed_enabled,
         )

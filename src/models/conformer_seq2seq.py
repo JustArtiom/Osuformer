@@ -182,8 +182,6 @@ class HitObjectDecoder(nn.Module):
         self.positional_encoding = PositionalEncoding(d_model, dropout)
         self.bos = nn.Parameter(torch.zeros(d_model))
         self.attr_heads = nn.ModuleList([nn.Linear(d_model, size) for size in self.attr_sizes])
-        self.distance_head = nn.Linear(d_model, 1)
-        self.angle_head = nn.Linear(d_model, 2)
 
     def _causal_mask(self, size: int, device: torch.device) -> torch.Tensor:
         mask = torch.triu(torch.ones(size, size, device=device), diagonal=1).bool()
@@ -228,10 +226,7 @@ class HitObjectDecoder(nn.Module):
                 temp = max(temperature, 1e-4)
                 logits = logits / temp
             logits_list.append(logits)
-        distance_pred = torch.sigmoid(self.distance_head(decoded))
-        angle_pred = torch.tanh(self.angle_head(decoded))
-        spatial_pred = torch.cat([distance_pred, angle_pred], dim=-1)
-        return logits_list, spatial_pred
+        return logits_list
 
 
 class ConformerSeq2Seq(nn.Module):
@@ -240,12 +235,9 @@ class ConformerSeq2Seq(nn.Module):
         encoder_cfg = config["model"]["encoder"]
         decoder_cfg = config["model"]["decoder"]
         data_cfg = config["data"]
+        audio_cfg = config["audio"]
 
-        input_dim = data_cfg["n_mels"]
-        if data_cfg.get("use_bpm_feature"):
-            input_dim += 1
-        if data_cfg.get("use_rms_feature"):
-            input_dim += 1
+        input_dim = audio_cfg["n_mels"]
 
         self.encoder = ConformerEncoder(
             input_dim=input_dim,
@@ -260,7 +252,10 @@ class ConformerSeq2Seq(nn.Module):
         self.data_cfg_snapshot = data_cfg.copy()
         self.tokenizer = HitObjectTokenizer(data_cfg)
         self.attr_sizes = self.tokenizer.attribute_sizes
-        self.seq_len = data_cfg.get("beats_per_sample", 16) * data_cfg.get("ticks_per_beat", 8)
+        context_beats = data_cfg.get("context_beats", 8)
+        target_beats = data_cfg.get("target_beats", 16)
+        ticks_per_beat = data_cfg.get("ticks_per_beat", 4)
+        self.seq_len = (context_beats + target_beats) * ticks_per_beat
 
         self.decoder = HitObjectDecoder(
             d_model=encoder_cfg["d_model"],
@@ -282,65 +277,62 @@ class ConformerSeq2Seq(nn.Module):
         memory = self.encoder(audio, audio_mask)
         if targets is None:
             raise ValueError("Targets are required for training forward pass")
-        attr_logits, spatial_pred = self.decoder(memory, audio_mask, targets, target_mask, temperature=temperature)
-        return attr_logits, spatial_pred
+        attr_logits = self.decoder(memory, audio_mask, targets, target_mask, temperature=temperature)
+        return attr_logits
 
     @torch.no_grad()
     def generate(
         self,
         audio: torch.Tensor,
         audio_mask: Optional[torch.Tensor],
+        prompt: Optional[torch.Tensor] = None,
         max_steps: Optional[int] = None,
         temperature: float = 1.0,
     ) -> torch.Tensor:
         self.eval()
         memory = self.encoder(audio, audio_mask)
         batch_size = audio.size(0)
-        max_steps = max_steps or self.seq_len
-
         attr_count = TokenAttr.COUNT
-        generated = torch.zeros(batch_size, 1, attr_count, device=audio.device, dtype=torch.long)
+        if prompt is not None:
+            prompt = prompt.to(audio.device)
+            generated = prompt.clone()
+            prompt_len = prompt.size(1)
+        else:
+            generated = torch.zeros(batch_size, 0, attr_count, device=audio.device, dtype=torch.long)
+            prompt_len = 0
+
+        total_limit = self.seq_len
+        remaining = total_limit - prompt_len
+        if max_steps is not None:
+            remaining = min(remaining, int(max_steps))
+        remaining = max(0, remaining)
+
         outputs: List[torch.Tensor] = []
         finished = torch.zeros(batch_size, dtype=torch.bool, device=audio.device)
 
-        for _ in range(max_steps):
-            logits_list, _ = self.decoder(memory, audio_mask, generated, None, temperature=temperature)
-            type_logits = logits_list[TokenAttr.TYPE][:, -1, :]
-            type_probs = F.softmax(type_logits, dim=-1)
-            type_sample = torch.multinomial(type_probs, num_samples=1).squeeze(-1)
-            assembled = torch.zeros(batch_size, attr_count, device=audio.device, dtype=torch.long)
-            assembled[:, TokenAttr.TYPE] = type_sample
+        for _ in range(remaining):
+            placeholder = torch.zeros(batch_size, 1, attr_count, device=audio.device, dtype=torch.long)
+            decoder_input = torch.cat([generated, placeholder], dim=1)
+            logits_list = self.decoder(memory, audio_mask, decoder_input, None, temperature=temperature)
 
+            assembled = torch.zeros(batch_size, attr_count, device=audio.device, dtype=torch.long)
             for attr_idx, logits in enumerate(logits_list):
-                if attr_idx == TokenAttr.TYPE:
-                    continue
                 attr_logits = logits[:, -1, :]
-                attr_probs = F.softmax(attr_logits, dim=-1)
-                attr_sample = torch.multinomial(attr_probs, num_samples=1).squeeze(-1)
-                assembled[:, attr_idx] = attr_sample
+                probs = F.softmax(attr_logits, dim=-1)
+                sample = torch.multinomial(probs, num_samples=1).squeeze(-1)
+                assembled[:, attr_idx] = sample
 
             token_type = assembled[:, TokenAttr.TYPE]
             eos_mask = token_type == TokenType.EOS
-            circle_mask = token_type == TokenType.CIRCLE
             slider_mask = token_type == TokenType.SLIDER
 
             assembled[:, TokenAttr.TICK] = torch.clamp(
                 assembled[:, TokenAttr.TICK], min=1, max=self.seq_len + 1
             )
-            assembled[:, TokenAttr.DELTA] = torch.clamp(assembled[:, TokenAttr.DELTA], min=1)
+            assembled[~slider_mask, TokenAttr.DURATION :] = 0
             if eos_mask.any():
                 assembled[eos_mask, TokenAttr.TICK :] = 0
-            if circle_mask.any():
-                assembled[circle_mask, TokenAttr.END_X :] = 0
-            if slider_mask.any():
-                assembled[slider_mask, TokenAttr.DURATION] = torch.clamp(
-                    assembled[slider_mask, TokenAttr.DURATION], min=1
-                )
-                assembled[slider_mask, TokenAttr.SLIDES] = torch.clamp(
-                    assembled[slider_mask, TokenAttr.SLIDES], min=1
-                )
-            else:
-                assembled[~slider_mask, TokenAttr.END_X :] = 0
+
             outputs.append(assembled)
             generated = torch.cat([generated, assembled.unsqueeze(1)], dim=1)
             finished |= eos_mask

@@ -32,10 +32,9 @@ class SampleDescriptor:
     frames_per_chunk: int
     token_length: int
     tokens: np.ndarray
+    loss_mask: np.ndarray
     frame_stride: int = 1
     raw_frames: int = 0
-    bpm_feature: float = 0.0
-    spatial_targets: Optional[np.ndarray] = None
 
 
 def collect_osu_file_paths(paths_cfg: dict) -> List[Path]:
@@ -101,24 +100,24 @@ class OsuBeatmapDataset(Dataset):
         self.config = config
         self.split = split
         self.data_cfg = config["data"]
+        self.audio_cfg = config["audio"]
         self.filters_cfg = config.get("filters", {})
         self.training_cfg = config["training"]
         self.paths_cfg = config["paths"]
 
         self.base_path = Path(self.paths_cfg["data"])
-        self.beats_per_sample = self.data_cfg.get("beats_per_sample", 16)
-        self.ticks_per_beat = self.data_cfg.get("ticks_per_beat", 8)
-        self.sample_hop_beats = self.data_cfg.get("sample_hop_beats", max(1, self.beats_per_sample // 2))
-        self.seq_len = self.beats_per_sample * self.ticks_per_beat
-        self.normalize_audio = self.data_cfg.get("normalize_audio", True)
-        self.skip_empty = self.data_cfg.get("skip_empty_chunks", False)
+        self.ticks_per_beat = int(self.data_cfg.get("ticks_per_beat", 4))
+        self.context_beats = int(self.data_cfg.get("context_beats", 8))
+        self.target_beats = int(self.data_cfg.get("target_beats", 16))
+        self.total_beats = self.context_beats + self.target_beats
+        self.sample_hop_beats = int(self.data_cfg.get("sample_hop_beats", self.target_beats))
+        self.sample_hop_beats = max(1, self.sample_hop_beats)
+        self.seq_len = self.total_beats * self.ticks_per_beat
+        self.context_ticks = self.context_beats * self.ticks_per_beat
+        self.target_ticks = self.target_beats * self.ticks_per_beat
+        self.normalize_audio = bool(self.audio_cfg.get("normalize_audio", True))
+        self.skip_empty = bool(self.audio_cfg.get("skip_empty_chunks", False))
         self.tick_tolerance_ms = float(self.data_cfg.get("tick_tolerance_ms", 3.0))
-        self.use_bpm_feature = bool(self.data_cfg.get("use_bpm_feature", False))
-        self.bpm_normalization = float(self.data_cfg.get("bpm_normalization", 300.0) or 1.0)
-        self.use_rms_feature = bool(self.data_cfg.get("use_rms_feature", False))
-        self.max_distance_value = float(
-            self.data_cfg.get("max_distance") or math.hypot(self.data_cfg["osu_width"], self.data_cfg["osu_height"])
-        )
         self.require_constant_bpm = bool(self._filter_value("require_constant_bpm", False))
         self.require_tick_alignment = bool(self._filter_value("require_tick_alignment", False))
         self.map_types = {mt.lower() for mt in (self._filter_value("map_types", []) or [])}
@@ -202,7 +201,7 @@ class OsuBeatmapDataset(Dataset):
 
     def _compute_frame_stride(self, frames: int) -> Tuple[int, int]:
         frames = max(1, frames)
-        max_frames = self.data_cfg.get("max_frames_per_sample")
+        max_frames = self.audio_cfg.get("max_frames_per_sample")
         if not max_frames or max_frames <= 0 or frames <= max_frames:
             return 1, frames
         stride = int(math.ceil(frames / max_frames))
@@ -271,16 +270,12 @@ class OsuBeatmapDataset(Dataset):
         bpm, offset_ms = self._get_primary_bpm_and_offset(beatmap)
         if bpm <= 0:
             bpm = self.data_cfg.get("default_bpm", 120.0)
-        bpm_feature_value = 0.0
-        if self.use_bpm_feature:
-            norm = self.bpm_normalization if self.bpm_normalization != 0 else 1.0
-            bpm_feature_value = float(bpm) / norm
         if self.require_tick_alignment and not self._aligned_to_tick_grid(beatmap, bpm, offset_ms):
             return []
 
         ticks_per_sample = self.seq_len
         beat_duration_ms = 60000.0 / max(bpm, 1e-3)
-        chunk_duration_ms = self.beats_per_sample * beat_duration_ms
+        chunk_duration_ms = self.total_beats * beat_duration_ms
         sample_hop_ms = self.sample_hop_beats * beat_duration_ms
         tick_duration_ms = beat_duration_ms / self.ticks_per_beat
         raw_frames_per_chunk = max(1, int(round(chunk_duration_ms / spec.frame_duration_ms)))
@@ -313,7 +308,7 @@ class OsuBeatmapDataset(Dataset):
             if encoded is None:
                 current_start += sample_hop_ms
                 continue
-            tokens, token_length, spatial_targets = encoded
+            tokens, token_length, loss_mask = encoded
 
             start_frame = int(round(current_start / spec.frame_duration_ms))
             descriptors.append(
@@ -325,8 +320,7 @@ class OsuBeatmapDataset(Dataset):
                     raw_frames=raw_frames_per_chunk,
                     token_length=token_length,
                     tokens=np.asarray(tokens, dtype=np.int64),
-                    spatial_targets=spatial_targets,
-                    bpm_feature=bpm_feature_value,
+                    loss_mask=np.asarray(loss_mask, dtype=np.float32),
                 )
             )
             current_start += sample_hop_ms
@@ -341,7 +335,7 @@ class OsuBeatmapDataset(Dataset):
             )
             if encoded is None:
                 return []
-            tokens, token_length, spatial_targets = encoded
+            tokens, token_length, loss_mask = encoded
             descriptors.append(
                 SampleDescriptor(
                     audio_path=str(audio_path),
@@ -351,8 +345,7 @@ class OsuBeatmapDataset(Dataset):
                     raw_frames=raw_frames_per_chunk,
                     token_length=token_length,
                     tokens=np.asarray(tokens, dtype=np.int64),
-                    spatial_targets=spatial_targets,
-                    bpm_feature=bpm_feature_value,
+                    loss_mask=np.asarray(loss_mask, dtype=np.float32),
                 )
             )
 
@@ -525,11 +518,11 @@ class OsuBeatmapDataset(Dataset):
         if not npz_path.exists():
             prepare_audio(
                 str(apath),
-                self.data_cfg["sample_rate"],
-                self.data_cfg["hop_ms"],
-                self.data_cfg["win_ms"],
-                self.data_cfg["n_mels"],
-                self.data_cfg["n_fft"],
+                self.audio_cfg["sample_rate"],
+                self.audio_cfg["hop_ms"],
+                self.audio_cfg["win_ms"],
+                self.audio_cfg["n_mels"],
+                self.audio_cfg["n_fft"],
                 force=False,
             )
         spec = MelSpec.load_npz(str(npz_path))
@@ -634,36 +627,18 @@ class OsuBeatmapDataset(Dataset):
             events.append((float(slider.time + duration), float(end_point[0]), float(end_point[1])))
         return events
 
-    def _get_slider_end_position(self, slider: Slider) -> Tuple[float, float]:
-        end_point = (float(slider.x), float(slider.y))
-        if slider.object_params and slider.object_params.curves:
-            curve_points: List[Tuple[float, float]] = []
-            for curve in slider.object_params.curves:
-                curve_points.extend([(float(px), float(py)) for px, py in curve.curve_points])
-            if curve_points:
-                end_point = curve_points[-1]
-        if slider.object_params and slider.object_params.slides % 2 == 0:
-            end_point = (float(slider.x), float(slider.y))
-        return float(end_point[0]), float(end_point[1])
-
     def _cache_metadata(self) -> Dict[str, object]:
         return {
-            "version": 4,
+            "version": 5,
             "split": self.split,
-            "beats_per_sample": self.beats_per_sample,
+            "context_beats": self.context_beats,
+            "target_beats": self.target_beats,
             "ticks_per_beat": self.ticks_per_beat,
             "seq_len": self.seq_len,
             "attr_sizes": self.attr_sizes,
-            "use_bpm_feature": self.use_bpm_feature,
-            "bpm_normalization": self.bpm_normalization,
-            "use_rms_feature": self.use_rms_feature,
-            "distance_bin_size": self.data_cfg.get("distance_bin_size"),
-            "max_distance": self.data_cfg.get("max_distance"),
-            "angle_bins": self.data_cfg.get("angle_bins"),
             "position_bin_size": self.data_cfg.get("position_bin_size"),
             "max_slider_ticks": self.data_cfg.get("max_slider_ticks"),
             "max_slides": self.data_cfg.get("max_slides"),
-            "max_slider_control_points": self.data_cfg.get("max_slider_control_points"),
             "slider_sv_precision": self.data_cfg.get("slider_sv_precision"),
             "slider_sv_max": self.data_cfg.get("slider_sv_max"),
             "tick_tolerance_ms": self.tick_tolerance_ms,
@@ -691,11 +666,7 @@ class OsuBeatmapDataset(Dataset):
         raw_frames = np.array([desc.raw_frames for desc in self.samples], dtype=np.int32)
         token_lengths = np.array([desc.token_length for desc in self.samples], dtype=np.int32)
         tokens = np.stack([desc.tokens for desc in self.samples], axis=0).astype(np.int32)
-        bpm_features = np.array([desc.bpm_feature for desc in self.samples], dtype=np.float32)
-        spatial_targets = np.stack(
-            [desc.spatial_targets if desc.spatial_targets is not None else np.zeros((self.seq_len, 3), dtype=np.float32) for desc in self.samples],
-            axis=0,
-        ).astype(np.float32)
+        loss_masks = np.stack([desc.loss_mask for desc in self.samples], axis=0).astype(np.float32)
         np.savez_compressed(
             path,
             meta=np.array(meta),
@@ -706,8 +677,7 @@ class OsuBeatmapDataset(Dataset):
             raw_frames=raw_frames,
             token_lengths=token_lengths,
             tokens=tokens,
-            bpm_features=bpm_features,
-            spatial_targets=spatial_targets,
+            loss_masks=loss_masks,
         )
 
     def _load_cache(self, path: Path) -> None:
@@ -724,12 +694,9 @@ class OsuBeatmapDataset(Dataset):
         raw_frames = data["raw_frames"]
         token_lengths = data["token_lengths"]
         tokens = data["tokens"]
-        bpm_features = data.get("bpm_features")
-        if bpm_features is None:
-            bpm_features = np.zeros(len(audio_paths), dtype=np.float32)
-        spatial_targets = data.get("spatial_targets")
-        if spatial_targets is None:
-            spatial_targets = np.zeros((len(audio_paths), self.seq_len, 3), dtype=np.float32)
+        loss_masks = data.get("loss_masks")
+        if loss_masks is None:
+            loss_masks = np.zeros((len(audio_paths), self.seq_len), dtype=np.float32)
 
         self.samples = []
         for idx, audio_path in enumerate(audio_paths):
@@ -742,8 +709,7 @@ class OsuBeatmapDataset(Dataset):
                     raw_frames=int(raw_frames[idx]),
                     token_length=int(token_lengths[idx]),
                     tokens=np.array(tokens[idx], dtype=np.int64),
-                    bpm_feature=float(bpm_features[idx]),
-                    spatial_targets=np.array(spatial_targets[idx], dtype=np.float32),
+                    loss_mask=np.array(loss_masks[idx], dtype=np.float32),
                 )
             )
 
@@ -755,6 +721,31 @@ class OsuBeatmapDataset(Dataset):
     ) -> List[Tuple[float, float, float]]:
         return [event for event in events if start_ms <= event[0] < end_ms]
 
+    def _limit_token_count(self, tokens: List[List[int]], limit: int) -> List[List[int]]:
+        if limit <= 0:
+            return []
+        trimmed: List[List[int]] = []
+        idx = 0
+        while idx < len(tokens) and len(trimmed) < limit:
+            token = tokens[idx]
+            token_type = token[TokenAttr.TYPE]
+            if token_type == TokenType.SLIDER:
+                group_end = idx + 1
+                while group_end < len(tokens) and tokens[group_end][TokenAttr.TYPE] == TokenType.SLIDER_PATH:
+                    group_end += 1
+                group_size = group_end - idx
+                if len(trimmed) + group_size > limit:
+                    break
+                trimmed.extend(tokens[idx:group_end])
+                idx = group_end
+                continue
+            if token_type == TokenType.SLIDER_PATH:
+                idx += 1
+                continue
+            trimmed.append(token)
+            idx += 1
+        return trimmed
+
     def _encode_chunk_tokens(
         self,
         hit_objects: Sequence[object],
@@ -765,109 +756,40 @@ class OsuBeatmapDataset(Dataset):
     ) -> Tuple[List[List[int]], int, np.ndarray] | None:
         if ticks_per_sample <= 0:
             return None
-        events = sorted(hit_objects, key=lambda h: float(getattr(h, "time", 0.0)))
-        if not events and self.skip_empty:
+        if not hit_objects and self.skip_empty:
             return None
 
-        tokens: List[List[int]] = []
-        tick_ms = max(tick_duration_ms, 1e-3)
-        chunk_cutoff_tick = max(0, ticks_per_sample - 1)
-        chunk_end_tick = ticks_per_sample
-        required_tick = 0
-        prev_tick = 0
-        prev_finish_tick = 0
-        prev_point: Optional[Tuple[float, float]] = None
-        spatial_values: List[Tuple[float, float, float]] = []
-
-        for ho in events:
-            event_time = float(getattr(ho, "time", 0.0))
-            rel_ms = event_time - chunk_start_ms
-            event_tick = int(round(rel_ms / tick_ms))
-            if event_tick < 0:
-                event_tick = 0
-            event_tick = min(event_tick, chunk_end_tick - 1)
-            if event_tick < required_tick:
-                event_tick = required_tick
-            if event_tick >= chunk_cutoff_tick:
-                break
-            snapped_time = chunk_start_ms + event_tick * tick_ms
-            if abs(event_time - snapped_time) > self.tick_tolerance_ms:
-                continue
-            delta_ticks = max(0, min(event_tick - prev_finish_tick, self.tokenizer.max_delta_ticks))
-
-            start_point = (float(getattr(ho, "x", 0.0)), float(getattr(ho, "y", 0.0)))
-            if isinstance(ho, Circle):
-                end_point = start_point
-            elif isinstance(ho, Slider):
-                end_point = self._get_slider_end_position(ho)
-            else:
-                end_point = start_point
-
-            if prev_point is None:
-                dist = 0.0
-                angle = 0.0
-            else:
-                dx = start_point[0] - prev_point[0]
-                dy = start_point[1] - prev_point[1]
-                dist = math.hypot(dx, dy)
-                angle = math.atan2(dy, dx)
-            dist_norm = min(dist, self.max_distance_value) / max(self.max_distance_value, 1e-6)
-            spatial_values.append((dist_norm, math.cos(angle), math.sin(angle)))
-
-            if isinstance(ho, Circle):
-                token = self.tokenizer.encode_circle(
-                    float(ho.x),
-                    float(ho.y),
-                    event_tick,
-                    delta_ticks,
-                    dist,
-                    angle,
-                )
-                end_tick = event_tick
-            elif isinstance(ho, Slider):
-                duration_ms = float(getattr(getattr(ho, "object_params", None), "duration", 0.0) or 0.0)
-                duration_ticks = max(1, int(round(duration_ms / tick_ms)))
-                end_tick = event_tick + duration_ticks
-                if end_tick > chunk_end_tick:
-                    break
-                sv = self._effective_slider_sv(beatmap, event_time)
-                token = self.tokenizer.encode_slider(
-                    ho,
-                    tick_duration_ms,
-                    sv,
-                    event_tick,
-                    delta_ticks,
-                    dist,
-                    angle,
-                )
-            else:
-                continue
-
-            tokens.append(token)
-            prev_tick = event_tick
-            prev_finish_tick = end_tick
-            required_tick = min(chunk_end_tick, end_tick + 1)
-            prev_point = end_point
-
+        tokens = self.tokenizer.tokenize(
+            hit_objects,
+            chunk_start_ms=chunk_start_ms,
+            tick_duration_ms=tick_duration_ms,
+            max_ticks=ticks_per_sample,
+            slider_sv_lookup=lambda slider: self._effective_slider_sv(beatmap, float(getattr(slider, "time", 0.0))),
+            tick_tolerance_ms=self.tick_tolerance_ms,
+        )
+        max_tokens = max(1, ticks_per_sample - 1)
+        tokens = self._limit_token_count(tokens, max_tokens)
         if not tokens and self.skip_empty:
             return None
 
+        loss_mask: List[int] = [
+            1 if self.tokenizer.tick_from_id(token[TokenAttr.TICK]) >= self.context_ticks else 0 for token in tokens
+        ]
+
         tokens.append(self.tokenizer.eos_token())
-        spatial_values.append((0.0, 1.0, 0.0))
+        loss_mask.append(0)
         token_length = min(len(tokens), ticks_per_sample)
         tokens = tokens[:token_length]
-        spatial_values = spatial_values[:token_length]
         if tokens[-1][TokenAttr.TYPE] != TokenType.EOS:
             tokens[-1] = self.tokenizer.eos_token()
-            if spatial_values:
-                spatial_values[-1] = (0.0, 1.0, 0.0)
+            loss_mask[-1] = 0
 
         while len(tokens) < ticks_per_sample:
             tokens.append(self.tokenizer.pad_token())
-            spatial_values.append((0.0, 1.0, 0.0))
+            loss_mask.append(0)
 
-        spatial_arr = np.asarray(spatial_values, dtype=np.float32)
-        return tokens, token_length, spatial_arr
+        loss_arr = np.asarray(loss_mask, dtype=np.float32)
+        return tokens, token_length, loss_arr
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -890,18 +812,6 @@ class OsuBeatmapDataset(Dataset):
             pad_value = float(spec.S_db.min())
             mel_slice = np.pad(mel_slice, ((0, 0), (0, pad_width)), constant_values=pad_value)
 
-        rms_tensor = None
-        if self.use_rms_feature:
-            rms_np = np.sqrt(np.mean(np.square(mel_slice), axis=0)).astype(np.float32)
-            rms_np = np.log1p(rms_np)
-            mean_rms = rms_np.mean()
-            std_rms = rms_np.std()
-            if std_rms > 1e-6:
-                rms_np = (rms_np - mean_rms) / std_rms
-            else:
-                rms_np = rms_np - mean_rms
-            rms_tensor = torch.from_numpy(rms_np).unsqueeze(1)
-
         mel = torch.from_numpy(mel_slice.T).float()
         audio_length = valid_frames
 
@@ -910,27 +820,14 @@ class OsuBeatmapDataset(Dataset):
             mel = (mel - mean.unsqueeze(0)) / std.unsqueeze(0)
 
         tokens = torch.from_numpy(descriptor.tokens).long()
-        spatial_targets = torch.from_numpy(
-            descriptor.spatial_targets.astype(np.float32)
-            if descriptor.spatial_targets is not None
-            else np.zeros((self.seq_len, 3), dtype=np.float32)
-        )
-
-        feature_cols: List[torch.Tensor] = []
-        if self.use_bpm_feature:
-            bpm_column = torch.full((mel.shape[0], 1), float(descriptor.bpm_feature), dtype=mel.dtype)
-            feature_cols.append(bpm_column)
-        if self.use_rms_feature and rms_tensor is not None:
-            feature_cols.append(rms_tensor.to(mel.dtype))
-        if feature_cols:
-            mel = torch.cat([mel] + feature_cols, dim=1)
+        loss_mask = torch.from_numpy(descriptor.loss_mask.astype(np.float32)).bool()
 
         return {
             "audio": mel,
             "audio_length": audio_length,
             "tokens": tokens,
             "token_length": descriptor.token_length,
-            "spatial_targets": spatial_targets,
+            "loss_mask": loss_mask,
         }
 
 
@@ -938,7 +835,6 @@ def osu_collate(batch: Sequence[Dict[str, torch.Tensor]]) -> Dict[str, torch.Ten
     batch_size = len(batch)
     audio_dim = batch[0]["audio"].shape[-1]
     token_dim = batch[0]["tokens"].shape[-1]
-    spatial_dim = batch[0]["spatial_targets"].shape[-1]
 
     max_audio_len = max(item["audio"].shape[0] for item in batch)
     max_token_len = max(item["tokens"].shape[0] for item in batch)
@@ -948,18 +844,18 @@ def osu_collate(batch: Sequence[Dict[str, torch.Tensor]]) -> Dict[str, torch.Ten
 
     audio_batch = torch.zeros(batch_size, max_audio_len, audio_dim, dtype=audio_dtype)
     token_batch = torch.zeros(batch_size, max_token_len, token_dim, dtype=token_dtype)
-    spatial_batch = torch.zeros(batch_size, max_token_len, spatial_dim, dtype=torch.float32)
+    loss_mask_batch = torch.zeros(batch_size, max_token_len, dtype=torch.bool)
     audio_lengths = torch.zeros(batch_size, dtype=torch.long)
     token_lengths = torch.zeros(batch_size, dtype=torch.long)
 
     for idx, item in enumerate(batch):
         audio = item["audio"]
         tokens = item["tokens"]
-        spatial = item["spatial_targets"]
+        loss_mask = item["loss_mask"]
 
         audio_batch[idx, : audio.shape[0]] = audio
         token_batch[idx, : tokens.shape[0]] = tokens
-        spatial_batch[idx, : spatial.shape[0], :] = spatial
+        loss_mask_batch[idx, : loss_mask.shape[0]] = loss_mask
         audio_lengths[idx] = audio.shape[0]
         token_lengths[idx] = item["token_length"]
 
@@ -973,5 +869,5 @@ def osu_collate(batch: Sequence[Dict[str, torch.Tensor]]) -> Dict[str, torch.Ten
         "tokens": token_batch,
         "token_mask": token_mask,
         "token_lengths": token_lengths,
-        "spatial_targets": spatial_batch,
+        "loss_mask": loss_mask_batch,
     }
