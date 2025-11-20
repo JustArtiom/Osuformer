@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
@@ -28,6 +28,17 @@ class AudioChunk:
     time_rounding_mode: str = "round"
     time_rounding_threshold: float = 0.5
     bpm_feature: float = 0.0
+
+
+@dataclass
+class GenDiagnostics:
+    tokens: int = 0
+    delta_mismatches: int = 0
+    delta_abs_error: float = 0.0
+    angle_count: int = 0
+    angle_abs_error: float = 0.0
+    angle_within: int = 0
+    previews: List[dict] = field(default_factory=list)
 
 
 def parse_args() -> argparse.Namespace:
@@ -217,6 +228,74 @@ def _quantize_slider_length(value: float, mode: str, threshold: float = 0.5) -> 
     if mode == "round":
         return int(round(value))
     return value
+
+
+def _angle_diff(a: float, b: float) -> float:
+    """Smallest absolute angular difference (radians)."""
+    return abs((a - b + math.pi) % (2 * math.pi) - math.pi)
+
+
+def analyze_tokens(tokens: torch.Tensor, chunk: AudioChunk, tokenizer: HitObjectTokenizer, stats: GenDiagnostics) -> None:
+    """Accumulate simple consistency diagnostics for a generated chunk."""
+    prev_finish_tick = 0
+    prev_point: Optional[Tuple[float, float]] = None
+    preview_limit = 8
+
+    type_names = {TokenType.EOS: "EOS", TokenType.CIRCLE: "circle", TokenType.SLIDER: "slider"}
+
+    for raw in tokens.tolist():
+        decoded = tokenizer.decode_token(raw)
+        token_type = decoded.get("type")
+        if token_type == TokenType.EOS:
+            break
+
+        tick_idx = int(decoded.get("tick_index", 0))
+        delta_pred = int(decoded.get("delta_ticks", 0))
+        delta_target = max(0, tick_idx - prev_finish_tick)
+
+        stats.tokens += 1
+        stats.delta_abs_error += abs(delta_pred - delta_target)
+        if delta_pred != delta_target:
+            stats.delta_mismatches += 1
+
+        start_x = decoded.get("start_x")
+        start_y = decoded.get("start_y")
+        geom_angle = None
+        pred_angle = decoded.get("angle") or 0.0
+
+        if start_x is not None and start_y is not None and prev_point is not None:
+            dx = start_x - prev_point[0]
+            dy = start_y - prev_point[1]
+            geom_angle = math.atan2(dy, dx)
+            diff = _angle_diff(pred_angle, geom_angle)
+            stats.angle_abs_error += diff
+            stats.angle_count += 1
+            if diff <= math.radians(22.5):
+                stats.angle_within += 1
+        else:
+            diff = None
+
+        if len(stats.previews) < preview_limit and start_x is not None and start_y is not None:
+            stats.previews.append(
+                {
+                    "time_ms": chunk.start_ms + tick_idx * chunk.tick_duration_ms,
+                    "type": type_names.get(token_type, str(token_type)),
+                    "pos": (start_x, start_y),
+                    "pred_angle_deg": math.degrees(pred_angle),
+                    "geom_angle_deg": math.degrees(geom_angle) if geom_angle is not None else None,
+                    "angle_err_deg": math.degrees(diff) if diff is not None else None,
+                    "delta_pred": delta_pred,
+                    "delta_target": delta_target,
+                }
+            )
+
+        duration_ticks = 0
+        if token_type == TokenType.SLIDER:
+            duration_ticks = int(decoded.get("duration_ticks") or 0)
+            duration_ticks = max(1, duration_ticks)
+
+        prev_finish_tick = max(prev_finish_tick, tick_idx + duration_ticks)
+        prev_point = (start_x, start_y) if start_x is not None and start_y is not None else prev_point
 
 
 def tokens_to_hitobjects(
@@ -523,6 +602,7 @@ def main() -> None:
     model.eval()
 
     all_events: List[Tuple[float, float, float]] = []
+    diagnostics = GenDiagnostics()
     for chunk in chunks:
         audio = chunk.audio.to(device)
         mask = chunk.mask.to(device)
@@ -540,6 +620,7 @@ def main() -> None:
             suppress_overlaps=suppress_overlaps,
         )
         all_events.extend(chunk_events)
+        analyze_tokens(preds[0].cpu(), chunk, tokenizer, diagnostics)
 
     tolerance_ms = data_cfg.get("merge_tolerance_ms", chunks[0].tick_duration_ms if chunks else 10.0)
     discrete_events = merge_events(
@@ -582,6 +663,47 @@ def main() -> None:
 
     output_path.write_text(output_text, encoding="utf-8")
     print(f"[INFO] Generated {len(hitobject_lines)} hitobjects → {output_path}")
+
+    if diagnostics.tokens > 0:
+        delta_pct = 100.0 * diagnostics.delta_mismatches / diagnostics.tokens
+        delta_mae = diagnostics.delta_abs_error / diagnostics.tokens
+        if diagnostics.angle_count > 0:
+            angle_mae = diagnostics.angle_abs_error / diagnostics.angle_count
+            angle_mae_deg = math.degrees(angle_mae)
+            angle_within_pct = 100.0 * diagnostics.angle_within / diagnostics.angle_count
+        else:
+            angle_mae_deg = 0.0
+            angle_within_pct = 0.0
+        print("[INFO] Generation diagnostics:")
+        print(
+            f"  - delta ticks mismatch: {diagnostics.delta_mismatches}/{diagnostics.tokens} "
+            f"({delta_pct:.2f}%), MAE {delta_mae:.2f} ticks"
+        )
+        if diagnostics.angle_count > 0:
+            print(
+                f"  - start-angle error: {angle_mae_deg:.2f}° MAE, "
+                f"within 22.5°: {diagnostics.angle_within}/{diagnostics.angle_count} "
+                f"({angle_within_pct:.2f}%)"
+            )
+        if diagnostics.previews:
+            print("  - sample events:")
+            for entry in diagnostics.previews:
+                pos_str = f"({entry['pos'][0]:.1f},{entry['pos'][1]:.1f})"
+                angle_str = (
+                    f"{entry['geom_angle_deg']:.1f}°"
+                    if entry["geom_angle_deg"] is not None
+                    else "n/a"
+                )
+                err_str = (
+                    f"{entry['angle_err_deg']:.1f}°"
+                    if entry["angle_err_deg"] is not None
+                    else "n/a"
+                )
+                print(
+                    f"    t={entry['time_ms']:.1f}ms type={entry['type']} pos={pos_str} "
+                    f"δ={entry['delta_pred']} (target {entry['delta_target']}) "
+                    f"pred_angle={entry['pred_angle_deg']:.1f}° geom_angle={angle_str} err={err_str}"
+                )
 
 
 if __name__ == "__main__":
