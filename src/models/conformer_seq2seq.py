@@ -117,6 +117,7 @@ class MultiHeadSelfAttention(nn.Module):
 
         if attn_mask is not None:
             if attn_mask.dtype == torch.bool:
+                # attn_mask expected [T, T]; expand over batch and heads
                 scores = scores.masked_fill(attn_mask.unsqueeze(0).unsqueeze(0), float("-inf"))
             else:
                 scores = scores + attn_mask.unsqueeze(0).unsqueeze(0)
@@ -258,16 +259,11 @@ class Conv2dSubsampling(nn.Module):
     def _subsample_mask(self, mask: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
         if mask is None:
             return None
-        # mask: [B, T] bool (True for padding)
-        lengths = (~mask).sum(dim=1)
-        lengths = (lengths + 1) // 2
-        lengths = (lengths + 1) // 2
-        max_len = int(lengths.max().item()) if lengths.numel() > 0 else 0
-        if max_len == 0:
-            return torch.ones(mask.size(0), 0, dtype=torch.bool, device=mask.device)
-        new_positions = torch.arange(max_len, device=mask.device).unsqueeze(0)
-        new_mask = new_positions >= lengths.unsqueeze(1)
-        return new_mask
+        # mask: [B, T] bool (True for padding). Downsample with pooling to align with conv strides.
+        mask_f = mask.unsqueeze(1).float()  # [B,1,T]
+        mask_f = F.max_pool1d(mask_f, kernel_size=3, stride=2, padding=1)
+        mask_f = F.max_pool1d(mask_f, kernel_size=3, stride=2, padding=1)
+        return mask_f.squeeze(1).to(torch.bool)
 
     def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor]) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
         # x: [B, T, F]
