@@ -320,7 +320,9 @@ class ConformerEncoder(nn.Module):
         )
         self.norm = nn.LayerNorm(d_model)
 
-    def forward(self, x: torch.Tensor, src_key_padding_mask: Optional[torch.Tensor]) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, src_key_padding_mask: Optional[torch.Tensor]
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         if self.subsampling is not None:
             x, src_key_padding_mask = self.subsampling(x, src_key_padding_mask)
         x = self.input_proj(x)
@@ -328,7 +330,7 @@ class ConformerEncoder(nn.Module):
             x = self.positional_encoding(x)
         for layer in self.layers:
             x = layer(x, key_padding_mask=src_key_padding_mask)
-        return self.norm(x)
+        return self.norm(x), src_key_padding_mask
 
 
 class HitObjectDecoderLayer(nn.Module):
@@ -556,10 +558,10 @@ class ConformerSeq2Seq(nn.Module):
         target_mask: Optional[torch.Tensor] = None,
         temperature: float = 1.0,
     ) -> List[torch.Tensor]:
-        memory = self.encoder(audio, audio_mask)
+        memory, enc_mask = self.encoder(audio, audio_mask)
         if targets is None:
             raise ValueError("Targets are required for training forward pass")
-        attr_logits = self.decoder(memory, audio_mask, targets, target_mask, temperature=temperature)
+        attr_logits = self.decoder(memory, enc_mask, targets, target_mask, temperature=temperature)
         return attr_logits
 
     @torch.no_grad()
@@ -572,7 +574,7 @@ class ConformerSeq2Seq(nn.Module):
         temperature: float = 1.0,
     ) -> torch.Tensor:
         self.eval()
-        memory = self.encoder(audio, audio_mask)
+        memory, enc_mask = self.encoder(audio, audio_mask)
         batch_size = audio.size(0)
         attr_count = TokenAttr.COUNT
         if prompt is not None:
@@ -595,7 +597,7 @@ class ConformerSeq2Seq(nn.Module):
         for _ in range(remaining):
             placeholder = torch.zeros(batch_size, 1, attr_count, device=audio.device, dtype=torch.long)
             decoder_input = torch.cat([generated, placeholder], dim=1)
-            logits_list = self.decoder(memory, audio_mask, decoder_input, None, temperature=temperature)
+            logits_list = self.decoder(memory, enc_mask, decoder_input, None, temperature=temperature)
 
             assembled = torch.zeros(batch_size, attr_count, device=audio.device, dtype=torch.long)
             for attr_idx, logits in enumerate(logits_list):
