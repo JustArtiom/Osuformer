@@ -1,20 +1,5 @@
-model:
-  encoder:
-    type: conformer
-    d_model: 128
-    num_layers: 16
-    num_heads: 4
-    ffn_dim: 512
-    conv_kernel: 31
-    dropout: 0.1
-  decoder:
-    num_layers: 6
-    num_heads: 4
-    ffn_dim: 512
-    dropout: 0.1
-
 training:
-  batch_size: 8
+  batch_size: 32
   lr: 0.00001
   num_epochs: 300
   device: "cuda"
@@ -24,9 +9,6 @@ training:
   weight_decay: 0.0001
   grad_clip: 1.0
   use_amp: true
-  distributed:
-    enabled: false
-    backend: "nccl"
 
 audio:
   sample_rate: 22050
@@ -36,7 +18,7 @@ audio:
   n_fft: 1024
   max_frames_per_sample: 4096
   normalize_audio: true
-  skip_empty_chunks: true
+  skip_empty_chunks: true # This is to skip chunks with no hit objects during training
 
 data:
   ticks_per_beat: 4
@@ -70,8 +52,8 @@ data:
 filters:
   min_bpm: 80
   max_bpm: 300
-  min_star_rating: 3
-  max_star_rating: 3.5
+  min_star_rating: 3.0
+  max_star_rating: 4.5
   min_rating: null
   max_rating: null
   require_constant_bpm: true
@@ -84,7 +66,30 @@ filters:
     aim_jump_distance: 120.0
     aim_ratio: 0.3
 
+model:
+  encoder:
+    type: conformer
+    d_model: 512
+    num_layers: 17
+    num_heads: 8
+    ffn_dim: 2048
+    conv_kernel: 31
+    dropout: 0.1
+    subsampling: true
+    positional_encoding: "relative"  # absolute|relative
+    relative_style: "transformer_xl"  # bias|transformer_xl
+    relative_max_position: 128
+  decoder:
+    num_layers: 8
+    num_heads: 8
+    ffn_dim: 2048
+    dropout: 0.1
+    positional_encoding: "relative"
+    relative_style: "transformer_xl"
+    relative_max_position: 128
+    norm_first: true
+
 paths:
-  data: "dataset"
+  data: "/beegfs/ac23acn/dataset"
   include: ["*.osu", "*.wav", "*.mp3", "*.ogg", "*.flac"]
   exclude: ["_*"]
