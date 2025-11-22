@@ -111,7 +111,6 @@ def run_epoch(
     *,
     amp_enabled: bool = False,
     scaler: Optional[torch.amp.GradScaler] = None,
-    class_weights: Optional[Dict[str, float]] = None,
     is_main_process: bool = True,
     distributed: bool = False,
 ) -> Dict[str, float]:
@@ -176,25 +175,6 @@ def run_epoch(
                 flat_logits = logits.view(-1, logits.size(-1))
                 flat_target = target.view(-1)
                 kwargs = {}
-                if attr_idx == TokenAttr.TYPE:
-                    counts = torch.bincount(flat_target, minlength=4).float()
-                    total = counts.sum().clamp_min(1.0)
-                    freq = counts / total
-                    empty_freq = freq[TokenType.EOS].clamp_min(1e-6)
-                    other_freq = (1 - empty_freq).clamp_min(1e-6)
-                    weight_empty = float(class_weights.get("empty_type", 2.0)) if class_weights else 2.0
-                    weight_circle = float(class_weights.get("circle_type", 1.0)) if class_weights else 1.0
-                    weight_slider = float(class_weights.get("slider_type", 1.0)) if class_weights else 1.0
-                    ratio = (empty_freq / other_freq).item() if other_freq > 0 else 1.0
-                    weight_circle *= ratio
-                    weight_slider *= ratio
-                    weights = torch.tensor(
-                        [weight_empty, weight_circle, weight_slider, weight_slider],
-                        device=device,
-                        dtype=torch.float32,
-                    )
-                    kwargs["weight"] = weights
-
                 loss_attr = F.cross_entropy(
                     flat_logits,
                     flat_target,
@@ -462,7 +442,6 @@ def main() -> None:
             optimizer=optimizer,
             amp_enabled=use_amp,
             scaler=scaler,
-            class_weights=config["data"].get("class_weights"),
             is_main_process=is_main_process,
             distributed=distributed_enabled,
         )
@@ -474,7 +453,6 @@ def main() -> None:
             optimizer=None,
             amp_enabled=use_amp,
             scaler=None,
-            class_weights=config["data"].get("class_weights"),
             is_main_process=is_main_process,
             distributed=distributed_enabled,
         )

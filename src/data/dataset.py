@@ -115,6 +115,7 @@ class OsuBeatmapDataset(Dataset):
         self.seq_len = self.total_beats * self.ticks_per_beat
         self.context_ticks = self.context_beats * self.ticks_per_beat
         self.target_ticks = self.target_beats * self.ticks_per_beat
+        self.use_spec_cache = bool(self.data_cfg.get("use_spec_cache", True))
         self.normalize_audio = bool(self.audio_cfg.get("normalize_audio", True))
         self.skip_empty = bool(self.audio_cfg.get("skip_empty_chunks", False))
         self.tick_tolerance_ms = float(self.data_cfg.get("tick_tolerance_ms", 3.0))
@@ -220,6 +221,8 @@ class OsuBeatmapDataset(Dataset):
         return self.data_cfg.get(key, default)
 
     def _get_spec_stats(self, audio_key: str, spec: MelSpec) -> Tuple[torch.Tensor, torch.Tensor]:
+        if not self.use_spec_cache:
+            return self._compute_spec_stats(spec)
         if audio_key not in self._spec_stats:
             self._spec_stats[audio_key] = self._compute_spec_stats(spec)
         return self._spec_stats[audio_key]
@@ -526,9 +529,10 @@ class OsuBeatmapDataset(Dataset):
                 force=False,
             )
         spec = MelSpec.load_npz(str(npz_path))
-        self._spec_cache[audio_key] = spec
-        if self.normalize_audio:
-            self._spec_stats[audio_key] = self._compute_spec_stats(spec)
+        if self.use_spec_cache:
+            self._spec_cache[audio_key] = spec
+            if self.normalize_audio:
+                self._spec_stats[audio_key] = self._compute_spec_stats(spec)
         return spec
 
     def _get_primary_bpm_and_offset(self, beatmap: Beatmap) -> Tuple[float, float]:
@@ -796,9 +800,7 @@ class OsuBeatmapDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         descriptor = self.samples[idx]
-        if descriptor.audio_path not in self._spec_cache:
-            self._load_mel_spec(descriptor.audio_path)
-        spec = self._spec_cache[descriptor.audio_path]
+        spec = self._load_mel_spec(descriptor.audio_path)
 
         start = descriptor.start_frame
         raw_frames = descriptor.raw_frames or (descriptor.frames_per_chunk * descriptor.frame_stride)
