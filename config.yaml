@@ -1,11 +1,11 @@
 training:
-  batch_size: 32
+  batch_size: 8
   lr: 0.00001
   num_epochs: 300
   device: "cuda"
   path: "checkpoints/"
   val_split: 0.2
-  num_workers: 1
+  num_workers: 0
   weight_decay: 0.0001
   grad_clip: 1.0
   use_amp: true
@@ -44,16 +44,13 @@ data:
   slider_length_rounding_mode: "exact"
   slider_length_rounding_threshold: 0.6
   prep_num_workers: 1
-  class_weights:
-    empty_type: 0.9
-    circle_type: 1.05
-    slider_type: 1.05
+  use_spec_cache: false
 
 filters:
   min_bpm: 80
   max_bpm: 300
   min_star_rating: 3.0
-  max_star_rating: 4.5
+  max_star_rating: 4.0
   min_rating: null
   max_rating: null
   require_constant_bpm: true
@@ -90,6 +87,6 @@ model:
     norm_first: true
 
 paths:
-  data: "/beegfs/ac23acn/dataset"
+  data: "/beegfs/general/ac23acn/dataset"
   include: ["*.osu", "*.wav", "*.mp3", "*.ogg", "*.flac"]
   exclude: ["_*"]
