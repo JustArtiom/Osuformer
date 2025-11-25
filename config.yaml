@@ -1,5 +1,5 @@
 training:
-  batch_size: 8
+  batch_size: 32
   lr: 0.00001
   num_epochs: 300
   device: "cuda"
@@ -18,7 +18,7 @@ audio:
   n_fft: 1024
   max_frames_per_sample: 4096
   normalize_audio: true
-  skip_empty_chunks: true # This is to skip chunks with no hit objects during training
+  skip_empty_chunks: true
 
 data:
   ticks_per_beat: 4
@@ -36,7 +36,7 @@ data:
   default_bpm: 120.0
   merge_tolerance_ms: 8.0
   tick_tolerance_ms: 10.0
-  suppress_overlap: true
+  suppress_overlap: false
   bookmark_mode: "chunk"
   max_editor_bookmarks: 512
   time_rounding_mode: "round"
@@ -44,13 +44,13 @@ data:
   slider_length_rounding_mode: "exact"
   slider_length_rounding_threshold: 0.6
   prep_num_workers: 1
-  use_spec_cache: false
+  use_ram_for_spec: false
 
 filters:
   min_bpm: 80
   max_bpm: 300
-  min_star_rating: 3.0
-  max_star_rating: 4.0
+  min_star_rating: 5.0
+  max_star_rating: 6.5
   min_rating: null
   max_rating: null
   require_constant_bpm: true

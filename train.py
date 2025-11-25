@@ -85,6 +85,22 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override the DDP backend (defaults to training.distributed.backend).",
     )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Override training.batch_size.",
+    )
+    parser.add_argument(
+        "--use-ram-for-spec",
+        action="store_true",
+        help="Force data.use_ram_for_spec=true (keep spectrograms in RAM).",
+    )
+    parser.add_argument(
+        "--no-use-ram-for-spec",
+        action="store_true",
+        help="Force data.use_ram_for_spec=false (load spectrograms from disk).",
+    )
     return parser.parse_args()
 
 
@@ -170,6 +186,10 @@ def run_epoch(
 
                 flat_mask = attr_mask.reshape(-1).float()
                 if flat_mask.sum() == 0:
+                    # Keep the graph connected even when a local batch has no
+                    # target tokens for this attribute; prevents DDP hangs when
+                    # another rank does have targets.
+                    attr_losses.append(logits.float().sum() * 0.0)
                     continue
 
                 flat_logits = logits.view(-1, logits.size(-1))
@@ -186,10 +206,7 @@ def run_epoch(
                 loss_attr = loss_attr.sum() / flat_mask.sum().clamp_min(1.0)
                 attr_losses.append(loss_attr)
 
-            if not attr_losses:
-                loss = torch.tensor(0.0, device=device, requires_grad=True)
-            else:
-                loss = torch.stack(attr_losses).mean()
+            loss = torch.stack(attr_losses).mean() if attr_losses else torch.tensor(0.0, device=device, requires_grad=True)
 
 
         if is_train:
@@ -283,6 +300,16 @@ def main() -> None:
     args = parse_args()
     config = load_config(args.config)
     training_cfg = config["training"]
+    if args.batch_size is not None:
+        training_cfg["batch_size"] = args.batch_size
+    if args.use_ram_for_spec and args.no_use_ram_for_spec:
+        raise ValueError("Cannot set both --use-ram-for-spec and --no-use-ram-for-spec.")
+    if args.use_ram_for_spec:
+        config["data"]["use_ram_for_spec"] = True
+        config["data"]["use_spec_cache"] = True  # backward compatibility with older configs
+    if args.no_use_ram_for_spec:
+        config["data"]["use_ram_for_spec"] = False
+        config["data"]["use_spec_cache"] = False  # backward compatibility with older configs
     checkpoint_root = Path(training_cfg["path"]).expanduser().resolve()
 
     dist_cfg = training_cfg.get("distributed", {})
