@@ -179,7 +179,9 @@ def run_epoch(
             tick_probs = F.softmax(tick_logits, dim=-1)
             tick_bin_count = tick_probs.size(-1)
             valid_float = valid_mask.float()
-            event_prob = (type_probs[..., TokenType.CIRCLE] + type_probs[..., TokenType.SLIDER]) * valid_float
+            event_mask = ((type_targets == TokenType.CIRCLE) | (type_targets == TokenType.SLIDER)) & valid_mask
+            circle_prob_all = type_probs[..., TokenType.CIRCLE]
+            circle_prob = torch.where(event_mask, circle_prob_all, torch.zeros_like(circle_prob_all))
 
             attr_losses: List[torch.Tensor] = []
             for attr_idx, logits in enumerate(attr_logits):
@@ -234,7 +236,7 @@ def run_epoch(
                 batch_size = audio.size(0)
                 pred_tick_usage = torch.zeros(batch_size, tick_bin_count, device=device, dtype=tick_probs.dtype)
                 # Circles
-                circle_prob = type_probs[..., TokenType.CIRCLE] * valid_float
+                circle_prob = circle_prob * valid_float
                 circle_usage = (circle_prob.unsqueeze(-1) * tick_probs).sum(dim=1)
                 pred_tick_usage = pred_tick_usage + circle_usage.to(pred_tick_usage.dtype)
 
