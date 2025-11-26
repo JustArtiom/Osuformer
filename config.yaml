@@ -1,17 +1,17 @@
 training:
-  batch_size: 32
-  lr: 0.00001
+  batch_size: 66
+  lr: 0.0001
   num_epochs: 300
   device: "cuda"
   path: "checkpoints/"
   val_split: 0.2
   num_workers: 0
-  weight_decay: 0.0001
+  weight_decay: 0.001
   grad_clip: 1.0
   use_amp: true
-  tick_strict_supervision: true
-  tick_miss_penalty: 5.0
-  overlap_penalty: 2.0
+  tick_strict_supervision: false
+  tick_miss_penalty: 0
+  overlap_penalty: 0
 
 audio:
   sample_rate: 22050
@@ -47,7 +47,7 @@ data:
   slider_length_rounding_mode: "exact"
   slider_length_rounding_threshold: 0.6
   prep_num_workers: 1
-  use_ram_for_spec: false
+  use_ram_for_spec: true
 
 filters:
   min_bpm: 80
