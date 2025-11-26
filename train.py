@@ -177,6 +177,14 @@ def run_epoch(
             tick_match = tick_pred.eq(tick_targets)
             type_probs = F.softmax(type_logits, dim=-1)
             tick_probs = F.softmax(tick_logits, dim=-1)
+            event_prob = type_probs[..., TokenType.CIRCLE] + type_probs[..., TokenType.SLIDER]
+            tick_bin_count = tick_probs.size(-1)
+            target_tick_usage = torch.zeros(audio.size(0), tick_bin_count, device=device, dtype=tick_probs.dtype)
+            event_target_mask = ((type_targets == TokenType.CIRCLE) | (type_targets == TokenType.SLIDER)) & valid_mask
+            if event_target_mask.any():
+                batch_ids, pos_ids = torch.nonzero(event_target_mask, as_tuple=True)
+                tick_ids = tick_targets[batch_ids, pos_ids].clamp(0, tick_bin_count - 1)
+                target_tick_usage.index_put_((batch_ids, tick_ids), torch.ones_like(tick_ids, dtype=tick_probs.dtype), accumulate=True)
 
             attr_losses: List[torch.Tensor] = []
             for attr_idx, logits in enumerate(attr_logits):
@@ -228,10 +236,10 @@ def run_epoch(
                 loss = loss + tick_penalty_weight * tick_penalty
 
             if duplicate_tick_penalty > 0.0:
-                non_eos_prob = 1.0 - type_probs[..., TokenType.EOS]
                 usage_mask = valid_mask.float().unsqueeze(-1)
-                weighted_tick_usage = (tick_probs * non_eos_prob.unsqueeze(-1) * usage_mask).sum(dim=1)
-                overflow = torch.relu(weighted_tick_usage - 1.0)
+                weighted_tick_usage = (tick_probs * event_prob.unsqueeze(-1) * usage_mask).sum(dim=1)
+                active_bins = (target_tick_usage > 0).float()
+                overflow = torch.relu(weighted_tick_usage - target_tick_usage) * active_bins
                 duplicate_penalty_value = overflow.sum(dim=1).mean()
                 loss = loss + duplicate_tick_penalty * duplicate_penalty_value
 
