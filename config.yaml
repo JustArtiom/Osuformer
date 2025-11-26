@@ -9,6 +9,9 @@ training:
   weight_decay: 0.0001
   grad_clip: 1.0
   use_amp: true
+  tick_strict_supervision: true
+  tick_miss_penalty: 5.0
+  duplicate_tick_penalty: 2.0
 
 audio:
   sample_rate: 22050

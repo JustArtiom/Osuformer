@@ -129,6 +129,9 @@ def run_epoch(
     scaler: Optional[torch.amp.GradScaler] = None,
     is_main_process: bool = True,
     distributed: bool = False,
+    tick_strict_supervision: bool = False,
+    tick_penalty_weight: float = 0.0,
+    duplicate_tick_penalty: float = 0.0,
 ) -> Dict[str, float]:
     is_train = optimizer is not None
     model.train(is_train)
@@ -167,6 +170,14 @@ def run_epoch(
             valid_mask = (~token_mask) & loss_mask
             type_targets = tokens[..., TokenAttr.TYPE]
 
+            type_logits = attr_logits[TokenAttr.TYPE]
+            tick_logits = attr_logits[TokenAttr.TICK]
+            tick_targets = tokens[..., TokenAttr.TICK]
+            tick_pred = tick_logits.argmax(dim=-1)
+            tick_match = tick_pred.eq(tick_targets)
+            type_probs = F.softmax(type_logits, dim=-1)
+            tick_probs = F.softmax(tick_logits, dim=-1)
+
             attr_losses: List[torch.Tensor] = []
             for attr_idx, logits in enumerate(attr_logits):
                 target = tokens[..., attr_idx]
@@ -183,6 +194,9 @@ def run_epoch(
                     attr_mask = valid_mask & (type_targets == TokenType.SLIDER)
                 else:
                     attr_mask = valid_mask
+
+                if tick_strict_supervision and attr_idx != TokenAttr.TICK:
+                    attr_mask = attr_mask & tick_match
 
                 flat_mask = attr_mask.reshape(-1).float()
                 if flat_mask.sum() == 0:
@@ -207,7 +221,19 @@ def run_epoch(
                 attr_losses.append(loss_attr)
 
             loss = torch.stack(attr_losses).mean() if attr_losses else torch.tensor(0.0, device=device, requires_grad=True)
+            total_valid = valid_mask.float().sum().clamp_min(1.0)
+            if tick_penalty_weight > 0.0:
+                target_tick_prob = tick_probs.gather(-1, tick_targets.unsqueeze(-1)).squeeze(-1)
+                tick_penalty = ((1.0 - target_tick_prob) * valid_mask.float()).sum() / total_valid
+                loss = loss + tick_penalty_weight * tick_penalty
 
+            if duplicate_tick_penalty > 0.0:
+                non_eos_prob = 1.0 - type_probs[..., TokenType.EOS]
+                usage_mask = valid_mask.float().unsqueeze(-1)
+                weighted_tick_usage = (tick_probs * non_eos_prob.unsqueeze(-1) * usage_mask).sum(dim=1)
+                overflow = torch.relu(weighted_tick_usage - 1.0)
+                duplicate_penalty_value = overflow.sum(dim=1).mean()
+                loss = loss + duplicate_tick_penalty * duplicate_penalty_value
 
         if is_train:
             optimizer.zero_grad()
@@ -352,6 +378,9 @@ def main() -> None:
     num_epochs = args.epochs or training_cfg["num_epochs"]
     num_workers = training_cfg.get("num_workers", 0)
     grad_clip = training_cfg.get("grad_clip", 1.0)
+    tick_strict = bool(training_cfg.get("tick_strict_supervision", False))
+    tick_penalty_weight = float(training_cfg.get("tick_miss_penalty", 0.0) or 0.0)
+    duplicate_penalty_weight = float(training_cfg.get("duplicate_tick_penalty", 0.0) or 0.0)
 
     train_files, val_files = split_train_val_files(config)
     cache_base = Path(args.map_cache).expanduser().resolve() if args.map_cache else None
@@ -471,6 +500,9 @@ def main() -> None:
             scaler=scaler,
             is_main_process=is_main_process,
             distributed=distributed_enabled,
+            tick_strict_supervision=tick_strict,
+            tick_penalty_weight=tick_penalty_weight,
+            duplicate_tick_penalty=duplicate_penalty_weight,
         )
         val_metrics = run_epoch(
             model,
@@ -482,6 +514,9 @@ def main() -> None:
             scaler=None,
             is_main_process=is_main_process,
             distributed=distributed_enabled,
+            tick_strict_supervision=tick_strict,
+            tick_penalty_weight=tick_penalty_weight,
+            duplicate_tick_penalty=duplicate_penalty_weight,
         )
 
         train_history.append(train_metrics)
