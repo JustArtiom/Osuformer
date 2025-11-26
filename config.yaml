@@ -11,7 +11,7 @@ training:
   use_amp: true
   tick_strict_supervision: true
   tick_miss_penalty: 5.0
-  duplicate_tick_penalty: 2.0
+  overlap_penalty: 2.0
 
 audio:
   sample_rate: 22050
