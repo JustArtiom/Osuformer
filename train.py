@@ -131,7 +131,7 @@ def run_epoch(
     distributed: bool = False,
     tick_strict_supervision: bool = False,
     tick_penalty_weight: float = 0.0,
-    duplicate_tick_penalty: float = 0.0,
+    overlap_penalty: float = 0.0,
 ) -> Dict[str, float]:
     is_train = optimizer is not None
     model.train(is_train)
@@ -177,14 +177,9 @@ def run_epoch(
             tick_match = tick_pred.eq(tick_targets)
             type_probs = F.softmax(type_logits, dim=-1)
             tick_probs = F.softmax(tick_logits, dim=-1)
-            event_prob = type_probs[..., TokenType.CIRCLE] + type_probs[..., TokenType.SLIDER]
             tick_bin_count = tick_probs.size(-1)
-            target_tick_usage = torch.zeros(audio.size(0), tick_bin_count, device=device, dtype=tick_probs.dtype)
-            event_target_mask = ((type_targets == TokenType.CIRCLE) | (type_targets == TokenType.SLIDER)) & valid_mask
-            if event_target_mask.any():
-                batch_ids, pos_ids = torch.nonzero(event_target_mask, as_tuple=True)
-                tick_ids = tick_targets[batch_ids, pos_ids].clamp(0, tick_bin_count - 1)
-                target_tick_usage.index_put_((batch_ids, tick_ids), torch.ones_like(tick_ids, dtype=tick_probs.dtype), accumulate=True)
+            valid_float = valid_mask.float()
+            event_prob = (type_probs[..., TokenType.CIRCLE] + type_probs[..., TokenType.SLIDER]) * valid_float
 
             attr_losses: List[torch.Tensor] = []
             for attr_idx, logits in enumerate(attr_logits):
@@ -235,13 +230,61 @@ def run_epoch(
                 tick_penalty = ((1.0 - target_tick_prob) * valid_mask.float()).sum() / total_valid
                 loss = loss + tick_penalty_weight * tick_penalty
 
-            if duplicate_tick_penalty > 0.0:
-                usage_mask = valid_mask.float().unsqueeze(-1)
-                weighted_tick_usage = (tick_probs * event_prob.unsqueeze(-1) * usage_mask).sum(dim=1)
-                active_bins = (target_tick_usage > 0).float()
-                overflow = torch.relu(weighted_tick_usage - target_tick_usage) * active_bins
-                duplicate_penalty_value = overflow.sum(dim=1).mean()
-                loss = loss + duplicate_tick_penalty * duplicate_penalty_value
+            if overlap_penalty > 0.0:
+                batch_size = audio.size(0)
+                pred_tick_usage = torch.zeros(batch_size, tick_bin_count, device=device, dtype=tick_probs.dtype)
+                # Circles
+                circle_prob = type_probs[..., TokenType.CIRCLE] * valid_float
+                circle_usage = circle_prob.unsqueeze(-1) * tick_probs
+                pred_tick_usage += circle_usage.sum(dim=1)
+
+                # Sliders coverage using ground-truth durations
+                slider_gt_mask = (type_targets == TokenType.SLIDER) & valid_mask
+                if slider_gt_mask.any():
+                    slider_prob = type_probs[..., TokenType.SLIDER] * valid_float
+                    slider_tick_mass = slider_prob.unsqueeze(-1) * tick_probs
+                    slider_tick_mass = slider_tick_mass[slider_gt_mask]
+                    slider_durations = torch.clamp(tokens[..., TokenAttr.DURATION] - 1, min=0)[slider_gt_mask]
+                    slider_batch = slider_gt_mask.nonzero(as_tuple=False)[:, 0]
+                    if slider_tick_mass.numel() > 0:
+                        unique_durations = slider_durations.unique()
+                        for duration_value in unique_durations:
+                            dur_mask = slider_durations == duration_value
+                            if not dur_mask.any():
+                                continue
+                            mass_group = slider_tick_mass[dur_mask]  # [G, T]
+                            batch_group = slider_batch[dur_mask]
+                            kernel_size = int(duration_value.item()) + 1
+                            kernel = torch.ones(1, 1, kernel_size, device=device, dtype=mass_group.dtype)
+                            cover = F.conv1d(mass_group.unsqueeze(1), kernel, padding=kernel_size - 1)[:, 0, :tick_bin_count]
+                            pred_tick_usage.index_add_(0, batch_group, cover)
+
+                target_tick_usage = torch.zeros(batch_size, tick_bin_count, device=device, dtype=tick_probs.dtype)
+                tick_ids = torch.clamp(tick_targets.clamp_min(1) - 1, min=0, max=tick_bin_count - 1)
+                circle_gt_mask = (type_targets == TokenType.CIRCLE) & valid_mask
+                if circle_gt_mask.any():
+                    circle_batch, circle_pos = circle_gt_mask.nonzero(as_tuple=True)
+                    circle_ticks = tick_ids[circle_batch, circle_pos]
+                    target_tick_usage.index_put_(
+                        (circle_batch, circle_ticks),
+                        torch.ones_like(circle_ticks, dtype=tick_probs.dtype),
+                        accumulate=True,
+                    )
+
+                if slider_gt_mask.any():
+                    slider_batch_gt, slider_pos_gt = slider_gt_mask.nonzero(as_tuple=True)
+                    slider_ticks_gt = tick_ids[slider_batch_gt, slider_pos_gt]
+                    slider_dur_gt = torch.clamp(tokens[..., TokenAttr.DURATION] - 1, min=0)[slider_gt_mask]
+                    for idx in range(slider_batch_gt.size(0)):
+                        b_idx = slider_batch_gt[idx].item()
+                        start_tick = slider_ticks_gt[idx].item()
+                        duration = slider_dur_gt[idx].item()
+                        end_tick = min(start_tick + duration, tick_bin_count - 1)
+                        target_tick_usage[b_idx, start_tick : end_tick + 1] += 1.0
+
+                overlap = torch.relu(pred_tick_usage - target_tick_usage)
+                overlap_penalty_value = overlap.sum(dim=1).mean()
+                loss = loss + overlap_penalty * overlap_penalty_value
 
         if is_train:
             optimizer.zero_grad()
@@ -388,7 +431,9 @@ def main() -> None:
     grad_clip = training_cfg.get("grad_clip", 1.0)
     tick_strict = bool(training_cfg.get("tick_strict_supervision", False))
     tick_penalty_weight = float(training_cfg.get("tick_miss_penalty", 0.0) or 0.0)
-    duplicate_penalty_weight = float(training_cfg.get("duplicate_tick_penalty", 0.0) or 0.0)
+    overlap_penalty_weight = float(
+        training_cfg.get("overlap_penalty", training_cfg.get("duplicate_tick_penalty", 0.0)) or 0.0
+    )
 
     train_files, val_files = split_train_val_files(config)
     cache_base = Path(args.map_cache).expanduser().resolve() if args.map_cache else None
@@ -510,7 +555,7 @@ def main() -> None:
             distributed=distributed_enabled,
             tick_strict_supervision=tick_strict,
             tick_penalty_weight=tick_penalty_weight,
-            duplicate_tick_penalty=duplicate_penalty_weight,
+            overlap_penalty=overlap_penalty_weight,
         )
         val_metrics = run_epoch(
             model,
@@ -524,7 +569,7 @@ def main() -> None:
             distributed=distributed_enabled,
             tick_strict_supervision=tick_strict,
             tick_penalty_weight=tick_penalty_weight,
-            duplicate_tick_penalty=duplicate_penalty_weight,
+            overlap_penalty=overlap_penalty_weight,
         )
 
         train_history.append(train_metrics)
