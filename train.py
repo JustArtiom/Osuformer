@@ -235,8 +235,8 @@ def run_epoch(
                 pred_tick_usage = torch.zeros(batch_size, tick_bin_count, device=device, dtype=tick_probs.dtype)
                 # Circles
                 circle_prob = type_probs[..., TokenType.CIRCLE] * valid_float
-                circle_usage = circle_prob.unsqueeze(-1) * tick_probs
-                pred_tick_usage += circle_usage.sum(dim=1)
+                circle_usage = (circle_prob.unsqueeze(-1) * tick_probs).sum(dim=1)
+                pred_tick_usage = pred_tick_usage + circle_usage.to(pred_tick_usage.dtype)
 
                 # Sliders coverage using ground-truth durations
                 slider_gt_mask = (type_targets == TokenType.SLIDER) & valid_mask
@@ -257,6 +257,7 @@ def run_epoch(
                             kernel_size = int(duration_value.item()) + 1
                             kernel = torch.ones(1, 1, kernel_size, device=device, dtype=mass_group.dtype)
                             cover = F.conv1d(mass_group.unsqueeze(1), kernel, padding=kernel_size - 1)[:, 0, :tick_bin_count]
+                            cover = cover.to(pred_tick_usage.dtype)
                             pred_tick_usage.index_add_(0, batch_group, cover)
 
                 target_tick_usage = torch.zeros(batch_size, tick_bin_count, device=device, dtype=tick_probs.dtype)
@@ -265,11 +266,8 @@ def run_epoch(
                 if circle_gt_mask.any():
                     circle_batch, circle_pos = circle_gt_mask.nonzero(as_tuple=True)
                     circle_ticks = tick_ids[circle_batch, circle_pos]
-                    target_tick_usage.index_put_(
-                        (circle_batch, circle_ticks),
-                        torch.ones_like(circle_ticks, dtype=tick_probs.dtype),
-                        accumulate=True,
-                    )
+                    ones = torch.ones(circle_batch.size(0), device=device, dtype=target_tick_usage.dtype)
+                    target_tick_usage.index_put_((circle_batch, circle_ticks), ones, accumulate=True)
 
                 if slider_gt_mask.any():
                     slider_batch_gt, slider_pos_gt = slider_gt_mask.nonzero(as_tuple=True)
