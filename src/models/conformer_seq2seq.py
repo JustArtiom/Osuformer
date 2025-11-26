@@ -520,7 +520,9 @@ class ConformerSeq2Seq(nn.Module):
             subsampling=subsampling_enabled,
         )
 
-        self.data_cfg_snapshot = data_cfg.copy()
+        snapshot = data_cfg.copy()
+        snapshot.pop("suppress_overlap", None)
+        self.data_cfg_snapshot = snapshot
         self.tokenizer = HitObjectTokenizer(data_cfg)
         self.attr_sizes = self.tokenizer.attribute_sizes
         context_beats = data_cfg.get("context_beats", 8)
