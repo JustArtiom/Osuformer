@@ -12,6 +12,18 @@ training:
   tick_strict_supervision: false
   tick_miss_penalty: 0
   overlap_penalty: 0
+  loss_penalties:
+    object_tick_weight: 1.0
+    duplicate_tick_weight: 1.0
+    circle_in_slider_weight: 1.0
+    coord_distance_weight: 1.0
+    coord_angle_weight: 1.0
+    slider_path_weight: 1.0
+    density_weight: 1.0
+    type_mismatch_weight: 1.0
+    slider_duration_weight: 1.0
+    curve_type_weight: 1.0
+    slider_sv_weight: 1.0
 
 audio:
   sample_rate: 22050
