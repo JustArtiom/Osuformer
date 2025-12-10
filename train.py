@@ -26,9 +26,10 @@ from tqdm import tqdm
 from contextlib import nullcontext
 
 from src.data import OsuBeatmapDataset, osu_collate, split_train_val_files
-from src.data.tokenizer import TokenAttr, TokenType
+from src.data.tokenizer import HitObjectTokenizer, TokenAttr, TokenType
 from src.models import ConformerSeq2Seq
 from src.training import TrainingSession
+from src.training.losses import compute_penalty_loss
 from src.utils.config import load_config
 
 
@@ -132,6 +133,8 @@ def run_epoch(
     tick_strict_supervision: bool = False,
     tick_penalty_weight: float = 0.0,
     overlap_penalty: float = 0.0,
+    tokenizer: HitObjectTokenizer | None = None,
+    penalty_cfg: Optional[Dict[str, float]] = None,
 ) -> Dict[str, float]:
     is_train = optimizer is not None
     model.train(is_train)
@@ -286,6 +289,10 @@ def run_epoch(
                 overlap_penalty_value = overlap.sum(dim=1).mean()
                 loss = loss + overlap_penalty * overlap_penalty_value
 
+            if tokenizer is not None:
+                structural_penalty = compute_penalty_loss(attr_logits, tokens, valid_mask, tokenizer, penalty_cfg)
+                loss = loss + structural_penalty.squeeze()
+
         if is_train:
             optimizer.zero_grad()
             if scaler is not None and scaler.is_enabled():
@@ -434,6 +441,7 @@ def main() -> None:
     overlap_penalty_weight = float(
         training_cfg.get("overlap_penalty", training_cfg.get("duplicate_tick_penalty", 0.0)) or 0.0
     )
+    loss_penalty_cfg = training_cfg.get("loss_penalties")
 
     train_files, val_files = split_train_val_files(config)
     cache_base = Path(args.map_cache).expanduser().resolve() if args.map_cache else None
@@ -502,6 +510,9 @@ def main() -> None:
             output_device=local_rank if device.type == "cuda" else None,
         )
 
+    base_model = unwrap_model(model)
+    tokenizer = getattr(base_model, "tokenizer", None)
+
     metrics_path = Path(session.path) / "metrics.json"
     train_history: List[Dict[str, float]] = []
     val_history: List[Dict[str, float]] = []
@@ -513,7 +524,7 @@ def main() -> None:
         if is_main_process:
             print(f"[INFO] Resuming from checkpoint: {resume_checkpoint_path}")
         payload = torch.load(resume_checkpoint_path, map_location=device)
-        unwrap_model(model).load_state_dict(payload["model_state"])
+        base_model.load_state_dict(payload["model_state"])
         if args.freeze_encoder:
             if is_main_process:
                 print("[INFO] Skipping optimizer state load because encoder is frozen.")
@@ -556,6 +567,8 @@ def main() -> None:
             tick_strict_supervision=tick_strict,
             tick_penalty_weight=tick_penalty_weight,
             overlap_penalty=overlap_penalty_weight,
+            tokenizer=tokenizer,
+            penalty_cfg=loss_penalty_cfg,
         )
         val_metrics = run_epoch(
             model,
@@ -570,6 +583,8 @@ def main() -> None:
             tick_strict_supervision=tick_strict,
             tick_penalty_weight=tick_penalty_weight,
             overlap_penalty=overlap_penalty_weight,
+            tokenizer=tokenizer,
+            penalty_cfg=loss_penalty_cfg,
         )
 
         train_history.append(train_metrics)
