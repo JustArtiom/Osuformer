@@ -21,6 +21,9 @@ _PENALTY_KEYS = (
     "slider_duration_weight",
     "curve_type_weight",
     "slider_sv_weight",
+    "overlap_weight",
+    "event_recall_weight",
+    "eos_overuse_weight",
 )
 
 
@@ -40,6 +43,16 @@ def normalize_penalty_config(cfg: Dict[str, float] | None) -> Dict[str, float]:
         try:
             base["object_tick_weight"] = float(cfg.get("circle_tick_weight") or 0.0)
         except (TypeError, ValueError):  # pragma: no cover - defensive fallback
+            pass
+    if is_dict and "overlap_penalty" in cfg and base["overlap_weight"] == 0.0:
+        try:
+            base["overlap_weight"] = float(cfg.get("overlap_penalty") or 0.0)
+        except (TypeError, ValueError):  # pragma: no cover
+            pass
+    if is_dict and "eos_penalty" in cfg and base["eos_overuse_weight"] == 0.0:
+        try:
+            base["eos_overuse_weight"] = float(cfg.get("eos_penalty") or 0.0)
+        except (TypeError, ValueError):  # pragma: no cover
             pass
     return base
 
@@ -103,11 +116,11 @@ def compute_penalty_loss(
         return torch.zeros(1, device=tokens.device, dtype=attr_logits[0].dtype)
 
     device = tokens.device
-    dtype = attr_logits[0].dtype
+    type_logits = attr_logits[TokenAttr.TYPE].float()
+    tick_logits = attr_logits[TokenAttr.TICK].float()
+    dtype = type_logits.dtype
     zero = torch.zeros(1, device=device, dtype=dtype)
 
-    type_logits = attr_logits[TokenAttr.TYPE]
-    tick_logits = attr_logits[TokenAttr.TICK]
     type_probs = F.softmax(type_logits, dim=-1)
     tick_probs = F.softmax(tick_logits, dim=-1)
 
@@ -257,8 +270,8 @@ def compute_penalty_loss(
         pred_counts = event_prob.sum(dim=1)
         diff = torch.abs(pred_counts - gt_counts)
         normalized = diff / seq_len_max
-        density_penalty = normalized.mean()
-        total_penalty = total_penalty + cfg["density_weight"] * density_penalty
+    density_penalty = normalized.mean()
+    total_penalty = total_penalty + cfg["density_weight"] * density_penalty
 
     # Type mismatch penalty (circle vs slider)
     if cfg["type_mismatch_weight"] > 0.0:
@@ -316,4 +329,48 @@ def compute_penalty_loss(
         sv_penalty = sv_penalty / (max_sv * max_sv)
         total_penalty = total_penalty + cfg["slider_sv_weight"] * sv_penalty
 
-    return total_penalty
+    # Overlap penalty: discourage placing events during slider coverage (excluding the slider start tick)
+    if cfg["overlap_weight"] > 0.0:
+        coverage = _slider_coverage(tokens, slider_mask, tick_bins, dtype, device)
+        if coverage.max().item() > 0:
+            start_mask = torch.zeros_like(coverage)
+            if slider_mask.any():
+                slider_positions = slider_mask.nonzero(as_tuple=False)
+                slider_ticks = tokens[..., TokenAttr.TICK][slider_mask]
+                slider_ticks = torch.clamp(slider_ticks.clamp_min(1) - 1, min=0, max=tick_bins - 1)
+                ones = torch.ones(slider_ticks.size(0), device=device, dtype=start_mask.dtype)
+                start_mask.index_put_((slider_positions[:, 0], slider_ticks), ones, accumulate=True)
+            coverage_no_start = torch.clamp(coverage - start_mask, min=0.0)
+            if coverage_no_start.sum().item() > 0:
+                event_prob = (type_probs[..., TokenType.CIRCLE] + type_probs[..., TokenType.SLIDER]) * mask_float
+                event_mass = (event_prob.unsqueeze(-1) * tick_probs).sum(dim=1)  # [B, T]
+                coverage_mask = (coverage_no_start > 0).to(event_mass.dtype)
+                per_sample = (event_mass * coverage_mask).sum(dim=1)
+                denom = coverage_mask.sum(dim=1).clamp_min(1.0)
+                overlap_penalty = (per_sample / denom).mean()
+                total_penalty = total_penalty + cfg["overlap_weight"] * overlap_penalty
+
+    # Event recall penalty: encourage placing probability mass where ground-truth events occur.
+    if cfg["event_recall_weight"] > 0.0:
+        tick_ids = torch.clamp(tokens[..., TokenAttr.TICK].clamp_min(1) - 1, min=0, max=tick_bins - 1)
+        if event_mask.any():
+            target_usage = torch.zeros(tokens.size(0), tick_bins, device=device, dtype=dtype)
+            batch_idx, pos_idx = event_mask.nonzero(as_tuple=True)
+            target_ticks = tick_ids[batch_idx, pos_idx]
+            ones = torch.ones(target_ticks.size(0), device=device, dtype=dtype)
+            target_usage.index_put_((batch_idx, target_ticks), ones, accumulate=True)
+            pred_event_mass = (event_prob.unsqueeze(-1) * tick_probs).sum(dim=1)  # [B, T]
+            missing = torch.relu(target_usage - pred_event_mass)
+            denom = target_usage.sum(dim=1).clamp_min(1.0)
+            recall_penalty = (missing.sum(dim=1) / denom).mean()
+            total_penalty = total_penalty + cfg["event_recall_weight"] * recall_penalty
+
+    # EOS overuse penalty: discourage excessive EOS probability on valid timesteps.
+    if cfg["eos_overuse_weight"] > 0.0:
+        eos_prob = type_probs[..., TokenType.EOS]
+        eos_prob = torch.where(torch.isfinite(eos_prob), eos_prob, torch.zeros_like(eos_prob))
+        denom = mask_float.sum().clamp_min(1.0)
+        eos_penalty = (eos_prob * mask_float).sum() / denom
+        total_penalty = total_penalty + cfg["eos_overuse_weight"] * eos_penalty
+
+    return total_penalty.to(attr_logits[0].dtype)
