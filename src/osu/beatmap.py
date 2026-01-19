@@ -153,7 +153,7 @@ class Beatmap():
     if hasattr(self, "timing_points"):
       result.append("[TimingPoints]\n"+"\n".join([str(tp) for tp in self.timing_points]))
     if hasattr(self, "colours"):
-      result.append(f"[Colours]\n{str(self.colours)}")
+      result.append(f"\n[Colours]\n{str(self.colours)}")
     if hasattr(self, "hit_objects"):
       result.append("[HitObjects]\n"+"\n".join([str(ho) for ho in self.hit_objects]))
     return "\n\n".join(result) + "\n"
