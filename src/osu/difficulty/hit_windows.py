@@ -1,12 +1,6 @@
 from __future__ import annotations
 
-from enum import Enum, auto
-
-class HitResult(Enum):
-    Great = auto()
-    Ok = auto()
-    Meh = auto()
-    Miss = auto()
+from ..enums import HitResult
 
 
 class DifficultyRange:

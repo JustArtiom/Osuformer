@@ -1,20 +1,21 @@
 from __future__ import annotations
 from typing import Optional, Union, List, Tuple
+from .enums import CurveType
 from .hit_sample import HitSample  
 from .utils import fmt
 import re
 
 class HitObject:
   def __init__(
-      self, *, 
-      raw: str = "",
-      x: int = 0,
-      y: int = 0,
-      time: int = 0,
-      type: int = 0,
-      hit_sound: int = 0,
-      object_params: Optional[Union["SpinnerObjectParams", "SliderObjectParams"]] = None,
-      hit_sample: Optional[HitSample] = None
+    self, *, 
+    raw: str = "",
+    x: int = 0,
+    y: int = 0,
+    time: int = 0,
+    type: int = 0,
+    hit_sound: int = 0,
+    object_params: Optional[Union["SpinnerObjectParams", "SliderObjectParams"]] = None,
+    hit_sample: Optional[HitSample] = None
   ):
     self.x = x
     self.y = y
@@ -72,9 +73,9 @@ class SliderCurve:
   def __init__(
       self,
       *,
-      curve_type: str = "",
+      raw: str = "",
+      curve_type: CurveType = CurveType.LINEAR,
       curve_points: Optional[List[Tuple[float, float]]] = None,
-      raw: str = ""
   ):
     self.curve_type = curve_type
     self.curve_points = list(curve_points) if curve_points is not None else []
@@ -84,11 +85,11 @@ class SliderCurve:
 
   def _load_raw(self, raw: str):
     [curve_type, *curve_points_str] = raw.split("|")
-    self.curve_type = curve_type
+    self.curve_type = CurveType(curve_type)
     self.curve_points = [tuple(map(float, point.split(":"))) for point in curve_points_str if point]
 
   def __str__(self) -> str:
-    return f"{self.curve_type}|{'|'.join([f'{fmt(x)}:{fmt(y)}' for x, y in self.curve_points])}"
+    return f"{self.curve_type.value}|{'|'.join([f'{fmt(x)}:{fmt(y)}' for x, y in self.curve_points])}"
 
 class SliderObjectParams:
   def __init__(

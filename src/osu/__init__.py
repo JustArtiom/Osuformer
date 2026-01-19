@@ -15,13 +15,13 @@ from .hit_object import (
   SpinnerObjectParams
 )
 from .beatmap import Beatmap
-from .mods import Mods
 from .difficulty import (
   DifficultyAttributes,
   PerformanceAttributes,
   calculate_difficulty,
   calculate_performance,
 )
+from .enums import (CurveType, Mods, HitResult)
 
 __all__ = [
   "sections",
@@ -35,6 +35,8 @@ __all__ = [
   "Slider", 
   "SliderCurve",
   "SliderObjectParams", 
+  "CurveType",
+  "HitResult",
   "Spinner", 
   "SpinnerObjectParams",
   "Beatmap", 

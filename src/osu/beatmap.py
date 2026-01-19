@@ -1,4 +1,4 @@
-from .sections import General, Difficulty, Editor, Metadata, Colours
+from .sections import General, Difficulty, Editor, Metadata, Colours, Events
 from .timing_point import TimingPoint
 from .hit_object import Circle, Slider, Spinner, HitObject
 from typing import Optional, Union, List
@@ -34,7 +34,7 @@ class Beatmap():
         if section == "Difficulty":
           self.difficulty = Difficulty(raw=content)
         if section == "Events":
-          self.events = content.strip()
+          self.events = Events(raw=content)
         if section == "Colours":
           self.colours = Colours(raw=content)
         elif section == "TimingPoints":
@@ -137,7 +137,7 @@ class Beatmap():
     if hasattr(self, "difficulty"):
       result.append(f"[Difficulty]\n{str(self.difficulty)}")
     if hasattr(self, "events"):
-      result.append(f"[Events]\n{self.events}")
+      result.append(f"[Events]\n{str(self.events)}")
     if hasattr(self, "timing_points"):
       result.append("[TimingPoints]\n"+"\n".join([str(tp) for tp in self.timing_points]))
     if hasattr(self, "colours"):
