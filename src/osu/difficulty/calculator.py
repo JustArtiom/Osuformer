@@ -5,7 +5,7 @@ from typing import List, Sequence, Tuple
 
 from ..beatmap import Beatmap
 from ..hit_object import Circle, Slider, Spinner
-from ..mods import Mods
+from ..enums import Mods
 from .attributes import DifficultyAttributes, PerformanceAttributes
 from .base import DifficultyObject
 from .hit_windows import HitResult, OsuHitWindows, difficulty_range, inverse_difficulty_range, DifficultyRange

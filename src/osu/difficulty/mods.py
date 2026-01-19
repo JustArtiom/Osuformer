@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from typing import Iterable, List, Sequence
 
-from ..mods import Mods
+from ..enums import Mods
 
 
 MOD_CLOCK_RATES = {
-    "DoubleTime": 1.5,
-    "NightCore": 1.5,
-    "HalfTime": 0.75,
+    Mods.DoubleTime: 1.5,
+    Mods.NightCore: 1.5,
+    Mods.HalfTime: 0.75,
 }
 
 
