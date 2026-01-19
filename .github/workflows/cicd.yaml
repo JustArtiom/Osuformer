@@ -21,7 +21,7 @@ jobs:
       - name: Install pipreqs
         run: |
           python -m pip install --upgrade pip
-          pip install pipreqs pytest
+          pip install pipreqs pytest colorama
 
       - name: Run requirements test
         run: |
