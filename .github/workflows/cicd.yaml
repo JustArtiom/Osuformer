@@ -25,4 +25,4 @@ jobs:
 
       - name: Run requirements test
         run: |
-          pytest tests/test_requirements.py
+          pytest
