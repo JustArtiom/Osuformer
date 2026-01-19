@@ -66,10 +66,12 @@ def requirements_up_to_date() -> bool:
   current = _normalized_requirements(REQ_FILE)
   generated = _normalized_requirements(tmp)
 
+  print(current, generated)
+
   if tmp.exists():
     tmp.unlink()
 
-  return current == generated
+  return current == generated, "\n".join(current), "\n".join(generated)
 
 
 def main():
