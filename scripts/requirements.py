@@ -26,26 +26,28 @@ def _read_gitignore_dirs():
   return ignored
 
 
-def _file_hash(path: Path):
+def _normalized_requirements(path: Path) -> list[str]:
   if not path.exists():
-    return None
+    return []
 
-  h = hashlib.sha256()
-  with open(path, "rb") as f:
-    for chunk in iter(lambda: f.read(8192), b""):
-      h.update(chunk)
+  lines = []
+  for line in path.read_text().splitlines():
+    line = line.strip()
+    if not line or line.startswith("#"):
+      continue
+    lines.append(line)
 
-  return h.hexdigest()
+  return sorted(lines)
 
 
-def _run_pipreqs(ignored):
+def _run_pipreqs(ignored, output_path: Path):
   cmd = [
-    sys.executable,
-    "-m",
-    "pipreqs.pipreqs",
+    "pipreqs",
     str(PROJECT_ROOT),
     "--use-local",
-    "--force"
+    "--force",
+    "--savepath",
+    str(output_path),
   ]
 
   if ignored:
@@ -57,13 +59,17 @@ def _run_pipreqs(ignored):
 def requirements_up_to_date() -> bool:
   ignored = _read_gitignore_dirs()
 
-  before = _file_hash(REQ_FILE)
+  tmp = PROJECT_ROOT / ".requirements.tmp.txt"
 
-  _run_pipreqs(ignored)
+  _run_pipreqs(ignored, tmp)
 
-  after = _file_hash(REQ_FILE)
+  current = _normalized_requirements(REQ_FILE)
+  generated = _normalized_requirements(tmp)
 
-  return before == after
+  if tmp.exists():
+    tmp.unlink()
+
+  return current == generated
 
 
 def main():
