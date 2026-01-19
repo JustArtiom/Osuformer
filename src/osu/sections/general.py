@@ -81,4 +81,4 @@ class General:
       f"CountdownOffset: {self.countdown_offset}\n" \
       f"SpecialStyle: {self.special_style}\n" \
       f"WidescreenStoryboard: {self.widescreen_storyboard}\n" \
-      f"SamplesMatchPlaybackRate: {self.samples_match_playback_rate}\n"
+      f"SamplesMatchPlaybackRate: {self.samples_match_playback_rate}"

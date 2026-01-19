@@ -122,7 +122,9 @@ class Beatmap():
   def __str__(self) -> str:
     result = ["osu file format v14\n"]
     if hasattr(self, "general"):
-      result.append(f"[General]\n{str(self.general)}")
+      result.append(f"[General]\n{str(self.general)}\n")
+    if hasattr(self, "difficulty"):
+      result.append(f"[Difficulty]\n{str(self.difficulty)}\n")
     if hasattr(self, "timing_points"):
       result.append("[TimingPoints]")
       for tp in self.timing_points:

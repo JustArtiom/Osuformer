@@ -55,5 +55,5 @@ class TimingPoint:
 
   def __str__(self) -> str:
     beat_length = self._format_float(self.beat_length)
-    return f"{self.time},{beat_length},{self.meter},{self.sample_set},{self.sample_index},{self.volume},{self.uninherited},{self.effects}"
+    return f"{self.time:g},{beat_length},{self.meter},{self.sample_set},{self.sample_index},{self.volume},{self.uninherited},{self.effects}"
 
