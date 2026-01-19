@@ -10,7 +10,7 @@ def main(path):
     score = similarity(raw_map, str(beatmap))
     
     print(diff(raw_map, str(beatmap)))
-    print(f"Accuracy: {score:.2f}%")
+    print(f"Similarity: {score:.2f}%")
 
 
 if __name__ == "__main__":
