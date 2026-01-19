@@ -116,7 +116,7 @@ class Beatmap():
           inherited_tp = TimingPoint(time=0, beat_length=500, uninherited=1)
         ho.object_params._load_duration(sv_multiplier * self.difficulty.slider_multiplier, inherited_tp.beat_length)
 
-  def hit_object_type(self, raw: str, type_id: int) -> Union[type[Circle], type[Slider], type[Spinner], type[HitObject]]:
+  def hit_object_type(self, raw: str, type_id: int = None) -> Union[type[Circle], type[Slider], type[Spinner], type[HitObject]]:
     if not type_id:
       segments = [segment.strip() for segment in raw.split(",")]
       type_id = int(segments[3])
