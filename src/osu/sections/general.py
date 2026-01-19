@@ -68,7 +68,7 @@ class General:
   def __str__(self) -> str:
     return f"AudioFilename: {self.audio_filename}\n" \
       f"AudioLeadIn: {self.audio_lead_in}\n" \
-      f"PreviewTime: {self.preview_time}\n" \
+      f"PreviewTime:{self.preview_time}\n" \
       f"Countdown: {self.countdown}\n" \
       f"SampleSet: {self.sample_set}\n" \
       f"StackLeniency: {self.stack_leniency}\n" \

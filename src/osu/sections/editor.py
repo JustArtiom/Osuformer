@@ -1,23 +1,21 @@
+from typing import List
 import re
-from ..utils import fmt
 
-class Difficulty:
+class Editor:
   def __init__(
     self, *,
     raw: str = "",
-    hp_drain_rate: float = 5.0,
-    circle_size: float = 5.0,
-    overall_difficulty: float = 5.0,
-    approach_rate: float = 5.0,
-    slider_multiplier: float = 1.4,
-    slider_tick_rate: float = 1.0
+    bookmarks: List[int] = [],
+    distance_spacing: float = 1.0,
+    beat_divisor: int = 4,
+    grid_size: int = 32,
+    timeline_zoom: float = 1.0
   ):
-    self.hp_drain_rate = hp_drain_rate
-    self.circle_size = circle_size
-    self.overall_difficulty = overall_difficulty
-    self.approach_rate = approach_rate
-    self.slider_multiplier = slider_multiplier
-    self.slider_tick_rate = slider_tick_rate
+    self.bookmarks = bookmarks
+    self.distance_spacing = distance_spacing
+    self.beat_divisor = beat_divisor
+    self.grid_size = grid_size
+    self.timeline_zoom = timeline_zoom
 
     if raw:
       kv = self.key_value(raw)
@@ -26,7 +24,10 @@ class Difficulty:
         if hasattr(self, attr):
           current_value = getattr(self, attr)
           try:
-            setattr(self, attr, type(current_value)(v))
+            if attr == "bookmarks":
+              setattr(self, attr, [int(b) for b in v.split(",") if b.strip().isdigit()])
+            else:
+              setattr(self, attr, type(current_value)(v))
           except (TypeError, ValueError):
             setattr(self, attr, v)
 
@@ -46,13 +47,11 @@ class Difficulty:
     key = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key)
     return key.lower()
 
-  
   def __str__(self) -> str:
     return (
-      f"HPDrainRate:{fmt(self.hp_drain_rate)}\n"
-      f"CircleSize:{fmt(self.circle_size)}\n"
-      f"OverallDifficulty:{fmt(self.overall_difficulty)}\n"
-      f"ApproachRate:{fmt(self.approach_rate)}\n"
-      f"SliderMultiplier:{fmt(self.slider_multiplier)}\n"
-      f"SliderTickRate:{fmt(self.slider_tick_rate)}"
+      f"Bookmarks: {','.join(str(b) for b in self.bookmarks)}\n"
+      f"DistanceSpacing: {self.distance_spacing}\n"
+      f"BeatDivisor: {self.beat_divisor}\n"
+      f"GridSize: {self.grid_size}\n"
+      f"TimelineZoom: {self.timeline_zoom}"
     )

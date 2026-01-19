@@ -1,5 +1,4 @@
-from .sections.general import General
-from .sections.difficulty import Difficulty
+from .sections import General, Difficulty, Editor, Metadata, Colours
 from .timing_point import TimingPoint
 from .hit_object import Circle, Slider, Spinner, HitObject
 from typing import Optional, Union, List
@@ -28,8 +27,16 @@ class Beatmap():
       for section, content in self.split_sections(raw).items():
         if section == "General":
           self.general = General(raw=content)
+        if section == "Editor":
+          self.editor = Editor(raw=content)
+        if section == "Metadata":
+          self.metadata = Metadata(raw=content)  
         if section == "Difficulty":
           self.difficulty = Difficulty(raw=content)
+        if section == "Events":
+          self.events = content.strip()
+        if section == "Colours":
+          self.colours = Colours(raw=content)
         elif section == "TimingPoints":
           self.timing_points = [TimingPoint(raw=line) for line in content.splitlines()]
         elif section == "HitObjects":
@@ -120,19 +127,21 @@ class Beatmap():
     return calculate_performance(self.get_difficulty())
 
   def __str__(self) -> str:
-    result = ["osu file format v14\n"]
+    result = ["osu file format v14"]
     if hasattr(self, "general"):
-      result.append(f"[General]\n{str(self.general)}\n")
+      result.append(f"[General]\n{str(self.general)}")
+    if hasattr(self, "editor"):
+      result.append(f"[Editor]\n{str(self.editor)}")
+    if hasattr(self, "metadata"):
+      result.append(f"[Metadata]\n{str(self.metadata)}")
     if hasattr(self, "difficulty"):
-      result.append(f"[Difficulty]\n{str(self.difficulty)}\n")
+      result.append(f"[Difficulty]\n{str(self.difficulty)}")
+    if hasattr(self, "events"):
+      result.append(f"[Events]\n{self.events}")
     if hasattr(self, "timing_points"):
-      result.append("[TimingPoints]")
-      for tp in self.timing_points:
-        result.append(str(tp))
-      result.append("")
+      result.append("[TimingPoints]\n"+"\n".join([str(tp) for tp in self.timing_points]))
+    if hasattr(self, "colours"):
+      result.append(f"[Colours]\n{str(self.colours)}")
     if hasattr(self, "hit_objects"):
-      result.append("[HitObjects]")
-      for ho in self.hit_objects:
-        result.append(str(ho))
-      result.append("")
-    return "\n".join(result)
+      result.append("[HitObjects]\n"+"\n".join([str(ho) for ho in self.hit_objects]))
+    return "\n\n".join(result) + "\n"
