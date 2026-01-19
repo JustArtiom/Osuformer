@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Optional, Union, List, Tuple
 from .hit_sample import HitSample  
+from .utils import fmt
 import re
 
 class HitObject:
@@ -39,9 +40,7 @@ class HitObject:
     self.object_params = segments[5]
     self.hit_sample = HitSample(raw=segments[6])
 
-
-  def __str__(self) -> str:
-    return f"{self.x},{self.y},{self.time},{self.type},{self.hit_sound},{self.object_params},{self.hit_sample}"
+    return f"{fmt(self.x)},{fmt(self.y)},{fmt(self.time)},{self.type},{self.hit_sound},{self.object_params},{self.hit_sample}"
 
 class Circle(HitObject):
   def __init__(
@@ -67,7 +66,7 @@ class Circle(HitObject):
 
 
   def __str__(self) -> str:
-    return  f"{self.x:g},{self.y:g},{self.time:g},{self.type},{self.hit_sound},{self.hit_sample}"
+    return  f"{fmt(self.x)},{fmt(self.y)},{fmt(self.time)},{self.type},{self.hit_sound},{self.hit_sample}"
 
 class SliderCurve:
   def __init__(
@@ -89,7 +88,7 @@ class SliderCurve:
     self.curve_points = [tuple(map(float, point.split(":"))) for point in curve_points_str if point]
 
   def __str__(self) -> str:
-    return f"{self.curve_type}|{'|'.join([f'{x:g}:{y:g}' for x, y in self.curve_points])}"
+    return f"{self.curve_type}|{'|'.join([f'{fmt(x)}:{fmt(y)}' for x, y in self.curve_points])}"
 
 class SliderObjectParams:
   def __init__(
@@ -138,7 +137,7 @@ class SliderObjectParams:
   def __str__(self) -> str:
     edge_sounds_str = "|".join(map(str, self.edge_sounds))
     edge_sets_str = "|".join([f"{s1}:{s2}" for s1, s2 in self.edge_sets])
-    return f"{"|".join([str(curve) for curve in self.curves])},{self.slides},{self.length},{edge_sounds_str},{edge_sets_str}"
+    return f"{"|".join([str(curve) for curve in self.curves])},{self.slides},{fmt(self.length)},{edge_sounds_str},{edge_sets_str}"
 
 class Slider(HitObject):
   def __init__(
@@ -174,8 +173,8 @@ class Slider(HitObject):
     self.hit_sample = HitSample(raw=hit_sample)
 
   def __str__(self) -> str:
-    return f"{self.x:g},{self.y:g},{self.time:g},{self.type},{self.hit_sound},{self.object_params},{self.hit_sample}"
-  
+    return f"{fmt(self.x)},{fmt(self.y)},{fmt(self.time)},{self.type},{self.hit_sound},{self.object_params},{self.hit_sample}"
+
 
 class SpinnerObjectParams:
   def __init__(
@@ -193,7 +192,7 @@ class SpinnerObjectParams:
     self.end_time = float(raw)
 
   def __str__(self) -> str:
-    return f"{self.end_time:g}"
+    return f"{fmt(self.end_time)}"
 
 
 class Spinner(HitObject):
@@ -227,3 +226,6 @@ class Spinner(HitObject):
     self.hit_sound = int(hit_sound)
     self.object_params = SpinnerObjectParams(raw=",".join(object_params_str))
     self.hit_sample = HitSample(raw=hit_sample) if hit_sample else HitSample()
+
+  def __str__(self) -> str:
+    return f"{fmt(self.x)},{fmt(self.y)},{fmt(self.time)},{self.type},{self.hit_sound},{self.object_params},{self.hit_sample}"
