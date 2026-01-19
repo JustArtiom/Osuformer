@@ -43,7 +43,8 @@ class Beatmap():
           self.hit_objects: List[Union[Circle, Slider, Spinner]] = []
           for line in content.splitlines():
             hit_object_class = self.hit_object_type(line, 0)
-            self.hit_objects.append(hit_object_class(raw=line))
+            if hit_object_class:
+              self.hit_objects.append(hit_object_class(raw=line))
 
       self._recalculate_slider_durations()
 
@@ -57,11 +58,10 @@ class Beatmap():
     section_lines = []
 
     for line in raw.splitlines():
-      line = line.strip()
       if line.startswith("[") and line.endswith("]"):
         if current_section:
           sections[current_section] = "\n".join(section_lines).strip()
-        current_section = line[1:-1].strip()
+        current_section = line[1:-1]
         section_lines = []
       else:
         if current_section:
@@ -121,12 +121,18 @@ class Beatmap():
       segments = [segment.strip() for segment in raw.split(",")]
       type_id = int(segments[3])
 
-    if type_id & 1:
+    if type_id & 1: # Circle
       return Circle
-    elif type_id & 2:
+    elif type_id & 2: # Slider
       return Slider
-    elif type_id & 8:
+    elif type_id & 8: # Spinner
       return Spinner
+    elif type_id & 4: # New Combo
+      return None
+    elif type_id & 112: # 3-bit integer for skip combo colors
+      return None
+    elif type_id & 128: # Hold (mania)
+      return None
     else:
       raise ValueError(f"Unknown hit object type id: {type_id}")
     

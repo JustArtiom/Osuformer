@@ -5,4 +5,4 @@ class Events:
     # TODO
 
     def __str__(self) -> str:
-        return self.raw.strip()
+        return self.raw
