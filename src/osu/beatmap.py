@@ -129,8 +129,6 @@ class Beatmap():
       return Spinner
     elif type_id & 4: # New Combo
       return None
-    elif type_id & 112: # 3-bit integer for skip combo colors
-      return None
     elif type_id & 128: # Hold (mania)
       return None
     else:
