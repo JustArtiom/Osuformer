@@ -63,3 +63,11 @@ def requirements_up_to_date() -> bool:
   after = _file_hash(REQ_FILE)
 
   return before == after
+
+
+def main():
+  updated = requirements_up_to_date()
+  print("Requirements are up to date." if updated else "Requirements were updated.")
+
+if __name__ == "__main__":
+  main()
