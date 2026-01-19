@@ -39,6 +39,7 @@ class HitObject:
     self.object_params = segments[5]
     self.hit_sample = HitSample(raw=segments[6])
 
+
   def __str__(self) -> str:
     return f"{self.x},{self.y},{self.time},{self.type},{self.hit_sound},{self.object_params},{self.hit_sample}"
 
@@ -66,7 +67,7 @@ class Circle(HitObject):
 
 
   def __str__(self) -> str:
-    return  f"{self.x},{self.y},{self.time},{self.type},{self.hit_sound},{self.hit_sample}"
+    return  f"{self.x:g},{self.y:g},{self.time:g},{self.type},{self.hit_sound},{self.hit_sample}"
 
 class SliderCurve:
   def __init__(
@@ -88,7 +89,7 @@ class SliderCurve:
     self.curve_points = [tuple(map(float, point.split(":"))) for point in curve_points_str if point]
 
   def __str__(self) -> str:
-    return f"{self.curve_type}|{'|'.join([f'{x}:{y}' for x, y in self.curve_points])}"
+    return f"{self.curve_type}|{'|'.join([f'{x:g}:{y:g}' for x, y in self.curve_points])}"
 
 class SliderObjectParams:
   def __init__(
@@ -173,7 +174,7 @@ class Slider(HitObject):
     self.hit_sample = HitSample(raw=hit_sample)
 
   def __str__(self) -> str:
-    return f"{self.x},{self.y},{self.time},{self.type},{self.hit_sound},{self.object_params},{self.hit_sample}"
+    return f"{self.x:g},{self.y:g},{self.time:g},{self.type},{self.hit_sound},{self.object_params},{self.hit_sample}"
   
 
 class SpinnerObjectParams:
@@ -192,7 +193,7 @@ class SpinnerObjectParams:
     self.end_time = float(raw)
 
   def __str__(self) -> str:
-    return f"{self.end_time}"
+    return f"{self.end_time:g}"
 
 
 class Spinner(HitObject):
