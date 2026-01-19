@@ -7,5 +7,4 @@ def test_requirements_txt_is_up_to_date():
     "requirements.txt is not up to date with the imports in the codebase.\n"
     "Please run `pipreqs . --force --savepath requirements.txt` to update it.\n\n"
     f"Diff:\n{diff(current, generated)}\n\n"
-
   )
