@@ -1,15 +1,6 @@
 __pycache__/
-dataset/
 checkpoints/
-# Local scratch audio/model outputs generated during manual testing
-/audio*.mp3
-/audio*.mp3.mel.npz
-/audio*.mp3.mel.png
-/audio*.ogg
-/audio*.ogg.mel.npz
-/audio*.ogg.mel.png
-/audio*.generated.osu
-.env
-cache/
-*.tar.gz
-/job*
+old/
+*.log
+*.mp3
+*.osu
