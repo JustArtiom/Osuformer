@@ -1,6 +1,5 @@
-import subprocess
 import sys
-import hashlib
+import subprocess
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -40,14 +39,13 @@ def _normalized_requirements(path: Path) -> list[str]:
   return sorted(lines)
 
 
-def _run_pipreqs(ignored, output_path: Path):
+def _run_pipreqs(ignored):
   cmd = [
-    "pipreqs",
+    sys.executable,
+    "-m",
+    "pipreqs.pipreqs",
     str(PROJECT_ROOT),
-    "--use-local",
-    "--force",
-    "--savepath",
-    str(output_path),
+    "--force"
   ]
 
   if ignored:
@@ -59,19 +57,11 @@ def _run_pipreqs(ignored, output_path: Path):
 def requirements_up_to_date() -> bool:
   ignored = _read_gitignore_dirs()
 
-  tmp = PROJECT_ROOT / ".requirements.tmp.txt"
-
-  _run_pipreqs(ignored, tmp)
-
   current = _normalized_requirements(REQ_FILE)
-  generated = _normalized_requirements(tmp)
+  _run_pipreqs(ignored)
+  generated = _normalized_requirements(REQ_FILE)
 
-  print(current, generated)
-
-  if tmp.exists():
-    tmp.unlink()
-
-  return current == generated, "\n".join(current), "\n".join(generated)
+  return [c.split("==") for c in current] == [g.split("==") for g in generated], "\n".join(current), "\n".join(generated)
 
 
 def main():
