@@ -8,6 +8,7 @@ from src.osu import (
   SpinnerObjectParams,
   SliderCurve,
   CurveType,
+  Beatmap
 )
 
 def test_uninherited_timing_point():
@@ -43,6 +44,42 @@ def test_timing_point_bpm():
 def test_timing_point_slider_velocity_multiplier():
   point = TimingPoint(beat_length=-50)
   assert point.get_slider_velocity_multiplier() == 2.0
+
+def test_hit_object_type():
+  raw_circle = "256,192,1000,1,0,0:0:0:0:"
+  raw_slider = "256,192,2000,2,0,P|300:192,1,100,0:0|0:0,0:0:0:0:"
+  raw_spinner = "256,192,3000,8,0,4000,0:0:0:0:"
+
+  beatmap = Beatmap()
+  assert beatmap.hit_object_type(raw_circle) == Circle
+  assert beatmap.hit_object_type(raw_slider) == Slider
+  assert beatmap.hit_object_type(raw_spinner) == Spinner
+
+def test_hit_object_combo_flags():
+  raw_new_combo = "256,192,1000,5,0,0:0:0:0:"
+  raw_no_new_combo = "256,192,2000,1,0,0:0:0:0:"
+  beatmap = Beatmap()
+  type_new_combo = beatmap.hit_object_type(raw_new_combo)
+  type_no_new_combo = beatmap.hit_object_type(raw_no_new_combo)
+
+  obj_new_combo = type_new_combo(raw=raw_new_combo)
+  obj_no_new_combo = type_no_new_combo(raw=raw_no_new_combo)
+
+  assert obj_new_combo.is_new_combo()
+  assert not obj_no_new_combo.is_new_combo()
+
+def test_hit_object_combo_skip_count():
+  raw_skip_2 = "256,192,1000,33,0,0:0:0:0:"
+  raw_skip_0 = "256,192,2000,1,0,0:0:0:0:"
+  beatmap = Beatmap()
+  type_skip_2 = beatmap.hit_object_type(raw_skip_2)
+  type_skip_0 = beatmap.hit_object_type(raw_skip_0)
+
+  obj_skip_2 = type_skip_2(raw=raw_skip_2)
+  obj_skip_0 = type_skip_0(raw=raw_skip_0)
+
+  assert obj_skip_2.get_combo_skip_count() == 2
+  assert obj_skip_0.get_combo_skip_count() == 0
 
 def test_hit_sample():
   raw = "1:2:0:0:hit.wav"
