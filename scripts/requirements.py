@@ -44,6 +44,7 @@ def _run_pipreqs(ignored):
     "-m",
     "pipreqs.pipreqs",
     str(PROJECT_ROOT),
+    "--use-local",
     "--force"
   ]
 
