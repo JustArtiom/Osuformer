@@ -3,7 +3,7 @@ from difflib import SequenceMatcher
 import colorama
 colorama.init()
 
-def diff(a: str, b: str) -> str:
+def difflog(a: str, b: str) -> str:
   lines = unified_diff(
     a.splitlines(keepends=True),
     b.splitlines(keepends=True),
