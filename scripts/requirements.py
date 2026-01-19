@@ -61,7 +61,7 @@ def requirements_up_to_date() -> bool:
   _run_pipreqs(ignored)
   generated = _normalized_requirements(REQ_FILE)
 
-  return [c.split("==") for c in current] == [g.split("==") for g in generated], "\n".join(current), "\n".join(generated)
+  return current == generated, "\n".join(current), "\n".join(generated)
 
 
 def main():
