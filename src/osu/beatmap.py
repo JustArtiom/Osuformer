@@ -82,12 +82,24 @@ class Beatmap():
       previous_tp = tp
 
     return previous_tp
+  
+  def get_next_timing_point(self, time: int, filter: Optional[callable] = None) -> Union[TimingPoint, None]:
+    for tp in self.timing_points:
+      if tp.time <= time:
+        continue
+      if filter and not filter(tp):
+        continue
+      return tp
+    return None
 
   def get_bpm_at(self, time: int) -> float:
     tp = self.get_previous_timing_point(time, filter=lambda t: t.uninherited == 1)
+    if not tp:
+      tp = self.get_next_timing_point(time, filter=lambda t: t.uninherited == 1)
+    
     if tp:
       return tp.get_bpm()
-    return 0.0
+    return None
   
   def get_slider_velocity_multiplier_at(self, time: int) -> float:
     tp = self.get_previous_timing_point(time, filter=lambda t: t.uninherited == 0)
