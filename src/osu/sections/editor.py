@@ -1,4 +1,5 @@
 from typing import List
+from ..utils import fmt
 import re
 
 class Editor:
@@ -50,8 +51,8 @@ class Editor:
   def __str__(self) -> str:
     return (
       f"Bookmarks: {','.join(str(b) for b in self.bookmarks)}\n"
-      f"DistanceSpacing: {self.distance_spacing}\n"
+      f"DistanceSpacing: {fmt(self.distance_spacing)}\n"
       f"BeatDivisor: {self.beat_divisor}\n"
       f"GridSize: {self.grid_size}\n"
-      f"TimelineZoom: {self.timeline_zoom}"
+      f"TimelineZoom: {fmt(self.timeline_zoom)}"
     )
