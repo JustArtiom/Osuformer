@@ -28,6 +28,12 @@ class HitObject:
     if raw:
       self._load_raw(raw)
 
+  def is_new_combo(self, type = None) -> bool:
+    return ((type or self.type) & 4) != 0
+
+  def get_combo_skip_count(self, type = None) -> int:
+    return ((type or self.type) >> 4) & 0b111
+
   def _load_raw(self, raw: str):
     segments = [segment.strip() for segment in raw.split(",")]
     if len(segments) != 7:
