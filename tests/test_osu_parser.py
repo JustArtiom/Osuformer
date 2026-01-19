@@ -36,6 +36,14 @@ def test_inherited_timing_point():
   assert point.effects == 0
   assert str(point) == raw
 
+def test_timing_point_bpm():
+  point = TimingPoint(beat_length=500)
+  assert point.get_bpm() == 120.0
+
+def test_timing_point_slider_velocity_multiplier():
+  point = TimingPoint(beat_length=-50)
+  assert point.get_slider_velocity_multiplier() == 2.0
+
 def test_hit_sample():
   raw = "1:2:0:0:hit.wav"
   sample = HitSample(raw=raw)
