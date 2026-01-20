@@ -19,6 +19,8 @@ class TokenizerConfig:
   BPM_MIN: int = 30
   BPM_MAX: int = 300
   BPM_JUMP: int = 5
+  SLIDER_LEN_BINS: int = 10
+  SLIDER_LEN_MAX: int = 1000
 
 @dataclass
 class EncoderConfig:
