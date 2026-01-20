@@ -8,9 +8,8 @@ from src.osu import Beatmap
 
 @click.command()
 @click.argument("path")
-@click.option("--diff/--no-diff", "show_diff", default=True, help="Show diff between raw and parsed map")
 @config_options
-def main(path, show_diff, config_path, size):
+def main(path, config_path, size):
   config = load_config(config_path, size)
   raw_map = read_file(path)
   beatmap = Beatmap(raw=raw_map)
