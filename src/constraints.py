@@ -1,7 +1,7 @@
 from .config import TokenizerConfig
 
 def build_dsl_tokens(config: TokenizerConfig):
-  DT_TOKENS = [ "DT_0", "DT_10", "DT_100", "DT_1000" ]
+  DT_TOKENS = [ "DT_10", "DT_100", "DT_1000" ]
   X_TOKENS = [ f"X_{i}" for i in range(config.X_BINS) ]
   Y_TOKENS = [ f"Y_{i}" for i in range(config.Y_BINS) ]
   OBJ_TOKENS = [ "OBJ_START", "OBJ_END" ]

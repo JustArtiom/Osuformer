@@ -18,6 +18,8 @@ def main(path, config_path, size, decode, show_diff):
   beatmap = Beatmap(raw=raw_map)
   tokenizer = Tokenizer(config.tokenizer)
 
+  print([tokenizer.id_to_token[t] for t in tokenizer.encode(beatmap)])
+
   tokens = tokenizer.encode(beatmap)
   compare_to = None
   decoded_score = None

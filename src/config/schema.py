@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Union, Literal
 from dataclasses import dataclass, field
 
 @dataclass
@@ -8,6 +9,15 @@ class DatasetConfig:
 @dataclass
 class CacheConfig:
   path: str = ""
+
+@dataclass
+class AudioConfig:
+  sample_rate: int = 22050
+  hop_ms: int = 10
+  win_ms: int = 25
+  n_mels: int = 80
+  n_fft: int = 1024
+  normalize: bool = True
 
 @dataclass
 class TokenizerConfig:
@@ -49,6 +59,7 @@ class ModelConfig:
 class RootConfig:
   dataset: DatasetConfig = field(default_factory=DatasetConfig)
   cache: CacheConfig = field(default_factory=CacheConfig)
+  audio: AudioConfig = field(default_factory=AudioConfig)
   tokenizer: TokenizerConfig = field(default_factory=TokenizerConfig)
   model: ModelConfig = field(default_factory=ModelConfig)
 
