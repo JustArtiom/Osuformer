@@ -12,7 +12,7 @@ class Metadata:
     creator: str = "Unknown",
     version: str = "Unknown",
     source: str = "",
-    tags: List[str] = [],
+    tags: List[str] | None = None,
     beatmap_id: int = 0,
     beatmap_set_id: int = 0,
   ):
@@ -23,7 +23,7 @@ class Metadata:
     self.creator = creator
     self.version = version
     self.source = source
-    self.tags = tags
+    self.tags = list(tags) if tags is not None else []
     self.beatmap_id = beatmap_id
     self.beatmap_set_id = beatmap_set_id
 
