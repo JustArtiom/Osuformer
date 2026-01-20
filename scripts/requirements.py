@@ -54,7 +54,7 @@ def _run_pipreqs(ignored):
   subprocess.check_call(cmd)
 
 
-def requirements_up_to_date() -> bool:
+def requirements_up_to_date() -> tuple[bool, str, str]:
   ignored = _read_gitignore_dirs()
 
   current = _normalized_requirements(REQ_FILE)

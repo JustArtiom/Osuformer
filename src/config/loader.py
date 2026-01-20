@@ -2,9 +2,9 @@ from __future__ import annotations
 import click
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union, cast
 
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from .schema import ExperimentConfig
 
@@ -19,7 +19,7 @@ def _resolve_size_path(config_path: Path, size: str) -> Path:
     return alt
   raise FileNotFoundError(f"Size config not found for '{size}' (looked in {candidate} and {alt})")
 
-def _merge_configs(base: DictConfig, override: Optional[DictConfig]) -> DictConfig:
+def _merge_configs(base: Union[DictConfig, ListConfig], override: Optional[Union[DictConfig, ListConfig]]) -> Union[ListConfig, DictConfig]:
   if override is None:
     return base
   merged = OmegaConf.merge(base, override)
@@ -34,8 +34,8 @@ def load_config(config_path: str, size: Optional[str] = None) -> ExperimentConfi
     else:
       raise FileNotFoundError(f"Config file not found: {path}")
 
-  base_cfg: DictConfig = OmegaConf.load(path)
-  override_cfg: Optional[DictConfig] = None
+  base_cfg: Union[DictConfig, ListConfig] = OmegaConf.load(str(path))
+  override_cfg: Optional[Union[DictConfig, ListConfig]] = None
 
   if size:
     size_path = _resolve_size_path(path, size)
@@ -43,7 +43,7 @@ def load_config(config_path: str, size: Optional[str] = None) -> ExperimentConfi
 
   merged = _merge_configs(base_cfg, override_cfg)
   structured = OmegaConf.merge(OmegaConf.structured(ExperimentConfig), merged)
-  config: ExperimentConfig = OmegaConf.to_object(structured)
+  config: ExperimentConfig = cast(ExperimentConfig, OmegaConf.to_object(structured))
   return config
 
 def config_options(fn):

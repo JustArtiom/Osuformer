@@ -29,14 +29,14 @@ class AimEvaluator:
 
     @classmethod
     def evaluate(cls, current: OsuDifficultyHitObject, include_sliders: bool) -> float:
+        prev = current.previous(0)
         if (
             current.base_object.object_type == "Spinner"
             or current.index <= 1
-            or current.previous(0).base_object.object_type == "Spinner"
+            or (prev and prev.base_object.object_type == "Spinner")
         ):
             return 0.0
 
-        prev = current.previous(0)
         prev_prev = current.previous(1)
         if prev is None or prev_prev is None:
             return 0.0
@@ -150,7 +150,7 @@ class SpeedEvaluator:
         if current.hit_window_great > 0:
             strain_time /= clamp((strain_time / current.hit_window_great) / 0.93, 0.92, 1.0)
 
-        doubletapness = 1.0 - current.get_doubletapness(current.next(0))  # type: ignore[arg-type]
+        doubletapness = 1.0 - current.get_doubletapness(current.next(0))
 
         speed_bonus = 0.0
         if milliseconds_to_bpm(strain_time) > cls.MIN_SPEED_BONUS:
@@ -201,8 +201,8 @@ class RhythmEvaluator:
         if prev_obj is None or last_obj is None:
             return 1.0
 
-        prev_obj = prev_obj  # type: ignore[assignment]
-        last_obj = last_obj  # type: ignore[assignment]
+        prev_obj = prev_obj
+        last_obj = last_obj
 
         for i in range(rhythm_start, 0, -1):
             curr_obj = current.previous(i - 1)

@@ -5,12 +5,11 @@ from typing import Iterable, List, Sequence
 from ..enums import Mods
 
 
-MOD_CLOCK_RATES = {
-    Mods.DoubleTime: 1.5,
-    Mods.NightCore: 1.5,
-    Mods.HalfTime: 0.75,
+MOD_CLOCK_RATES: dict[str, float] = {
+    "DoubleTime": 1.5,
+    "NightCore": 1.5,
+    "HalfTime": 0.75,
 }
-
 
 def normalise_mods(mods: Sequence[Mods | str] | None) -> List[str]:
     if not mods:

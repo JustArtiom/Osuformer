@@ -4,7 +4,7 @@ import math
 from typing import List, Sequence
 
 from .base import DifficultyHitObject, OsuStrainSkill
-from .evaluators import AimEvaluator, RhythmEvaluator, SpeedEvaluator
+from .evaluators import AimEvaluator, RhythmEvaluator, SpeedEvaluator, OsuDifficultyHitObject
 from .strain_utils import count_top_weighted_sliders
 
 
@@ -27,7 +27,7 @@ class Aim(OsuStrainSkill):
             return 0.0
         return self._current_strain * self._strain_decay(time - prev.start_time)
 
-    def strain_value_at(self, current: DifficultyHitObject) -> float:
+    def strain_value_at(self, current: OsuDifficultyHitObject) -> float:
         prev = current.previous(0)
         if prev is None:
             return 0.0
@@ -79,7 +79,7 @@ class Speed(OsuStrainSkill):
             return 0.0
         return (self._current_strain * self._current_rhythm) * self._strain_decay(time - prev.start_time)
 
-    def strain_value_at(self, current: DifficultyHitObject) -> float:
+    def strain_value_at(self, current: OsuDifficultyHitObject) -> float:
         prev = current.previous(0)
         if prev is None:
             return 0.0

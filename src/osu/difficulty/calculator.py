@@ -7,7 +7,7 @@ from ..beatmap import Beatmap
 from ..hit_object import Circle, Slider, Spinner
 from ..enums import Mods
 from .attributes import DifficultyAttributes, PerformanceAttributes
-from .base import DifficultyObject
+from .base import DifficultyObject, DifficultyHitObject
 from .hit_windows import HitResult, OsuHitWindows, difficulty_range, inverse_difficulty_range, DifficultyRange
 from .legacy import calculate_scale_from_circle_size
 from .math_utils import clamp

@@ -21,7 +21,11 @@ jobs:
       - name: Install pipreqs
         run: |
           python -m pip install --upgrade pip
-          pip install pipreqs pytest colorama click omegaconf
+          pip install pipreqs pytest colorama click omegaconf pyright
+
+      - name: Type checking with Pyright
+        run: |
+          pyright
 
       - name: Run unit tests
         run: |

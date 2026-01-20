@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Generic, TypeVar, TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from .preprocessing import OsuDifficultyHitObject
 from .math_utils import clamp
 
 
+T = TypeVar("T", bound="DifficultyHitObject")
+
 @dataclass
-class DifficultyHitObject:
+class DifficultyHitObject(Generic[T]):
     base_object: "DifficultyObject"
     last_object: "DifficultyObject"
     clock_rate: float
-    objects: List["DifficultyHitObject"]
+    objects: List[T]
     index: int
 
     delta_time: float = field(init=False)
@@ -24,13 +28,13 @@ class DifficultyHitObject:
         self.start_time = self.base_object.start_time / self.clock_rate
         self.end_time = self.base_object.end_time / self.clock_rate
 
-    def previous(self, backwards_index: int) -> Optional["DifficultyHitObject"]:
+    def previous(self, backwards_index: int) -> Optional[T]:
         idx = self.index - (backwards_index + 1)
         if 0 <= idx < len(self.objects):
             return self.objects[idx]
         return None
 
-    def next(self, forwards_index: int) -> Optional["DifficultyHitObject"]:
+    def next(self, forwards_index: int) -> Optional[T]:
         idx = self.index + (forwards_index + 1)
         if 0 <= idx < len(self.objects):
             return self.objects[idx]
@@ -41,7 +45,7 @@ class Skill:
     def __init__(self, mods: List[str]) -> None:
         self._mods = tuple(mods)
 
-    def process(self, current: DifficultyHitObject) -> None:
+    def process(self, current: OsuDifficultyHitObject) -> None:
         raise NotImplementedError
 
     def difficulty_value(self) -> float:
@@ -59,13 +63,13 @@ class StrainSkill(Skill):
         self._strain_peaks: List[float] = []
         self.object_strains: List[float] = []
 
-    def strain_value_at(self, current: DifficultyHitObject) -> float:
+    def strain_value_at(self, current: OsuDifficultyHitObject) -> float:
         raise NotImplementedError
 
-    def calculate_initial_strain(self, time: float, current: DifficultyHitObject) -> float:
+    def calculate_initial_strain(self, time: float, current: OsuDifficultyHitObject) -> float:
         raise NotImplementedError
 
-    def process(self, current: DifficultyHitObject) -> None:
+    def process(self, current: OsuDifficultyHitObject) -> None:
         if current.index == 0:
             self._current_section_end = math.ceil(current.start_time / self.section_length) * self.section_length
 
@@ -91,7 +95,7 @@ class StrainSkill(Skill):
     def _save_current_peak(self) -> None:
         self._strain_peaks.append(self._current_section_peak)
 
-    def _start_new_section_from(self, time: float, current: DifficultyHitObject) -> None:
+    def _start_new_section_from(self, time: float, current: OsuDifficultyHitObject) -> None:
         self._current_section_peak = self.calculate_initial_strain(time, current)
 
     def get_current_strain_peaks(self) -> List[float]:
