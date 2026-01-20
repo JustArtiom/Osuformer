@@ -29,6 +29,10 @@ python -m scripts.requirements
 python -m scripts.parse_map <path/to/map.osu>
 ```
 
+### Tokenize osu map
+```
+python -m scripts.tokenize <path/to/map.ous>
+```
 
 # Nice to know
 
