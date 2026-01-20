@@ -77,6 +77,7 @@ class Tokenizer:
         tokens += self.encode_delta_time(spinning_duration)
         tokens.append(self.token_to_id["OBJ_END"])
     tokens.append(self.token_to_id["MAP_END"])
+    tokens.append(self.token_to_id["EOS"])
     return tokens
 
   def decode(self, tokens: list[int]) -> Beatmap:
@@ -104,15 +105,18 @@ class Tokenizer:
     tokens = []
 
     while delta >= 1000:
-        tokens.append(self.token_to_id["DT_1000"])
-        delta -= 1000
+      tokens.append(self.token_to_id["DT_1000"])
+      delta -= 1000
 
     while delta >= 100:
-        tokens.append(self.token_to_id["DT_100"])
-        delta -= 100
+      tokens.append(self.token_to_id["DT_100"])
+      delta -= 100
 
     while delta >= 10:
-        tokens.append(self.token_to_id["DT_10"])
-        delta -= 10
+      tokens.append(self.token_to_id["DT_10"])
+      delta -= 10
+
+    if len(tokens) < 1:
+      tokens.append(self.token_to_id["DT_0"])
 
     return tokens

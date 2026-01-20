@@ -6,13 +6,13 @@ class Editor:
   def __init__(
     self, *,
     raw: str = "",
-    bookmarks: List[int] = [],
+    bookmarks: List[int] | None = None,
     distance_spacing: float = 1.0,
     beat_divisor: int = 4,
     grid_size: int = 32,
     timeline_zoom: float = 1.0
   ):
-    self.bookmarks = bookmarks
+    self.bookmarks = list(bookmarks) if bookmarks is not None else []
     self.distance_spacing = distance_spacing
     self.beat_divisor = beat_divisor
     self.grid_size = grid_size

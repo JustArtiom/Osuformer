@@ -8,20 +8,19 @@ class Beatmap():
     self, *, 
     raw: str = "", 
     file_path: str = "",
-    general: General = None,
-    timing_points: List[TimingPoint] = None,
-    hit_objects: List[Union[Circle, Slider, Spinner]] = None
+    general: Optional[General] = None,
+    difficulty: Optional[Difficulty] = None,
+    timing_points: Optional[List[TimingPoint]] = None,
+    hit_objects: Optional[List[Union[Circle, Slider, Spinner]]] = None
   ):
     if file_path:
       with open(file_path, "r", encoding="utf-8") as f:
         raw = f.read()
 
-    if general:
-      self.general = general
-    if timing_points:
-      self.timing_points = timing_points
-    if hit_objects:
-      self.hit_objects = hit_objects
+    self.general = general if general is not None else General()
+    self.difficulty = difficulty if difficulty is not None else Difficulty()
+    self.timing_points = list(timing_points) if timing_points is not None else []
+    self.hit_objects = list(hit_objects) if hit_objects is not None else []
 
     if raw:
       for section, content in self.split_sections(raw).items():

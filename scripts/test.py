@@ -1,7 +1,15 @@
-from src.osu import Slider
+from src.osu import Beatmap, TimingPoint, Difficulty
+from src.config import TokenizerConfig
+from src.tokenizer import Tokenizer
 
-raw = "26,340,109,6,0,P|84:343|159:311,1,135.000005149842,6|2,1:2|0:0,0:0:0:0:"
-slider = Slider(raw=raw)
-print(slider.__dict__)
-print(slider.object_params.__dict__)
-print(slider.object_params.curves[0].__dict__)
+
+
+beatmap = Beatmap(difficulty=Difficulty(slider_multiplier=2.0))
+tp = TimingPoint(time=0, beat_length=-50, uninherited=0)
+beatmap.timing_points.append(tp)
+
+tokenizer = Tokenizer(config=TokenizerConfig)
+tokens = tokenizer.encode(beatmap)
+readable = [tokenizer.id_to_token[t] for t in tokens]
+
+print(readable)
