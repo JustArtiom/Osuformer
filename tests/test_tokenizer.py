@@ -127,12 +127,6 @@ def test_encode_encode_margin_errors():
   beatmap.hit_objects.append(circle)
   tokenizer = Tokenizer(config=TokenizerConfig())
 
-  def round_coord(value: float, axis) -> int:
-    if axis == 'Y':
-      return round(value / (384 / tokenizer.config.Y_BINS))
-    elif axis == 'X':
-      return round(value / (512 / tokenizer.config.X_BINS))
-
   tests = [(256, 192), (255, 191), (257, 193)]
   for test in tests:
     circle.x = test[0]
@@ -145,7 +139,7 @@ def test_encode_encode_margin_errors():
       "SR_0", "MAP_START", 
       "DT_0",
       "OBJ_START", "T_CIRCLE", 
-      f"X_16", f"Y_12", 
+      "X_16", "Y_12", 
       "OBJ_END",
       "MAP_END", "EOS"
     ]
