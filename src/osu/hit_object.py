@@ -56,7 +56,7 @@ class Circle(HitObject):
     x: float = 0,
     y: float = 0,
     time: float = 0,
-    type: int = 0,
+    type: int = 1,
     hit_sound: int = 0,
     hit_sample: Optional[HitSample] = None
   ):
@@ -113,8 +113,8 @@ class SliderObjectParams:
     self.slides = slides
     self.length = length
     self.duration = duration
-    self.edge_sounds = list(edge_sounds) if edge_sounds is not None else []
-    self.edge_sets = list(edge_sets) if edge_sets is not None else []
+    self.edge_sounds = list(edge_sounds) if edge_sounds is not None else [0, 0]
+    self.edge_sets = list(edge_sets) if edge_sets is not None else [(0, 0), (0, 0)]
 
     if raw:
       self._load_raw(raw)
@@ -154,7 +154,7 @@ class Slider(HitObject):
     x: float = 0,
     y: float = 0,
     time: float = 0,
-    type: int = 0,
+    type: int = 2,
     hit_sound: int = 0,
     object_params: Optional[SliderObjectParams] = None,
     hit_sample: Optional[HitSample] = None
@@ -207,16 +207,16 @@ class Spinner(HitObject):
     self, 
     *, 
     raw: str = "",
-    x: float = 0,
-    y: float = 0,
+    x: float = 256,
+    y: float = 192,
     time: float = 0,
-    type: int = 0,
+    type: int = 8,
     hit_sound: int = 0,
     object_params: Optional[SpinnerObjectParams] = None,
     hit_sample: Optional[HitSample] = None
   ):
     if object_params is None:
-      object_params = SpinnerObjectParams()
+      object_params = SpinnerObjectParams(end_time=time)
     super().__init__(raw=raw, x=x, y=y, time=time, type=type, hit_sound=hit_sound, object_params=object_params, hit_sample=hit_sample)
 
   def _load_raw(self, raw: str):
