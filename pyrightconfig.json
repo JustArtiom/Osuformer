@@ -1,4 +1,5 @@
 {
   "typeCheckingMode": "standard",
+  "reportMissingImports": false,
   "reportMissingTypeStubs": false
 }
