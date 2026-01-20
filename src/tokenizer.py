@@ -1,6 +1,6 @@
 from .config import TokenizerConfig
 from .constraints import build_vocab
-from .osu import Beatmap, TimingPoint, Circle, Slider, Spinner, CurveType
+from .osu import Beatmap, TimingPoint, Circle, Slider, Spinner, SliderCurve, CurveType, Difficulty
 
 class Tokenizer:
   def __init__(self, config: TokenizerConfig):
@@ -83,18 +83,108 @@ class Tokenizer:
     return tokens
 
   def decode(self, tokens: list[int]) -> Beatmap:
-    raise NotImplementedError("Decoding is not implemented yet.")
+    readable_tokens = [self.id_to_token[t] for t in tokens]
+    beatmap = Beatmap(
+      difficulty=Difficulty(
+        slider_multiplier=1.0
+      )
+    )
+
+    time = 0
+    building_object = None
+    building_slider_params = None
+    building_slider_segment = None
+    building_slider_control_point = None
+    building_spinner_params = None
+    building_timing_point = None
+
+    for i, token in enumerate(readable_tokens):
+      if token == "MAP_START":
+        continue
+      elif token == "MAP_END":
+        continue
+      elif token == "EOS":
+        continue
+      elif token.startswith("SR_"):
+        continue
+      elif token.startswith("DT_"):
+        delta_ms = self.extract_number_from_token(token, "DT_") * self.config.DT_BIN_MS
+        time += delta_ms
+      elif token == "TP_START":
+        building_timing_point = TimingPoint(time=time)
+      elif token.startswith("SV_"):
+        if building_timing_point:
+          sv_multiplier = self.extract_number_from_token(token, "SV_")
+          building_timing_point.beat_length = -100.0 / (sv_multiplier / beatmap.difficulty.slider_multiplier)
+          building_timing_point.uninherited = 0
+      elif token == "TP_END":
+        if building_timing_point:
+          beatmap.timing_points.append(building_timing_point)
+          building_timing_point = None
+      elif token == "OBJ_START":
+        building_object = True
+        continue
+      elif token == "T_CIRCLE" and building_object:
+        building_object = Circle(time=time)
+      elif token == "T_SLIDER" and building_object:
+        building_object = Slider(time=time, object_params=Slider.SliderObjectParams())
+      elif token == "T_SPINNER" and building_object:
+        building_object = Spinner(time=time, object_params=Spinner.SpinnerObjectParams())
+      elif token.startswith("X_") and building_object and not building_slider_params and not building_spinner_params:
+        building_object.x = self.extract_number_from_token(token, "X_") * self.x_bin_width
+      elif token.startswith("Y_") and building_object and not building_slider_params and not building_spinner_params:
+        building_object.y = self.extract_number_from_token(token, "Y_") * self.y_bin_width
+        if isinstance(building_object, Slider):
+          building_slider_params = building_object.object_params
+        if isinstance(building_object, Spinner):
+          building_spinner_params = building_object.object_params
+      elif token.startswith("SL_") and building_slider_params:
+        building_object.object_params.length = self.extract_number_from_token(token, "SL_") * self.config.SLIDER_LEN_BINS
+      elif token.startswith("SEG_") and building_slider_params:
+        curve_type_str = token[len("SEG_"):]
+        curve_type = CurveType[curve_type_str]
+        building_slider_segment = SliderCurve(curve_type=curve_type, curve_points=[])
+        building_slider_params.curves.append(building_slider_segment)
+      elif token.startswith("CP_") and building_slider_segment:
+        building_slider_control_point = ()
+      elif token.startswith("X_") and building_slider_control_point is not None:
+        cp_x = self.extract_number_from_token(token, "X_") * self.x_bin_width
+        building_slider_control_point += (cp_x,)
+      elif token.startswith("Y_") and building_slider_control_point is not None:
+        cp_y = self.extract_number_from_token(token, "Y_") * self.y_bin_width
+        building_slider_control_point += (cp_y,)
+        if len(building_slider_control_point) == 2:
+          building_slider_segment.curve_points.append(building_slider_control_point)
+          building_slider_control_point = None
+          if(not readable_tokens[i+1].startswith("CP_")):
+            building_slider_segment = None
+            building_slider_params = None
+      elif token.startswith("DT_") and building_spinner_params:
+        delta_ms = self.extract_number_from_token(token, "DT_") * self.config.DT_BIN_MS
+        building_spinner_params.end_time = building_object.time + delta_ms
+      elif token == "OBJ_END" and building_object:
+        beatmap.hit_objects.append(building_object)
+        building_object = None
+        building_slider_params = None
+        building_slider_segment = None
+        building_slider_control_point = None
+        building_spinner_params = None
+    return beatmap
+
+  def extract_number_from_token(self, token: str, prefix: str) -> float:
+    try:
+      return float(token[len(prefix):])
+    except:
+      return None
 
   def find_closest_token_from_vocab(self, value: float, prefix: str) -> str:
     candidates = []
 
     for tok in self.token_to_id.keys():
         if tok.startswith(prefix):
-            try:
-                num = float(tok[len(prefix):])
-                candidates.append((tok, num))
-            except:
-                continue
+            num = self.extract_number_from_token(tok, prefix)
+            if num is not None:
+              candidates.append((tok, num))
 
     if not candidates:
         raise ValueError(f"No tokens found with prefix {prefix}")
