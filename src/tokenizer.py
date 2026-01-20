@@ -125,6 +125,13 @@ class Tokenizer:
             continue
           building_timing_point.beat_length = -100.0 / (sv_multiplier / beatmap.difficulty.slider_multiplier)
           building_timing_point.uninherited = 0
+      elif token.startswith("BPM_"):
+        if building_timing_point:
+          bpm = self.extract_number_from_token(token, "BPM_")
+          if bpm is None:
+            continue
+          building_timing_point.beat_length = 60000.0 / bpm
+          building_timing_point.uninherited = 1
       elif token == "TP_END":
         if building_timing_point:
           beatmap.timing_points.append(building_timing_point)
@@ -151,7 +158,9 @@ class Tokenizer:
         if isinstance(building_object, Slider):
           building_slider_params = building_object.object_params
       elif token.startswith("SL_") and building_slider_params:
-        building_object.object_params.length = self.extract_number_from_token(token, "SL_") # type: ignore
+        sl = self.extract_number_from_token(token, "SL_")
+        if sl is not None:
+          building_slider_params.length = sl * self.config.SLIDER_LEN_BINS
       elif token.startswith("SEG_") and building_slider_params:
         curve_type_str = token[len("SEG_"):]
         curve_type = CurveType[curve_type_str]
@@ -225,8 +234,5 @@ class Tokenizer:
     while delta >= 10:
       tokens.append(self.token_to_id["DT_10"])
       delta -= 10
-
-    if len(tokens) < 1:
-      tokens.append(self.token_to_id["DT_0"])
 
     return tokens

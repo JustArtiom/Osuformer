@@ -11,6 +11,7 @@ class Beatmap():
     general: Optional[General] = None,
     difficulty: Optional[Difficulty] = None,
     timing_points: Optional[List[TimingPoint]] = None,
+    colours: Optional[Colours] = None,
     hit_objects: Optional[List[Union[Circle, Slider, Spinner]]] = None
   ):
     if file_path:
@@ -20,6 +21,7 @@ class Beatmap():
     self.general = general if general is not None else General()
     self.difficulty = difficulty if difficulty is not None else Difficulty()
     self.timing_points = list(timing_points) if timing_points is not None else []
+    self.colours = colours if colours is not None else Colours()
     self.hit_objects = list(hit_objects) if hit_objects is not None else []
 
     if raw:

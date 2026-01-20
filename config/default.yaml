@@ -4,6 +4,14 @@ dataset:
 cache:
   path: cache
 
+audio:
+  sample_rate: 22050
+  hop_ms: 10
+  win_ms: 25
+  n_mels: 80
+  n_fft: 1024
+  normalize: true
+
 tokenizer:
   DT_BIN_MS: 10
   X_BINS: 32

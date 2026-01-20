@@ -22,7 +22,7 @@ def test_encoding_bpm_timing_point():
   tokens = tokenizer.encode(beatmap)
   readable = [tokenizer.id_to_token[t] for t in tokens]
 
-  assert readable == ["SR_0", "MAP_START", "DT_0", "TP_START", "BPM_120", "TP_END", "MAP_END", "EOS"]
+  assert readable == ["SR_0", "MAP_START", "TP_START", "BPM_120", "TP_END", "MAP_END", "EOS"]
 
 def test_encoding_sv_timing_point():
   beatmap = Beatmap(difficulty=Difficulty(slider_multiplier=2.0))
@@ -33,7 +33,7 @@ def test_encoding_sv_timing_point():
   tokens = tokenizer.encode(beatmap)
   readable = [tokenizer.id_to_token[t] for t in tokens]
 
-  assert readable == ["SR_0", "MAP_START", "DT_0", "TP_START", "SV_4.0", "TP_END", "MAP_END", "EOS"]
+  assert readable == ["SR_0", "MAP_START", "TP_START", "SV_4.0", "TP_END", "MAP_END", "EOS"]
 
 def test_encoding_circle_hit_object():
   beatmap = Beatmap()
@@ -137,7 +137,6 @@ def test_encode_encode_margin_errors():
 
     assert readable == [
       "SR_0", "MAP_START", 
-      "DT_0",
       "OBJ_START", "T_CIRCLE", 
       "X_16", "Y_12", 
       "OBJ_END",
@@ -208,7 +207,11 @@ def test_simultaneous_objects():
   tokens = Tokenizer(TokenizerConfig()).encode(beatmap)
   readable = [Tokenizer(TokenizerConfig()).id_to_token[t] for t in tokens]
 
-  assert readable.count("DT_0") == 1
+  assert readable.count("DT_1000") == 1
+  assert readable.count("DT_100") == 0
+  assert readable.count("DT_10") == 0
+  assert readable.count("OBJ_START") == 2
+  assert readable.count("OBJ_END") == 2
 
 def test_every_object_has_wrappers():
   beatmap = Beatmap()
@@ -232,3 +235,57 @@ def test_large_map():
 
   tokens = Tokenizer(TokenizerConfig()).encode(beatmap)
   assert len(tokens) > 0
+
+def test_decode_encode_similarity():
+  tokenizer = Tokenizer(TokenizerConfig())
+  tokens = [
+    # Pre Context Tokens
+    'SR_2',
+    'MAP_START',
+      'DT_100', 'DT_10', 
+      'TP_START', 'BPM_240', 'TP_END', 
+      'TP_START', 'SV_1.4', 'TP_END', 
+
+      'OBJ_START', 'T_SLIDER', 'X_2', 'Y_21', 'SL_14', 'SEG_PERFECT', 'CP_0', 'X_5', 'Y_21', 'CP_1', 'X_10', 'Y_19', 'OBJ_END', 
+
+      'DT_100', 'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
+      'OBJ_START', 'T_CIRCLE', 'X_12', 'Y_10', 'OBJ_END', 
+      
+      'DT_100', 'DT_10', 'DT_10', 'DT_10', 
+      'OBJ_START', 'T_SLIDER', 'X_12', 'Y_10', 'SL_7', 'SEG_LINEAR', 'CP_0', 'X_13', 'Y_16', 'OBJ_END', 
+      
+      'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
+      'OBJ_START', 'T_SLIDER', 'X_18', 'Y_20', 'SL_7', 'SEG_LINEAR', 'CP_0', 'X_19', 'Y_16', 'OBJ_END', 
+
+      'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
+      'OBJ_START', 'T_SLIDER', 'X_31', 'Y_10', 'SL_14', 'SEG_PERFECT', 'CP_0', 'X_28', 'Y_12', 'CP_1', 'X_24', 'Y_12', 'OBJ_END', 
+
+      'DT_100', 'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
+      'OBJ_START', 'T_CIRCLE', 'X_12', 'Y_1', 'OBJ_END', 
+      
+      'DT_100', 'DT_10', 'DT_10', 'DT_10', 
+      'OBJ_START', 'T_SLIDER', 'X_12', 'Y_1', 'SL_7', 'SEG_PERFECT', 'CP_0', 'X_15', 'Y_1', 'CP_1', 'X_17', 'Y_3', 'OBJ_END', 
+      
+      'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
+      'OBJ_START', 'T_SLIDER', 'X_24', 'Y_11', 'SL_7', 'SEG_LINEAR', 'CP_0', 'X_23', 'Y_5', 'OBJ_END', 
+      
+      'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
+      'OBJ_START', 'T_CIRCLE', 'X_5', 'Y_7', 'OBJ_END', 
+      
+      'DT_100', 'DT_10', 'DT_10', 
+      'OBJ_START', 'T_SLIDER', 'X_5', 'Y_7', 'SL_14', 'SEG_BEZIER', 'CP_0', 'X_10', 'Y_7', 'CP_1', 'X_8', 'Y_9', 'CP_2', 'X_14', 'Y_9', 'OBJ_END', 
+      
+      'DT_100', 'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
+      'OBJ_START', 'T_CIRCLE', 'X_23', 'Y_2', 'OBJ_END', 
+      
+      "DT_10",
+      "OBJ_START", "T_SPINNER", *["DT_10"]*9, "OBJ_END",
+    'MAP_END', 
+    'EOS'
+  ]
+
+  decoded_beatmap = tokenizer.decode([tokenizer.token_to_id[t] for t in tokens])
+  reencoded_tokens = tokenizer.encode(decoded_beatmap)
+  reencoded_readable = [tokenizer.id_to_token[t] for t in reencoded_tokens]
+
+  assert tokens == reencoded_readable
