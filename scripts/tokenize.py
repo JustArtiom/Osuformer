@@ -1,4 +1,3 @@
-from ast import For
 from src.tokenizer import Tokenizer
 from src.osu import Beatmap
 from src.config import config_options, load_config
@@ -20,13 +19,16 @@ def main(path, config_path, size, decode, show_diff):
   tokenizer = Tokenizer(config.tokenizer)
 
   tokens = tokenizer.encode(beatmap)
-  print([tokenizer.id_to_token[t] for t in tokens])
-
   compare_to = None
   decoded_score = None
 
   if decode:
     decoded_beatmap = tokenizer.decode(tokens)
+    decoded_beatmap.general = beatmap.general
+    decoded_beatmap.editor = beatmap.editor
+    decoded_beatmap.events = beatmap.events
+    decoded_beatmap.colours = beatmap.colours
+    decoded_beatmap.metadata = beatmap.metadata
     decoded_map_str = str(decoded_beatmap)
     decoded_score = similarity(raw_map, decoded_map_str)
 

@@ -1,7 +1,7 @@
 from .sections import General, Difficulty, Editor, Metadata, Colours, Events
 from .timing_point import TimingPoint
 from .hit_object import Circle, Slider, Spinner, HitObject
-from typing import Optional, Union, List
+from typing import Callable, Optional, Union, List
 
 class Beatmap():
   def __init__(
@@ -71,7 +71,7 @@ class Beatmap():
 
     return sections
 
-  def get_previous_timing_point(self, time: int, filter: Optional[callable] = None) -> Union[TimingPoint, None]:
+  def get_previous_timing_point(self, time: float, filter: Optional[Callable[[TimingPoint], bool]] = None) -> Union[TimingPoint, None]:
     previous_tp = None
     for tp in self.timing_points:
       if tp.time > time:
@@ -81,8 +81,8 @@ class Beatmap():
       previous_tp = tp
 
     return previous_tp
-  
-  def get_next_timing_point(self, time: int, filter: Optional[callable] = None) -> Union[TimingPoint, None]:
+
+  def get_next_timing_point(self, time: int, filter: Optional[Callable[[TimingPoint], bool]] = None) -> Union[TimingPoint, None]:
     for tp in self.timing_points:
       if tp.time <= time:
         continue
@@ -91,7 +91,7 @@ class Beatmap():
       return tp
     return None
 
-  def get_bpm_at(self, time: int) -> float:
+  def get_bpm_at(self, time: int) -> float | None:
     tp = self.get_previous_timing_point(time, filter=lambda t: t.uninherited == 1)
     if not tp:
       tp = self.get_next_timing_point(time, filter=lambda t: t.uninherited == 1)
@@ -100,7 +100,7 @@ class Beatmap():
       return tp.get_bpm()
     return None
   
-  def get_slider_velocity_multiplier_at(self, time: int) -> float:
+  def get_slider_velocity_multiplier_at(self, time: float) -> float:
     tp = self.get_previous_timing_point(time, filter=lambda t: t.uninherited == 0)
     if tp:
       return tp.get_slider_velocity_multiplier()
@@ -115,7 +115,7 @@ class Beatmap():
           inherited_tp = TimingPoint(time=0, beat_length=500, uninherited=1)
         ho.object_params._load_duration(sv_multiplier * self.difficulty.slider_multiplier, inherited_tp.beat_length)
 
-  def hit_object_type(self, raw: str, type_id: int = None) -> Union[type[Circle], type[Slider], type[Spinner], type[HitObject]]:
+  def hit_object_type(self, raw: str, type_id: int | None = None) -> Union[type[Circle], type[Slider], type[Spinner]] | None:
     if not type_id:
       segments = [segment.strip() for segment in raw.split(",")]
       type_id = int(segments[3])

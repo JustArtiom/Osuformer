@@ -27,7 +27,7 @@ def _vec_det(a: tuple[float, float], b: tuple[float, float]) -> float:
 
 
 @dataclass
-class OsuDifficultyHitObject(DifficultyHitObject):
+class OsuDifficultyHitObject(DifficultyHitObject["OsuDifficultyHitObject"]):
     NORMALISED_RADIUS: int = 50
     NORMALISED_DIAMETER: int = NORMALISED_RADIUS * 2
     MIN_DELTA_TIME: int = 25
@@ -57,13 +57,13 @@ class OsuDifficultyHitObject(DifficultyHitObject):
         self.hit_window_great = (2.0 * base.hit_window_great) / self.clock_rate if base.hit_window_great else 0.0
 
         self._initialise_slider_values(base)
-        self._set_distances(last)
+        self._set_distances(last) # type: ignore
 
         if last_last is not None and last_last.base_object.object_type != "Spinner":
-            last_cursor = self._get_end_cursor_position(last)
-            last_last_cursor = self._get_end_cursor_position(last_last)
+            last_cursor = self._get_end_cursor_position(last) # type: ignore
+            last_last_cursor = self._get_end_cursor_position(last_last) # type: ignore
 
-            v1 = _vec_sub(last_last_cursor, last.base_object.stacked_position)
+            v1 = _vec_sub(last_last_cursor, last.base_object.stacked_position) # type: ignore
             v2 = _vec_sub(base.stacked_position, last_cursor)
 
             dot = _vec_dot(v1, v2)

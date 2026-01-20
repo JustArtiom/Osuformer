@@ -9,9 +9,9 @@ class HitObject:
   def __init__(
     self, *, 
     raw: str = "",
-    x: int = 0,
-    y: int = 0,
-    time: int = 0,
+    x: float = 0,
+    y: float = 0,
+    time: float = 0,
     type: int = 0,
     hit_sound: int = 0,
     object_params: Optional[Union["SpinnerObjectParams", "SliderObjectParams"]] = None,
@@ -46,8 +46,6 @@ class HitObject:
     self.hit_sound = int(segments[4])
     self.object_params = segments[5]
     self.hit_sample = HitSample(raw=segments[6])
-
-    return f"{fmt(self.x)},{fmt(self.y)},{fmt(self.time)},{self.type},{self.hit_sound},{self.object_params},{self.hit_sample}"
 
 class Circle(HitObject):
   def __init__(

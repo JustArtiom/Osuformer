@@ -60,7 +60,9 @@ def test_hit_object_combo_flags():
   raw_no_new_combo = "256,192,2000,1,0,0:0:0:0:"
   beatmap = Beatmap()
   type_new_combo = beatmap.hit_object_type(raw_new_combo)
+  assert type_new_combo is not None
   type_no_new_combo = beatmap.hit_object_type(raw_no_new_combo)
+  assert type_no_new_combo is not None
 
   obj_new_combo = type_new_combo(raw=raw_new_combo)
   obj_no_new_combo = type_no_new_combo(raw=raw_no_new_combo)
@@ -73,7 +75,9 @@ def test_hit_object_combo_skip_count():
   raw_skip_0 = "256,192,2000,1,0,0:0:0:0:"
   beatmap = Beatmap()
   type_skip_2 = beatmap.hit_object_type(raw_skip_2)
+  assert type_skip_2 is not None
   type_skip_0 = beatmap.hit_object_type(raw_skip_0)
+  assert type_skip_0 is not None
 
   obj_skip_2 = type_skip_2(raw=raw_skip_2)
   obj_skip_0 = type_skip_0(raw=raw_skip_0)
