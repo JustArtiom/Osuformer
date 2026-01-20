@@ -42,5 +42,8 @@ find dataset -type f \( -name "*.jpg" -o -name "*.png" \
   -o -name "*.gif" -o -name "*.mp4" -o -name "*.avi" -o -name "*.flv" \
   -o -name "*.osb" -o -name "*.osk" -o -name "*.osr" \) -delete
 
-find dataset -type d \( -iname "sb" -o -iname "storyboard" -o -iname "skin" -o -iname "skins" -o -iname "effects" -o -iname "particles" -o -iname "bg" -o -iname "video" \) -exec rm -rf {} +
+find dataset -type d \( -iname "sb" -o -iname "storyboard" \
+  -o -iname "skin" -o -iname "skins" -o -iname "effects" \
+  -o -iname "particles" -o -iname "bg" -o -iname "video"\
+  \) -exec rm -rf {} +
 ```
