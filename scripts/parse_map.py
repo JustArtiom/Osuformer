@@ -4,7 +4,7 @@ from src.osu import Beatmap
 
 @click.command()
 @click.argument("path")
-@click.option("--diff/--no-diff", "show_diff", default=True, help="Show diff between raw and parsed map")
+@click.option("--diff-log/--no-diff-log", "show_diff", default=True, help="Show diff between raw and parsed map")
 def main(path, show_diff):
   raw_map = read_file(path)
   beatmap = Beatmap(raw=raw_map)

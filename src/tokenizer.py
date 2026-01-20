@@ -21,12 +21,17 @@ class Tokenizer:
     tokens.append(self.token_to_id[sr_token])
 
     tokens.append(self.token_to_id["MAP_START"])
-    lastTime = 0
+
+    last_time = 0
+    time_error = 0.0
 
     for obj in beatmap_objects:
-      delta_ms = obj.time - lastTime
-      lastTime = obj.time
-      tokens += self.encode_delta_time(delta_ms)
+      raw_delta = obj.time - last_time
+      raw_delta += time_error
+      quantized = int(round(raw_delta / self.config.DT_BIN_MS)) * self.config.DT_BIN_MS
+      time_error = raw_delta - quantized
+      last_time = obj.time
+      tokens += self.encode_delta_time(quantized)
 
       if isinstance(obj, TimingPoint) and obj.uninherited == 1:
         bpm = obj.get_bpm()
@@ -75,7 +80,7 @@ class Tokenizer:
       elif isinstance(obj, Spinner):
         tokens.append(self.token_to_id["OBJ_START"])
         tokens.append(self.token_to_id["T_SPINNER"])
-        spinning_duration = obj.object_params.end_time - obj.time
+        spinning_duration = obj.object_params.end_time - obj.time + time_error
         tokens += self.encode_delta_time(spinning_duration)
         tokens.append(self.token_to_id["OBJ_END"])
     tokens.append(self.token_to_id["MAP_END"])
@@ -107,8 +112,8 @@ class Tokenizer:
         continue
       elif token.startswith("SR_"):
         continue
-      elif token.startswith("DT_"):
-        delta_ms = self.extract_number_from_token(token, "DT_") * self.config.DT_BIN_MS
+      elif token.startswith("DT_") and not building_object:
+        delta_ms = self.extract_number_from_token(token, "DT_")
         time += delta_ms
       elif token == "TP_START":
         building_timing_point = TimingPoint(time=time)
@@ -127,19 +132,18 @@ class Tokenizer:
       elif token == "T_CIRCLE" and building_object:
         building_object = Circle(time=time)
       elif token == "T_SLIDER" and building_object:
-        building_object = Slider(time=time, object_params=Slider.SliderObjectParams())
+        building_object = Slider(time=time)
       elif token == "T_SPINNER" and building_object:
-        building_object = Spinner(time=time, object_params=Spinner.SpinnerObjectParams())
+        building_object = Spinner(time=time)
+        building_spinner_params = building_object.object_params
       elif token.startswith("X_") and building_object and not building_slider_params and not building_spinner_params:
         building_object.x = self.extract_number_from_token(token, "X_") * self.x_bin_width
       elif token.startswith("Y_") and building_object and not building_slider_params and not building_spinner_params:
         building_object.y = self.extract_number_from_token(token, "Y_") * self.y_bin_width
         if isinstance(building_object, Slider):
           building_slider_params = building_object.object_params
-        if isinstance(building_object, Spinner):
-          building_spinner_params = building_object.object_params
       elif token.startswith("SL_") and building_slider_params:
-        building_object.object_params.length = self.extract_number_from_token(token, "SL_") * self.config.SLIDER_LEN_BINS
+        building_object.object_params.length = self.extract_number_from_token(token, "SL_")
       elif token.startswith("SEG_") and building_slider_params:
         curve_type_str = token[len("SEG_"):]
         curve_type = CurveType[curve_type_str]
@@ -160,8 +164,8 @@ class Tokenizer:
             building_slider_segment = None
             building_slider_params = None
       elif token.startswith("DT_") and building_spinner_params:
-        delta_ms = self.extract_number_from_token(token, "DT_") * self.config.DT_BIN_MS
-        building_spinner_params.end_time = building_object.time + delta_ms
+        delta_ms = self.extract_number_from_token(token, "DT_")
+        building_object.object_params.end_time += delta_ms
       elif token == "OBJ_END" and building_object:
         beatmap.hit_objects.append(building_object)
         building_object = None
