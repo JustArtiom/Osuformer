@@ -57,6 +57,8 @@ class Tokenizer:
         y_token = self.find_closest_token_from_vocab(obj.y / self.y_bin_width, "Y_")
         tokens.append(self.token_to_id[x_token])
         tokens.append(self.token_to_id[y_token])
+        len_token = self.find_closest_token_from_vocab(obj.object_params.length / self.config.SLIDER_LEN_BINS, "SL_")
+        tokens.append(self.token_to_id[len_token])
         for curve in obj.object_params.curves:
           tokens.append(self.token_to_id[f"SEG_{curve.curve_type.name}"])
           for idx, (cp_x, cp_y) in enumerate(curve.curve_points):
@@ -101,7 +103,7 @@ class Tokenizer:
     return closest_tok
 
   def encode_delta_time(self, delta_ms: float) -> list[str]:
-    delta = int(round(delta_ms))
+    delta = int(round(delta_ms / self.config.DT_BIN_MS)) * self.config.DT_BIN_MS
     tokens = []
 
     while delta >= 1000:

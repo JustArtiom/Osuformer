@@ -13,6 +13,8 @@ tokenizer:
   BPM_MIN: 40
   BPM_MAX: 300
   BPM_JUMP: 5
+  SLIDER_LEN_BINS: 10
+  SLIDER_LEN_MAX: 1000
 
 model:
   encoder:
