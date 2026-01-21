@@ -11,16 +11,17 @@ from src.osu import Beatmap
 @click.argument("path")
 @click.option("--decode/--no-decode", default=True, help="Decode tokens back to beatmap")
 @click.option("--diff-log/--no-diff-log", "show_diff", default=True, help="Path to diff log file")
+@click.option("--limit", type=int, default=-1, help="Limit number of maps to process")
 @config_options
-def main(path, config_path, size, decode, show_diff):
-  config = load_config(config_path, size)
+def main(path, config, decode, show_diff, limit):
   raw_map = read_file(path)
   beatmap = Beatmap(raw=raw_map)
   tokenizer = Tokenizer(config.tokenizer)
 
-  print([tokenizer.id_to_token[t] for t in tokenizer.encode(beatmap)])
-
   tokens = tokenizer.encode(beatmap)
+  tokens = tokens[:limit] if limit > 0 else tokens
+  print("Tokens:")
+  print(tokens)
   compare_to = None
   decoded_score = None
 

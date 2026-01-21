@@ -1,11 +1,15 @@
+from typing import Union
+from pathlib import Path
 import librosa
 import numpy as np
+import warnings
+warnings.filterwarnings("ignore")
 
 def hop_ms_to_samples(sample_rate, hop_ms):
   return int(sample_rate * hop_ms / 1000)
 
-def audio_to_mel(path: str, sample_rate: float, hop_ms: float, win_ms: float, n_fft: int, n_mels: float):
-  audio, sr = librosa.load(path, sr=sample_rate, mono=True)
+def audio_to_mel(path: Union[str, Path], sample_rate: float, hop_ms: float, win_ms: float, n_fft: int, n_mels: float):
+  audio, sr = librosa.load(str(path), sr=sample_rate, mono=True)
 
   hop_length = hop_ms_to_samples(sample_rate, hop_ms)
   win_length = hop_ms_to_samples(sample_rate, win_ms)
@@ -20,7 +24,7 @@ def audio_to_mel(path: str, sample_rate: float, hop_ms: float, win_ms: float, n_
     power=2.0
   )
 
-  mel = np.log(mel + 1e-6)
+  mel = librosa.power_to_db(mel, ref=np.max)
 
   return mel.astype(np.float32)
 

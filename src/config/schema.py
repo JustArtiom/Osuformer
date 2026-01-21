@@ -3,12 +3,19 @@ from typing import Union, Literal
 from dataclasses import dataclass, field
 
 @dataclass
+class DatasetSplitConfig:
+  train: float = 0.8
+  val: float = 0.2
+
+@dataclass
 class DatasetConfig:
-  path: str = ""
+  path: str = "dataset"
+  split: DatasetSplitConfig = field(default_factory=DatasetSplitConfig)
+  workers: int = 1
 
 @dataclass
 class CacheConfig:
-  path: str = ""
+  path: str = "cache"
 
 @dataclass
 class AudioConfig:

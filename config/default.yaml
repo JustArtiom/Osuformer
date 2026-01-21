@@ -1,5 +1,9 @@
 dataset:
   path: dataset
+  workers: 4
+  split:
+    train: 0.8
+    val: 0.2
 
 cache:
   path: cache
@@ -10,7 +14,6 @@ audio:
   win_ms: 25
   n_mels: 80
   n_fft: 1024
-  normalize: true
 
 tokenizer:
   DT_BIN_MS: 10

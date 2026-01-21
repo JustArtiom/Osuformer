@@ -72,7 +72,7 @@ def test_encoding_slider_hit_object():
     "DT_1000", "DT_1000",
     "OBJ_START", "T_SLIDER", 
     "X_16", "Y_12",
-    "SL_24",
+    "SL_240",
     "SEG_BEZIER", 
     "CP_0", "X_16", "Y_12", 
     "CP_1", "X_19", "Y_12", 
@@ -171,7 +171,7 @@ def test_encoding_slider_length_errors():
       "DT_1000", "DT_1000",
       "OBJ_START", "T_SLIDER", 
       "X_16", "Y_12",
-      "SL_24",
+      "SL_240",
       "SEG_BEZIER", 
       "CP_0", "X_16", "Y_12", 
       "CP_1", "X_19", "Y_12", 
@@ -246,34 +246,34 @@ def test_decode_encode_similarity():
       'TP_START', 'BPM_240', 'TP_END', 
       'TP_START', 'SV_1.4', 'TP_END', 
 
-      'OBJ_START', 'T_SLIDER', 'X_2', 'Y_21', 'SL_14', 'SEG_PERFECT', 'CP_0', 'X_5', 'Y_21', 'CP_1', 'X_10', 'Y_19', 'OBJ_END', 
+      'OBJ_START', 'T_SLIDER', 'X_2', 'Y_21', 'SL_140', 'SEG_PERFECT', 'CP_0', 'X_5', 'Y_21', 'CP_1', 'X_10', 'Y_19', 'OBJ_END', 
 
       'DT_100', 'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
       'OBJ_START', 'T_CIRCLE', 'X_12', 'Y_10', 'OBJ_END', 
       
       'DT_100', 'DT_10', 'DT_10', 'DT_10', 
-      'OBJ_START', 'T_SLIDER', 'X_12', 'Y_10', 'SL_7', 'SEG_LINEAR', 'CP_0', 'X_13', 'Y_16', 'OBJ_END', 
+      'OBJ_START', 'T_SLIDER', 'X_12', 'Y_10', 'SL_70', 'SEG_LINEAR', 'CP_0', 'X_13', 'Y_16', 'OBJ_END', 
       
       'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
-      'OBJ_START', 'T_SLIDER', 'X_18', 'Y_20', 'SL_7', 'SEG_LINEAR', 'CP_0', 'X_19', 'Y_16', 'OBJ_END', 
+      'OBJ_START', 'T_SLIDER', 'X_18', 'Y_20', 'SL_70', 'SEG_LINEAR', 'CP_0', 'X_19', 'Y_16', 'OBJ_END', 
 
       'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
-      'OBJ_START', 'T_SLIDER', 'X_31', 'Y_10', 'SL_14', 'SEG_PERFECT', 'CP_0', 'X_28', 'Y_12', 'CP_1', 'X_24', 'Y_12', 'OBJ_END', 
+      'OBJ_START', 'T_SLIDER', 'X_31', 'Y_10', 'SL_140', 'SEG_PERFECT', 'CP_0', 'X_28', 'Y_12', 'CP_1', 'X_24', 'Y_12', 'OBJ_END', 
 
       'DT_100', 'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
       'OBJ_START', 'T_CIRCLE', 'X_12', 'Y_1', 'OBJ_END', 
       
       'DT_100', 'DT_10', 'DT_10', 'DT_10', 
-      'OBJ_START', 'T_SLIDER', 'X_12', 'Y_1', 'SL_7', 'SEG_PERFECT', 'CP_0', 'X_15', 'Y_1', 'CP_1', 'X_17', 'Y_3', 'OBJ_END', 
+      'OBJ_START', 'T_SLIDER', 'X_12', 'Y_1', 'SL_70', 'SEG_PERFECT', 'CP_0', 'X_15', 'Y_1', 'CP_1', 'X_17', 'Y_3', 'OBJ_END', 
       
       'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
-      'OBJ_START', 'T_SLIDER', 'X_24', 'Y_11', 'SL_7', 'SEG_LINEAR', 'CP_0', 'X_23', 'Y_5', 'OBJ_END', 
+      'OBJ_START', 'T_SLIDER', 'X_24', 'Y_11', 'SL_70', 'SEG_LINEAR', 'CP_0', 'X_23', 'Y_5', 'OBJ_END', 
       
       'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
       'OBJ_START', 'T_CIRCLE', 'X_5', 'Y_7', 'OBJ_END', 
       
       'DT_100', 'DT_10', 'DT_10', 
-      'OBJ_START', 'T_SLIDER', 'X_5', 'Y_7', 'SL_14', 'SEG_BEZIER', 'CP_0', 'X_10', 'Y_7', 'CP_1', 'X_8', 'Y_9', 'CP_2', 'X_14', 'Y_9', 'OBJ_END', 
+      'OBJ_START', 'T_SLIDER', 'X_5', 'Y_7', 'SL_140', 'SEG_BEZIER', 'CP_0', 'X_10', 'Y_7', 'CP_1', 'X_8', 'Y_9', 'CP_2', 'X_14', 'Y_9', 'OBJ_END', 
       
       'DT_100', 'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
       'OBJ_START', 'T_CIRCLE', 'X_23', 'Y_2', 'OBJ_END', 
@@ -284,7 +284,7 @@ def test_decode_encode_similarity():
     'EOS'
   ]
 
-  decoded_beatmap = tokenizer.decode([tokenizer.token_to_id[t] for t in tokens])
+  decoded_beatmap = tokenizer.decode([tokenizer.vocab[t] for t in tokens])
   reencoded_tokens = tokenizer.encode(decoded_beatmap)
   reencoded_readable = [tokenizer.id_to_token[t] for t in reencoded_tokens]
 
