@@ -1,3 +1,5 @@
+import re
+from pathlib import Path
 from .sections import General, Difficulty, Editor, Metadata, Colours, Events
 from .timing_point import TimingPoint
 from .hit_object import Circle, Slider, Spinner, HitObject
@@ -14,6 +16,7 @@ class Beatmap():
     colours: Optional[Colours] = None,
     hit_objects: Optional[List[Union[Circle, Slider, Spinner]]] = None
   ):
+    self.file_path = file_path
     if file_path:
       with open(file_path, "r", encoding="utf-8") as f:
         raw = f.read()
@@ -142,6 +145,16 @@ class Beatmap():
   def get_performance(self):
     from .difficulty import calculate_performance
     return calculate_performance(self.get_difficulty())
+  
+  def get_style_classes(self, raw: bool = False, parent_path: str | None = None):
+    from .style_classifier import classify_beatmap
+    return classify_beatmap(self, raw=raw, parent_path=parent_path)
+  
+  @staticmethod
+  def get_mode(path: str) -> int:
+    raw = Path(path).read_text(encoding="utf-8", errors="ignore")
+    m = re.search(r"^Mode:\s*(\d+)", raw, re.MULTILINE)
+    return int(m.group(1)) if m else 0
 
   def __str__(self) -> str:
     result = ["osu file format v14"]

@@ -5,7 +5,7 @@ from .osu import Beatmap, TimingPoint, Circle, Slider, Spinner, SliderCurve, Cur
 class Tokenizer:
   def __init__(self, config: TokenizerConfig):
     self.config = config
-    self.token_to_id, self.id_to_token = build_vocab(config)
+    self.vocab, self.id_to_token = build_vocab(config)
     self.x_bin_width = 512 / config.X_BINS
     self.y_bin_width = 384 / config.Y_BINS
 
@@ -18,9 +18,9 @@ class Tokenizer:
 
     diff = beatmap.get_difficulty()
     sr_token = self.find_closest_token_from_vocab(diff.star_rating, "SR_")
-    tokens.append(self.token_to_id[sr_token])
+    tokens.append(self.vocab[sr_token])
 
-    tokens.append(self.token_to_id["MAP_START"])
+    tokens.append(self.vocab["MAP_START"])
 
     last_time = 0
     time_error = 0.0
@@ -36,55 +36,55 @@ class Tokenizer:
       if isinstance(obj, TimingPoint) and obj.uninherited == 1:
         bpm = obj.get_bpm()
         bpm_token = self.find_closest_token_from_vocab(bpm, "BPM_")
-        tokens.append(self.token_to_id["TP_START"])
-        tokens.append(self.token_to_id[bpm_token])
-        tokens.append(self.token_to_id["TP_END"])
+        tokens.append(self.vocab["TP_START"])
+        tokens.append(self.vocab[bpm_token])
+        tokens.append(self.vocab["TP_END"])
       elif isinstance(obj, TimingPoint) and obj.uninherited == 0:
         svm = obj.get_slider_velocity_multiplier()
         sv_token = self.find_closest_token_from_vocab(svm * beatmap.difficulty.slider_multiplier, "SV_")
-        tokens.append(self.token_to_id["TP_START"])
-        tokens.append(self.token_to_id[sv_token])
-        tokens.append(self.token_to_id["TP_END"])
+        tokens.append(self.vocab["TP_START"])
+        tokens.append(self.vocab[sv_token])
+        tokens.append(self.vocab["TP_END"])
 
       elif isinstance(obj, Circle):
-        tokens.append(self.token_to_id["OBJ_START"])
-        tokens.append(self.token_to_id["T_CIRCLE"])
+        tokens.append(self.vocab["OBJ_START"])
+        tokens.append(self.vocab["T_CIRCLE"])
         x_token = self.find_closest_token_from_vocab(obj.x / self.x_bin_width, "X_")
         y_token = self.find_closest_token_from_vocab(obj.y / self.y_bin_width, "Y_")
-        tokens.append(self.token_to_id[x_token])
-        tokens.append(self.token_to_id[y_token])
-        tokens.append(self.token_to_id["OBJ_END"])
+        tokens.append(self.vocab[x_token])
+        tokens.append(self.vocab[y_token])
+        tokens.append(self.vocab["OBJ_END"])
 
       elif isinstance(obj, Slider):
-        tokens.append(self.token_to_id["OBJ_START"])
-        tokens.append(self.token_to_id["T_SLIDER"])
+        tokens.append(self.vocab["OBJ_START"])
+        tokens.append(self.vocab["T_SLIDER"])
         x_token = self.find_closest_token_from_vocab(obj.x / self.x_bin_width, "X_")
         y_token = self.find_closest_token_from_vocab(obj.y / self.y_bin_width, "Y_")
-        tokens.append(self.token_to_id[x_token])
-        tokens.append(self.token_to_id[y_token])
-        len_token = self.find_closest_token_from_vocab(obj.object_params.length / self.config.SLIDER_LEN_BINS, "SL_")
-        tokens.append(self.token_to_id[len_token])
+        tokens.append(self.vocab[x_token])
+        tokens.append(self.vocab[y_token])
+        len_token = self.find_closest_token_from_vocab(obj.object_params.length, "SL_")
+        tokens.append(self.vocab[len_token])
         for curve in obj.object_params.curves:
-          tokens.append(self.token_to_id[f"SEG_{curve.curve_type.name}"])
+          tokens.append(self.vocab[f"SEG_{curve.curve_type.name}"])
           for idx, (cp_x, cp_y) in enumerate(curve.curve_points):
             if idx >= self.config.SLIDER_CP_LIMIT:
               break
             cp_i_token = self.find_closest_token_from_vocab(idx, "CP_")
-            tokens.append(self.token_to_id[cp_i_token])
+            tokens.append(self.vocab[cp_i_token])
             cp_x_token = self.find_closest_token_from_vocab(cp_x / self.x_bin_width, "X_")
             cp_y_token = self.find_closest_token_from_vocab(cp_y / self.y_bin_width, "Y_")
-            tokens.append(self.token_to_id[cp_x_token])
-            tokens.append(self.token_to_id[cp_y_token])
-        tokens.append(self.token_to_id["OBJ_END"])
+            tokens.append(self.vocab[cp_x_token])
+            tokens.append(self.vocab[cp_y_token])
+        tokens.append(self.vocab["OBJ_END"])
 
       elif isinstance(obj, Spinner):
-        tokens.append(self.token_to_id["OBJ_START"])
-        tokens.append(self.token_to_id["T_SPINNER"])
+        tokens.append(self.vocab["OBJ_START"])
+        tokens.append(self.vocab["T_SPINNER"])
         spinning_duration = obj.object_params.end_time - obj.time + time_error
         tokens += self.encode_delta_time(spinning_duration)
-        tokens.append(self.token_to_id["OBJ_END"])
-    tokens.append(self.token_to_id["MAP_END"])
-    tokens.append(self.token_to_id["EOS"])
+        tokens.append(self.vocab["OBJ_END"])
+    tokens.append(self.vocab["MAP_END"])
+    tokens.append(self.vocab["EOS"])
     return tokens
 
   def decode(self, tokens: list[int]) -> Beatmap:
@@ -160,7 +160,7 @@ class Tokenizer:
       elif token.startswith("SL_") and building_slider_params:
         sl = self.extract_number_from_token(token, "SL_")
         if sl is not None:
-          building_slider_params.length = sl * self.config.SLIDER_LEN_BINS
+          building_slider_params.length = sl
       elif token.startswith("SEG_") and building_slider_params:
         curve_type_str = token[len("SEG_"):]
         curve_type = CurveType[curve_type_str]
@@ -207,7 +207,7 @@ class Tokenizer:
   def find_closest_token_from_vocab(self, value: float, prefix: str) -> str:
     candidates = []
 
-    for tok in self.token_to_id.keys():
+    for tok in self.vocab.keys():
         if tok.startswith(prefix):
             num = self.extract_number_from_token(tok, prefix)
             if num is not None:
@@ -224,15 +224,20 @@ class Tokenizer:
     tokens = []
 
     while delta >= 1000:
-      tokens.append(self.token_to_id["DT_1000"])
+      tokens.append(self.vocab["DT_1000"])
       delta -= 1000
 
     while delta >= 100:
-      tokens.append(self.token_to_id["DT_100"])
+      tokens.append(self.vocab["DT_100"])
       delta -= 100
 
     while delta >= 10:
-      tokens.append(self.token_to_id["DT_10"])
+      tokens.append(self.vocab["DT_10"])
       delta -= 10
 
     return tokens
+  
+  def save_vocab(self, filepath: str):
+    import json
+    with open(filepath, "w") as f:
+      json.dump(self.vocab, f, indent=2)

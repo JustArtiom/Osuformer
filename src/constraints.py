@@ -8,7 +8,7 @@ def build_dsl_tokens(config: TokenizerConfig):
   TYPE_TOKENS = [ "T_CIRCLE", "T_SLIDER", "T_SPINNER" ]
   NC_TOKENS = [ "NC" ]
   SEG_TYPE_TOKENS = ["SEG_LINEAR", "SEG_BEZIER", "SEG_CAT", "SEG_PERFECT"]
-  SL_TOKENS = [ f"SL_{i}" for i in range(1, config.SLIDER_LEN_MAX + 1) ]
+  SL_TOKENS = [ f"SL_{i}" for i in range(0, config.SLIDER_LEN_MAX, config.SLIDER_LEN_BINS) ]
   CP_TOKENS = [ f"CP_{i}" for i in range(config.SLIDER_CP_LIMIT) ]
   TP_TOKENS = [ "TP_START", "TP_END" ]
   SV_TOKENS = [ f"SV_{i/10:.1f}" for i in range(config.SLIDER_VEL_LIMIT * 10) ] # SV tokens are in 0.1 increments

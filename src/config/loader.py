@@ -47,20 +47,25 @@ def load_config(config_path: str, size: Optional[str] = None) -> ExperimentConfi
   return config
 
 def config_options(fn):
-  fn = click.option(
+  import functools
+
+  @click.option(
     "--config",
     "config_path",
     type=str,
     default="configs/default.yaml",
     help="Path to config file"
-  )(fn)
-
-  fn = click.option(
+  )
+  @click.option(
     "--size",
     "size",
     type=str,
     default=None,
     help="Model size override (loads configs/size/<size>.yaml if exists)"
-  )(fn)
+  )
+  @functools.wraps(fn)
+  def wrapper(*args, config_path: str, size: Optional[str], **kwargs):
+    config = load_config(config_path, size)
+    return fn(*args, config=config, **kwargs)
 
-  return fn
+  return wrapper

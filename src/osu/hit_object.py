@@ -93,7 +93,7 @@ class SliderCurve:
     self.curve_points = [tuple(map(float, point.split(":"))) for point in curve_points_str if point]
 
   def __str__(self) -> str:
-    return f"{self.curve_type.value}|{'|'.join([f'{fmt(x)}:{fmt(y)}' for x, y in self.curve_points])}"
+    return f"{self.curve_type.value}{'|' if self.curve_points else ''}{'|'.join([f'{fmt(x)}:{fmt(y)}' for x, y in self.curve_points])}"
 
 class SliderObjectParams:
   def __init__(
