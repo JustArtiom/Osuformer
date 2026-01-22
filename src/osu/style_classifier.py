@@ -163,7 +163,7 @@ class StyleClassifier:
       styles.append(MapStyle.STREAM_INDEX)
     if song.ji > t.JUMP_INDEX:
       styles.append(MapStyle.JUMP_INDEX)
-    if song.streams100 >= t.STREAMS100:
+    if song.streams100 >= t.STREAMS100:\
       styles.append(MapStyle.STREAMS_100)
 
     is_dedicated = _is_dedicated(mapset)
@@ -184,7 +184,6 @@ class StyleClassifier:
 def classify_beatmap(
   beatmap: Beatmap,
   *,
-  raw: bool = False,
   parent_path: str | Path | None = None,
   mapset_features: MapsetFeatures | None = None,
 ):
@@ -202,41 +201,40 @@ def classify_beatmap(
     )
 
   styles, is_dedicated = StyleClassifier.classify_map(features, mapset_features)
-  if raw:
-    return _raw_scores(features, mapset_features, is_dedicated)
+  # raw_scores = _raw_scores(features, mapset_features, is_dedicated)
   return styles
 
 
-def _raw_scores(
-  features: MapFeatures,
-  mapset: MapsetFeatures,
-  is_dedicated: bool,
-) -> Dict[str, float | int | bool]:
-  song = features.song
-  return {
-    "star_rating": features.star_rating,
-    "bpm": features.bpm,
-    "objects_per_second": song.objects_per_second,
-    "timing_alignment_error": song.timing_alignment_error,
-    "streams_pct": song.streams,
-    "deathstreams_pct": song.deathstreams,
-    "bursts_pct": song.bursts,
-    "short_jumps_pct": song.short_jumps,
-    "mid_jumps_pct": song.mid_jumps,
-    "long_jumps_pct": song.long_jumps,
-    "doubles_pct": song.doubles,
-    "triples_pct": song.triples,
-    "quads_pct": song.quads,
-    "fcdbi": song.fcdbi,
-    "stream_index": song.si,
-    "jump_index": song.ji,
-    "streams100": song.streams100,
-    "mapset_difficulty_count": mapset.difficulty_count,
-    "mapset_star_variance": mapset.star_rating_variance,
-    "mapset_ops_variance": mapset.ops_variance,
-    "mapset_timing_alignment_mean": mapset.timing_alignment_mean,
-    "dedicated": is_dedicated,
-  }
+# def _raw_scores(
+#   features: MapFeatures,
+#   mapset: MapsetFeatures,
+#   is_dedicated: bool,
+# ) -> Dict[str, float | int | bool]:
+#   song = features.song
+#   return {
+#     "star_rating": features.star_rating,
+#     "bpm": features.bpm,
+#     "objects_per_second": song.objects_per_second,
+#     "timing_alignment_error": song.timing_alignment_error,
+#     "streams_pct": song.streams,
+#     "deathstreams_pct": song.deathstreams,
+#     "bursts_pct": song.bursts,
+#     "short_jumps_pct": song.short_jumps,
+#     "mid_jumps_pct": song.mid_jumps,
+#     "long_jumps_pct": song.long_jumps,
+#     "doubles_pct": song.doubles,
+#     "triples_pct": song.triples,
+#     "quads_pct": song.quads,
+#     "fcdbi": song.fcdbi,
+#     "stream_index": song.si,
+#     "jump_index": song.ji,
+#     "streams100": song.streams100,
+#     "mapset_difficulty_count": mapset.difficulty_count,
+#     "mapset_star_variance": mapset.star_rating_variance,
+#     "mapset_ops_variance": mapset.ops_variance,
+#     "mapset_timing_alignment_mean": mapset.timing_alignment_mean,
+#     "dedicated": is_dedicated,
+#   }
 
 
 def _is_dedicated(mapset: MapsetFeatures) -> bool:
@@ -262,7 +260,7 @@ def _mapset_features_from_parent(parent_path: Path) -> MapsetFeatures:
     try:
       if Beatmap.get_mode(str(osu_path)) != 0:
         continue
-      beatmap = Beatmap(file_path=str(osu_path))
+      beatmap = Beatmap(file_path=str(osu_path), with_styles=False)
       sr = float(beatmap.get_difficulty().star_rating)
       features.append(FeatureExtractor.extract(beatmap, sr))
     except Exception:
