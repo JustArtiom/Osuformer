@@ -114,26 +114,30 @@ class Dataset:
 
 def process_map_sample(args: tuple[Path, ExperimentConfig, Path, Tokenizer]):
   osu_path, config, pwd, tokenizer = args
-  if Beatmap.get_mode(str(osu_path)) != 0:
+  try: 
+    if Beatmap.get_mode(str(osu_path)) != 0:
+      return None, None, None, None, None
+
+    beatmap = Beatmap(file_path=str(osu_path))
+    tokens = tokenizer.encode(beatmap)
+
+    audio_path = osu_path.parent / beatmap.general.audio_filename
+    hash_id = file_hash(audio_path)
+    cache_audio_file = Path(pwd) / "audio" / f"{hash_id}.npz"
+    
+    if cache_audio_file.exists():
+      return None, None, None, None, None
+
+    audio_mel, duration_ms = audio_to_mel(
+      path=audio_path,
+      sample_rate=config.audio.sample_rate,
+      hop_ms=config.audio.hop_ms,
+      win_ms=config.audio.win_ms,
+      n_mels=config.audio.n_mels,
+      n_fft=config.audio.n_fft,
+    )
+
+    return beatmap, tokens, hash_id, audio_mel, duration_ms
+  except Exception as e:
+    print(f"Error processing {osu_path}: {e}")
     return None, None, None, None, None
-
-  beatmap = Beatmap(file_path=str(osu_path))
-  tokens = tokenizer.encode(beatmap)
-
-  audio_path = osu_path.parent / beatmap.general.audio_filename
-  hash_id = file_hash(audio_path)
-  cache_audio_file = Path(pwd) / "audio" / f"{hash_id}.npz"
-  
-  if cache_audio_file.exists():
-    return None, None, None, None, None
-
-  audio_mel, duration_ms = audio_to_mel(
-    path=audio_path,
-    sample_rate=config.audio.sample_rate,
-    hop_ms=config.audio.hop_ms,
-    win_ms=config.audio.win_ms,
-    n_mels=config.audio.n_mels,
-    n_fft=config.audio.n_fft,
-  )
-
-  return beatmap, tokens, hash_id, audio_mel, duration_ms
