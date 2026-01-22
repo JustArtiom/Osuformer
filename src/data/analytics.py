@@ -1,17 +1,18 @@
 import random
 from pathlib import Path
-from typing import Optional, Union, List, Mapping
+from typing import Optional, Sequence, Union, List, Mapping
 from dataclasses import dataclass, field
 import numpy as np
 import os
 import matplotlib
 matplotlib.use("Agg")
 
-from ..osu import Beatmap, Slider, Circle, MapStyle
+from ..osu import Beatmap, Slider, Circle, Spinner, MapStyle
 
 @dataclass
 class AnalyticsData:
   total_maps: int = 0
+  total_map_length: float = 0.0
   map_sr: List[float] = field(default_factory=list)
   map_bpm: List[float] = field(default_factory=list)
   map_cs: List[float] = field(default_factory=list)
@@ -33,6 +34,7 @@ class AnalyticsData:
   map_styles: List[List[str]] = field(default_factory=list)
 
   total_audios: int = 0
+  total_audio_length: float = 0.0
   audio_durations_ms: List[float] = field(default_factory=list)
   audio_mel_means: List[float] = field(default_factory=list)
   audio_mel_stds: List[float] = field(default_factory=list)
@@ -51,13 +53,14 @@ class Analytics():
     bm_diff = beatmap.get_difficulty()
 
     sr = bm_diff.star_rating
-    bpm = beatmap.get_bpm_at(10**6)
+    bpm = beatmap.get_bpm_at()
     cs = bm_diff.circle_size
     ar = bm_diff.approach_rate
     od = bm_diff.overall_difficulty
     hp = bm_diff.drain_rate
 
     duration = self.get_beatmap_duration(beatmap)
+    self.data.total_map_length += duration if duration > 0 else 0.0
     total_object = len(beatmap.hit_objects)
 
     obj_per_sec = None
@@ -126,13 +129,24 @@ class Analytics():
 
   def collect_audio( self, *, duration_ms: float, mel: np.ndarray): 
     self.data.total_audios += 1
+    self.data.total_audio_length += duration_ms if duration_ms > 0 else 0.0
     self.data.audio_durations_ms.append(duration_ms if duration_ms > 0 else float("nan"))
     self.data.audio_mel_means.append(float(np.mean(mel)))
     self.data.audio_mel_stds.append(float(np.std(mel)))
 
   def get_beatmap_duration(self, beatmap: Beatmap) -> float:
     first_time = beatmap.hit_objects[0].time if beatmap.hit_objects else 0
-    last_time = beatmap.hit_objects[-1].time if beatmap.hit_objects else 0
+    last_object = beatmap.hit_objects[-1] if beatmap.hit_objects else None
+    last_time = 0
+    if last_object:
+        if isinstance(last_object, Circle):
+            last_time = last_object.time
+        elif isinstance(last_object, Slider):
+            last_time = last_object.time + last_object.object_params.duration
+        elif isinstance(last_object, Spinner):
+            last_time = last_object.object_params.end_time
+        else:
+            last_time = last_object.time
     return last_time - first_time
 
   def create_histogram(
@@ -192,7 +206,7 @@ class Analytics():
       file_name: str,
       title: str,
       x_label: str,
-      data: List[float],
+      data: Sequence[float | int],
       bins: int = 50,
       color: str = "#0c7bdc",
   ):
@@ -304,20 +318,43 @@ class Analytics():
   ):
     import matplotlib.pyplot as plt
 
-    matrix = np.array(data, dtype=float)
+    matrix = np.asarray(data, dtype=float)
     if matrix.size == 0:
       return
 
+    # --- normalize to [-1, 1] ---
+    finite = matrix[np.isfinite(matrix)]
+    if finite.size == 0:
+      return
+
+    vmin = finite.min()
+    vmax = finite.max()
+
+    if vmin == vmax:
+      norm = np.zeros_like(matrix)
+    else:
+      norm = 2 * (matrix - vmin) / (vmax - vmin) - 1
+
+    # --- plot ---
     plt.figure(figsize=(10, 8))
-    plt.imshow(matrix, cmap="coolwarm", vmin=-1, vmax=1)
-    plt.colorbar()
+    plt.imshow(norm, cmap="coolwarm", vmin=-1, vmax=1)
+    plt.colorbar(label="Normalized value [-1, 1]")
+
     plt.xticks(range(len(x_labels)), x_labels, rotation=45, ha="right")
     plt.yticks(range(len(y_labels)), y_labels)
 
     if show_values:
       for i in range(len(y_labels)):
         for j in range(len(x_labels)):
-          plt.text(j, i, f"{matrix[i, j]:.2f}", ha="center", va="center", color="black")
+          if np.isfinite(norm[i, j]):
+            plt.text(
+              j, i,
+              f"{norm[i, j]:.2f}",
+              ha="center",
+              va="center",
+              color="black",
+              fontsize=8
+            )
 
     plt.title(title)
     plt.tight_layout()
@@ -377,4 +414,215 @@ class Analytics():
 
 
   def save(self):
-    self.create_json("analytics.json", self.data.__dict__)
+    """
+    Save all analytics artifacts for the cached dataset.
+    Produces:
+    - JSON summary
+    - Histograms
+    - Ratios
+    - Style statistics
+    - Correlation heatmaps
+    """
+    import numpy as np
+    from collections import Counter
+    # -------------------------
+    # BASIC COUNTS
+    # -------------------------
+    self.create_json("summary.json", {
+      "total_maps": self.data.total_maps,
+      "total_audios": self.data.total_audios,
+      "dedicated_map_ratio": (
+          self.data.dedicated_map_count / self.data.total_maps
+          if self.data.total_maps > 0 else 0
+      ),
+      "total_map_length": {
+        "hours": int(self.data.total_map_length // 3600000),
+        "minutes": int((self.data.total_map_length % 3600000) // 60000),
+        "seconds": int((self.data.total_map_length % 60000) // 1000),
+        "milliseconds": int(self.data.total_map_length % 1000),
+        "original": int(self.data.total_map_length)
+      },
+      "total_audio_length": {
+        "hours": int(self.data.total_audio_length // 3600000),
+        "minutes": int((self.data.total_audio_length % 3600000) // 60000),
+        "seconds": int((self.data.total_audio_length % 60000) // 1000),
+        "milliseconds": int(self.data.total_audio_length % 1000),
+        "original": int(self.data.total_audio_length)
+      }
+    })
+    # -------------------------
+    # NUMERIC HISTOGRAMS
+    # -------------------------
+    self.create_numeric_histogram(
+      file_name="sr_distribution.png",
+      title="Star Rating Distribution",
+      x_label="Star Rating",
+      data=self.data.map_sr,
+      bins=40
+    )
+    self.create_numeric_histogram(
+      file_name="bpm_distribution.png",
+      title="BPM Distribution",
+      x_label="BPM",
+      data=self.data.map_bpm,
+      bins=40
+    )
+    self.create_numeric_histogram(
+      file_name="map_duration_distribution.png",
+      title="Map Duration (ms)",
+      x_label="Duration (ms)",
+      data=self.data.duration_ms,
+      bins=50
+    )
+    self.create_numeric_histogram(
+      file_name="objects_per_second.png",
+      title="Objects per Second",
+      x_label="Objects / sec",
+      data=self.data.obj_per_sec,
+      bins=50
+    )
+    # -------------------------
+    # HIT OBJECT RATIOS
+    # -------------------------
+    self.create_numeric_histogram(
+      file_name="circle_ratio.png",
+      title="Circle Ratio",
+      x_label="Circle / Total",
+      data=self.data.circle_ratio,
+      bins=30
+    )
+    self.create_numeric_histogram(
+      file_name="slider_ratio.png",
+      title="Slider Ratio",
+      x_label="Slider / Total",
+      data=self.data.slider_ratio,
+      bins=30
+    )
+    self.create_ratio_pie(
+      file_name="circle_vs_slider_pie.png",
+      title="Circle vs Slider Ratio (Mean)",
+      data={
+          "Circles": float(np.nanmean(self.data.circle_ratio)),
+          "Sliders": float(np.nanmean(self.data.slider_ratio)),
+      }
+    )
+    # -------------------------
+    # SLIDER VELOCITY STATS
+    # -------------------------
+    self.create_numeric_histogram(
+      file_name="avg_sv_distribution.png",
+      title="Average Slider Velocity Multiplier",
+      x_label="SV Multiplier",
+      data=self.data.avg_sv_multiplier,
+      bins=40
+    )
+    self.create_numeric_histogram(
+      file_name="max_sv_distribution.png",
+      title="Max Slider Velocity Multiplier",
+      x_label="SV Multiplier",
+      data=self.data.max_sv_multiplier,
+      bins=40
+    )
+    # -------------------------
+    # CONTROL POINT STATS
+    # -------------------------
+    self.create_numeric_histogram(
+      file_name="avg_cp_distribution.png",
+      title="Average Control Points per Slider",
+      x_label="Control Points",
+      data=self.data.avg_control_point,
+      bins=20
+    )
+
+    self.create_numeric_histogram(
+      file_name="max_cp_distribution.png",
+      title="Max Control Points per Slider",
+      x_label="Control Points",
+      data=self.data.max_control_point,
+      bins=20
+    )
+
+    # -------------------------
+    # STYLE FREQUENCY
+    # -------------------------
+    style_counts = Counter(
+      style
+      for styles in self.data.map_styles
+      for style in styles
+    )
+
+    self.create_style_frequency_plot(
+      file_name="style_frequency.png",
+      title="Map Style Frequency",
+      data=dict(style_counts)
+    )
+
+    # -------------------------
+    # STYLE CO-OCCURRENCE
+    # -------------------------
+    self.create_style_cooccurrence_heatmap(
+      file_name="style_cooccurrence.png",
+      title="Style Co-occurrence Heatmap",
+      styles=self.data.map_styles
+    )
+
+    # -------------------------
+    # CORRELATION HEATMAP
+    # -------------------------
+    corr_fields = [
+      ("Star Rating", self.data.map_sr),
+      ("BPM", self.data.map_bpm),
+      ("Objects/sec", self.data.obj_per_sec),
+      ("Circle Ratio", self.data.circle_ratio),
+      ("Slider Ratio", self.data.slider_ratio),
+      ("Avg SV", self.data.avg_sv_multiplier),
+      ("Max SV", self.data.max_sv_multiplier),
+      ("Avg CP", self.data.avg_control_point),
+    ]
+
+    labels = [name for name, _ in corr_fields]
+    values = np.array([vals for _, vals in corr_fields], dtype=float)
+
+    # pairwise correlation (nan-safe)
+    corr_matrix = np.corrcoef(np.nan_to_num(values), rowvar=True)
+
+    self.create_correlation_heatmap(
+      file_name="correlation_heatmap.png",
+      title="Dataset Feature Correlation",
+      data=corr_matrix,
+      x_labels=labels,
+      y_labels=labels,
+      show_values=True
+    )
+
+    # -------------------------
+    # AUDIO STATS
+    # -------------------------
+    self.create_numeric_histogram(
+      file_name="audio_duration_distribution.png",
+      title="Audio Duration Distribution",
+      x_label="Duration (ms)",
+      data=self.data.audio_durations_ms,
+      bins=40
+    )
+
+    self.create_numeric_histogram(
+      file_name="audio_mel_mean_distribution.png",
+      title="Audio Mel Mean Distribution",
+      x_label="Mean",
+      data=self.data.audio_mel_means,
+      bins=40
+    )
+
+    self.create_numeric_histogram(
+      file_name="audio_mel_std_distribution.png",
+      title="Audio Mel Std Distribution",
+      x_label="Std",
+      data=self.data.audio_mel_stds,
+      bins=40
+    )
+
+    # -------------------------
+    # FINAL FULL JSON DUMP
+    # -------------------------
+    self.create_json("analytics_full.json", self.data.__dict__)
