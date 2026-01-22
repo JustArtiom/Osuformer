@@ -100,5 +100,8 @@ def main():
     "\n".join([f"{pkg}=={compute_package_version(pkg)}" for pkg in generated.splitlines()]), 
     "\n------------"
   )
+
+  raise SystemExit(1)
+
 if __name__ == "__main__":
   main()
