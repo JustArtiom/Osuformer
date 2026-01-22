@@ -6,3 +6,4 @@ old/
 *.log
 *.mp3
 *.osu
+config/size/custom.yaml
