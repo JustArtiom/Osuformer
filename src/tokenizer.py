@@ -3,11 +3,13 @@ from .constraints import build_vocab
 from .osu import Beatmap, TimingPoint, Circle, Slider, Spinner, SliderCurve, CurveType, Difficulty
 
 class Tokenizer:
-  def __init__(self, config: TokenizerConfig):
+  def __init__(self, config: TokenizerConfig, with_styles: bool = True):
     self.config = config
-    self.vocab, self.id_to_token = build_vocab(config)
+    self.token_to_id, self.id_to_token = build_vocab(config)
+    self.vocab = self.token_to_id
     self.x_bin_width = 512 / config.X_BINS
     self.y_bin_width = 384 / config.Y_BINS
+    self.with_styles = with_styles
 
   def encode(self, beatmap: Beatmap):
     tokens: list[int] = []
@@ -19,6 +21,12 @@ class Tokenizer:
     diff = beatmap.get_difficulty()
     sr_token = self.find_closest_token_from_vocab(diff.star_rating, "SR_")
     tokens.append(self.vocab[sr_token])
+    styles = beatmap.styles
+    if self.with_styles:
+      for style in styles:
+        style_token = f"STYLE_{style.name}"
+        if style_token in self.vocab:
+          tokens.append(self.vocab[style_token])
 
     tokens.append(self.vocab["MAP_START"])
 

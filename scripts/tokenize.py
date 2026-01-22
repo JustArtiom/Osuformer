@@ -21,7 +21,7 @@ def main(path, config, decode, show_diff, limit):
   tokens = tokenizer.encode(beatmap)
   tokens = tokens[:limit] if limit > 0 else tokens
   print("Tokens:")
-  print(tokens)
+  print([tokenizer.id_to_token[t] for t in tokens])
   compare_to = None
   decoded_score = None
 

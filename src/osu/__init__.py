@@ -22,6 +22,7 @@ from .difficulty import (
   calculate_performance,
 )
 from .enums import (CurveType, Mods, HitResult)
+from .style_classifier import MapStyle
 
 __all__ = [
   "sections",
@@ -46,4 +47,5 @@ __all__ = [
   "PerformanceAttributes",
   "calculate_difficulty",
   "calculate_performance",
+  "MapStyle",
 ]

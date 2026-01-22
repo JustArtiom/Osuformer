@@ -1,12 +1,13 @@
 from .config import TokenizerConfig
-
+from .osu import MapStyle
 def build_dsl_tokens(config: TokenizerConfig):
+  STYLE_TOKENS = [f"STYLE_{style.name}" for style in MapStyle]
   DT_TOKENS = [ "DT_10", "DT_100", "DT_1000" ]
   X_TOKENS = [ f"X_{i}" for i in range(config.X_BINS) ]
   Y_TOKENS = [ f"Y_{i}" for i in range(config.Y_BINS) ]
   OBJ_TOKENS = [ "OBJ_START", "OBJ_END" ]
   TYPE_TOKENS = [ "T_CIRCLE", "T_SLIDER", "T_SPINNER" ]
-  NC_TOKENS = [ "NC" ]
+  # NC_TOKENS = [ "NC" ] # New Combo token is currently unused
   SEG_TYPE_TOKENS = ["SEG_LINEAR", "SEG_BEZIER", "SEG_CAT", "SEG_PERFECT"]
   SL_TOKENS = [ f"SL_{i}" for i in range(0, config.SLIDER_LEN_MAX, config.SLIDER_LEN_BINS) ]
   CP_TOKENS = [ f"CP_{i}" for i in range(config.SLIDER_CP_LIMIT) ]
@@ -17,12 +18,13 @@ def build_dsl_tokens(config: TokenizerConfig):
   STRUCTURAL_TOKENS = [ "MAP_START", "MAP_END", "EOS", "PAD" ]
 
   ALL_TOKENS: list[str] = (
-    DT_TOKENS
+    STYLE_TOKENS
+    + DT_TOKENS
     + X_TOKENS
     + Y_TOKENS
     + OBJ_TOKENS
     + TYPE_TOKENS
-    + NC_TOKENS
+    # + NC_TOKENS
     + SEG_TYPE_TOKENS
     + SL_TOKENS
     + CP_TOKENS

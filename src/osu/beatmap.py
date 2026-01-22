@@ -14,10 +14,11 @@ class Beatmap():
     difficulty: Optional[Difficulty] = None,
     timing_points: Optional[List[TimingPoint]] = None,
     colours: Optional[Colours] = None,
-    hit_objects: Optional[List[Union[Circle, Slider, Spinner]]] = None
+    hit_objects: Optional[List[Union[Circle, Slider, Spinner]]] = None,
+    with_styles: bool = True
   ):
     self.file_path = file_path
-    if file_path:
+    if file_path and not raw:
       with open(file_path, "r", encoding="utf-8") as f:
         raw = f.read()
 
@@ -50,7 +51,8 @@ class Beatmap():
             if hit_object_class:
               self.hit_objects.append(hit_object_class(raw=line))
 
-      self._recalculate_slider_durations()
+    self._recalculate_slider_durations()
+    self.styles = self.get_style_classes(parent_path=str(Path(file_path).parent) if file_path and with_styles else None)
 
   def _load_raw(self, raw: str):
     self.sections = self.split_sections(raw)
@@ -96,7 +98,7 @@ class Beatmap():
       return tp
     return None
 
-  def get_bpm_at(self, time: int) -> float | None:
+  def get_bpm_at(self, time: int = 0) -> float | None:
     tp = self.get_previous_timing_point(time, filter=lambda t: t.uninherited == 1)
     if not tp:
       tp = self.get_next_timing_point(time, filter=lambda t: t.uninherited == 1)
@@ -146,9 +148,9 @@ class Beatmap():
     from .difficulty import calculate_performance
     return calculate_performance(self.get_difficulty())
   
-  def get_style_classes(self, raw: bool = False, parent_path: str | None = None):
+  def get_style_classes(self, parent_path: str | None = None):
     from .style_classifier import classify_beatmap
-    return classify_beatmap(self, raw=raw, parent_path=parent_path)
+    return classify_beatmap(self, parent_path=parent_path)
   
   @staticmethod
   def get_mode(path: str) -> int:
