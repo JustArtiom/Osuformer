@@ -2,7 +2,6 @@ from typing import Optional, List
 from .config import TokenizerConfig
 from .constraints import build_vocab
 from .osu import Beatmap, TimingPoint, Circle, Slider, Spinner, SliderCurve, CurveType, Difficulty
-import numpy as np
 
 class Tokenizer:
   def __init__(self, config: Optional[TokenizerConfig] = None, with_styles: bool = True):
