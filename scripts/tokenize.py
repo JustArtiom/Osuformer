@@ -18,7 +18,7 @@ def main(path, config, decode, show_diff, limit):
   beatmap = Beatmap(raw=raw_map)
   tokenizer = Tokenizer(config.tokenizer)
 
-  tokens = tokenizer.encode(beatmap)
+  tokens, _ = tokenizer.encode(beatmap)
   tokens = tokens[:limit] if limit > 0 else tokens
   print("Tokens:")
   print([tokenizer.id_to_token[t] for t in tokens])
