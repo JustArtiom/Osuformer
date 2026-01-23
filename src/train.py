@@ -13,6 +13,7 @@ from .data import CachedDataset
 from .config import config_options, ExperimentConfig
 from .model import build_model
 from tqdm.auto import tqdm
+from .checkpoint import Checkpoint
 
 def setup_distributed():
   if "RANK" in os.environ:
@@ -181,6 +182,7 @@ def validate_one_epoch(model, epoch, loader, device):
 @click.option("--workers", type=int, help="Number of data loading workers")
 @click.option("--use-ram/--no-use-ram", default=None, help="Whether to load the entire cache into RAM")
 @click.option("--epochs", type=int, help="Number of training epochs")
+@click.option("--ckp", "checkpoint_name", type=str, help="Path to save checkpoints")
 @config_options
 def main(
   config: ExperimentConfig, 
@@ -189,7 +191,8 @@ def main(
   epochs: int, 
   lr: float, 
   workers: int, 
-  use_ram: Optional[bool]
+  use_ram: Optional[bool],
+  checkpoint_name: Optional[str],
 ):
   if not batch_size:
     batch_size = config.training.batch_size
@@ -253,8 +256,9 @@ def main(
 
   optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
+  checkpoint = Checkpoint(config, train_dataset.tokenizer.vocab, name=checkpoint_name)
   for epoch in range(epochs):
-    loss = train_one_epoch(
+    train_loss = train_one_epoch(
       model,
       train_loader,
       optimizer,
@@ -265,9 +269,30 @@ def main(
       amp_dtype=amp_dtype,
     )
 
+    stop_tensor = torch.tensor(0, device=device)
     if not distributed or dist.get_rank() == 0:
       val_loss = validate_one_epoch(model, epoch, val_loader, device)
-      print(f"[Epoch {epoch}] loss = {loss:.4f}, val_loss = {val_loss:.4f}")
+      print(f"[Epoch {epoch}] loss = {train_loss:.4f}, val_loss = {val_loss:.4f}")
+
+      stop = checkpoint.step(
+        model=model,
+        optimizer=optimizer,
+        scaler=scaler,
+        epoch=epoch,
+        val_loss=val_loss,
+      )
+
+      print(f"[Epoch {epoch}] loss = {train_loss:.4f}, val_loss = {val_loss:.4f}")
+
+      stop_tensor.fill_(1 if stop else 0)
+    if distributed:
+        dist.broadcast(stop_tensor, src=0)
+
+    if stop_tensor.item() == 1:
+        if distributed:
+            dist.barrier()
+        print("Early stopping triggered.")
+        break
 
   if distributed:
     dist.destroy_process_group()
