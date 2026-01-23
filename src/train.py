@@ -52,26 +52,34 @@ def train_one_epoch(model, loader, optimizer, device, epoch, sampler=None):
     dynamic_ncols=True,
   )
 
-  for mel, tokens, token_pad_mask in progress:
+  for mel, tokens, loss_mask, token_pad_mask in progress:
     mel = mel.to(device, non_blocking=True)
     tokens = tokens.to(device, non_blocking=True)
+    loss_mask = loss_mask.to(device, non_blocking=True)
     token_pad_mask = token_pad_mask.to(device, non_blocking=True)
 
     tokens_in  = tokens[:, :-1]
     tokens_out = tokens[:, 1:]
-    tgt_mask   = token_pad_mask[:, :-1]
+
+    pad_mask   = token_pad_mask[:, :-1]
+    loss_mask  = loss_mask[:, 1:]
 
     logits = model(
         src=mel,
         tgt_tokens=tokens_in,
-        tgt_key_padding_mask=tgt_mask,
+        tgt_key_padding_mask=pad_mask,
     )
 
     loss = F.cross_entropy(
-        logits.reshape(-1, logits.size(-1)),
-        tokens_out.reshape(-1),
-        ignore_index=0,
+      logits.reshape(-1, logits.size(-1)),
+      tokens_out.reshape(-1),
+      reduction="none",
     )
+
+    loss = loss.view(tokens_out.shape)      # (B, L-1)
+    loss = loss * loss_mask                 # zero out non-learning tokens
+
+    loss = loss.sum() / loss_mask.sum().clamp(min=1)
 
     progress.set_postfix(loss=f"{loss.item():.4f}")
     total_loss += loss.item()

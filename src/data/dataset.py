@@ -1,7 +1,7 @@
 import torch
 import os
 from tqdm import tqdm
-from typing import List, Literal, Union
+from typing import List, Literal, Union, Tuple
 from pathlib import Path
 import random
 import numpy as np
@@ -162,8 +162,13 @@ class CachedDataset(TorchDataset):
     self.hop_frames = int(self.segment_frames * (1 - overlap))
     self.use_ram = use_ram
     self.audioStats = StreamingAudioStats()
+    self.token_window_builder = TokenWindowBuilder(
+      tokenizer=self.tokenizer,
+      max_tokens=512, # TODO
+      overlap_ratio=self.overlap,
+    )
 
-    self.frames = []  # list of (map_idx, audio_id, start)
+    self.frames = [] 
     self.mels = {}
     self.tokens = {}
     self.times = {}
@@ -189,7 +194,8 @@ class CachedDataset(TorchDataset):
       if len(self.frames) == 0 or self.frames[-1] != (map_idx, audio_id, final_start):
         self.frames.append((map_idx, audio_id, final_start))
 
-    self.audioStats.mean, self.audioStats.std = compute_mel_stats(list(self.mels.values()))
+    if self.use_ram:
+      self.audioStats.mean, self.audioStats.std = compute_mel_stats(list(self.mels.values()))
 
 
   def __len__(self):
@@ -197,7 +203,7 @@ class CachedDataset(TorchDataset):
 
   @staticmethod
   def collate_batch(batch, pad_id: int = 0):
-    mels, tokens = zip(*batch)
+    mels, tokens, loss_masks = zip(*batch)
     mels = torch.stack(mels, dim=0)
 
     lengths = torch.tensor([t.size(0) for t in tokens], dtype=torch.long)
@@ -209,12 +215,18 @@ class CachedDataset(TorchDataset):
       dtype=torch.long,
     )
 
-    for i, t in enumerate(tokens):
+    padded_loss_mask = torch.zeros(
+      (len(tokens), max_len),
+      dtype=torch.bool,
+    )
+
+    for i, (t, lm) in enumerate(zip(tokens, loss_masks)):
       padded_tokens[i, : t.size(0)] = t
+      padded_loss_mask[i, : lm.size(0)] = lm
 
     token_pad_mask = padded_tokens == pad_id
 
-    return mels, padded_tokens, token_pad_mask
+    return mels, padded_tokens, padded_loss_mask, token_pad_mask
 
 
   def __getitem__(self, idx):
@@ -236,24 +248,115 @@ class CachedDataset(TorchDataset):
       
     segment = mel[start : start + self.segment_frames]
     segment = normalize_mel(
-        segment,
-        self.audioStats.mean,
-        self.audioStats.std
+      segment,
+      self.audioStats.mean,
+      self.audioStats.std
     )
 
     segment_start_ms = start * self.hop_ms
-    segment_end_ms   = segment_start_ms + self.window_ms
+    segment_end_ms  = segment_start_ms + self.window_ms
 
-    mask = (times >= segment_start_ms) & (times < segment_end_ms)
-    segment_tokens = tokens[mask]
-
-    segment_tokens = np.concatenate([
-        [self.tokenizer.token_to_id["BOS"]],
-        segment_tokens,
-        [self.tokenizer.token_to_id["EOS"]],
-    ])
+    window_tokens, loss_mask = self.token_window_builder.build(
+      tokens=tokens,
+      times=times,
+      audio_start_ms=segment_start_ms,
+      audio_end_ms=segment_end_ms,
+    )
 
     return (
-        torch.from_numpy(segment).float(),          # (T, n_mels)
-        torch.from_numpy(segment_tokens).long(),    # (L,)
+      torch.from_numpy(segment).float(),
+      torch.from_numpy(window_tokens).long(),
+      torch.from_numpy(loss_mask),
     )
+  
+class TokenWindowBuilder():
+  def __init__(
+    self,
+    tokenizer: Tokenizer,
+    max_tokens: int,
+    overlap_ratio: float,
+  ):
+    assert 0.0 < overlap_ratio < 1.0
+    self.tokenizer = tokenizer
+    self.max_tokens = max_tokens
+    self.overlap_ratio = overlap_ratio
+
+    self.MAP_START = tokenizer.token_to_id["MAP_START"]
+    self.MAP_END   = tokenizer.token_to_id["MAP_END"]
+    self.EOS       = tokenizer.token_to_id["EOS"]
+
+  def build(
+    self,
+    *,
+    tokens: np.ndarray,            # (N,)
+    times: np.ndarray,             # (N,) ms
+    audio_start_ms: int,
+    audio_end_ms: int,
+  ) -> Tuple[np.ndarray, np.ndarray]:
+
+    window_ms = audio_end_ms - audio_start_ms
+    predict_start_ms = audio_start_ms + int(window_ms * self.overlap_ratio)
+
+    context_mask = times < predict_start_ms
+    target_mask  = (times >= predict_start_ms) & (times < audio_end_ms)
+
+    context_tokens = tokens[context_mask]
+    target_tokens  = tokens[target_mask]
+
+    context_tokens = self._strip_structure(context_tokens)
+    target_tokens  = self._strip_structure(target_tokens)
+
+    map_start_idx = np.where(tokens == self.tokenizer.token_to_id["MAP_START"])[0][0]
+    global_tokens = tokens[:map_start_idx]
+
+    # --- token budget ---
+    reserved = (
+      len(global_tokens)
+      + 1
+      + len(target_tokens)
+    )
+
+    if reserved > self.max_tokens:
+      target_tokens = target_tokens[-(self.max_tokens - len(global_tokens) - 1):]
+      reserved = len(global_tokens) + 1 + len(target_tokens)
+
+    available_context = self.max_tokens - reserved
+
+    if available_context > 0 and len(context_tokens) > available_context:
+      context_tokens = context_tokens[-available_context:]
+    elif available_context <= 0:
+      context_tokens = np.empty((0,), dtype=np.int64)
+
+    window_tokens = np.concatenate([
+      global_tokens,
+      np.array([self.MAP_START], dtype=np.int64),
+      context_tokens,
+      target_tokens,
+    ])
+
+    if self.MAP_END in target_tokens:
+      window_tokens = np.concatenate([
+        window_tokens,
+        np.array([self.EOS], dtype=np.int64),
+      ])
+
+    loss_mask = np.zeros(len(window_tokens), dtype=bool)
+
+    target_start = len(global_tokens) + 1 + len(context_tokens)
+    loss_mask[target_start : target_start + len(target_tokens)] = True
+
+    if window_tokens[-1] == self.EOS:
+      loss_mask[-1] = True
+
+    return window_tokens, loss_mask
+
+  def _strip_structure(self, tokens: np.ndarray) -> np.ndarray:
+    if tokens.size == 0:
+      return tokens
+
+    mask = (
+      (tokens != self.MAP_START)
+      & (tokens != self.MAP_END)
+      & (tokens != self.EOS)
+    )
+    return tokens[mask]
