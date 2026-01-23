@@ -8,9 +8,17 @@ class DatasetSplitConfig:
   val: float = 0.2
 
 @dataclass
+class DatasetMapFilterConfig:
+  sr_min: int = 0
+  sr_max: int = 11
+  variable_bpm: bool = False
+  tokenizer_limits: bool = True
+
+@dataclass
 class DatasetConfig:
   path: str = "dataset"
   split: DatasetSplitConfig = field(default_factory=DatasetSplitConfig)
+  map_filters: DatasetMapFilterConfig = field(default_factory=DatasetMapFilterConfig)
   workers: int = 1
   window_ms: int = 8000
   overlap: float = 0.9

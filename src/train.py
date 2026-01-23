@@ -49,7 +49,7 @@ def train_one_epoch(model, loader, optimizer, device, epoch, sampler=None, scale
 
   progress = tqdm(
     loader,
-    desc=f"Epoch {epoch}",
+    desc=f"train - Epoch {epoch}",
     leave=False,
     dynamic_ncols=True,
   )
@@ -66,10 +66,8 @@ def train_one_epoch(model, loader, optimizer, device, epoch, sampler=None, scale
     pad_mask   = token_pad_mask[:, :-1]
     loss_mask  = loss_mask[:, 1:]
 
-    # AMP / GradScaler setup (scaler may be None for CPU)
     use_amp = scaler is not None and device.type == "cuda"
     if amp_dtype is None:
-      # bfloat16 is generally preferable on A100/H100; fallback to float16 otherwise
       amp_dtype = torch.bfloat16
 
     optimizer.zero_grad(set_to_none=True)
@@ -138,7 +136,7 @@ def validate_one_epoch(model, epoch, loader, device):
 
   progress = tqdm(
     loader,
-    desc=f"Validate {epoch}",
+    desc=f"val - Epoch {epoch}",
     leave=False,
     dynamic_ncols=True,
   )
