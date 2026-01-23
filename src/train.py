@@ -2,6 +2,7 @@ import os
 import click
 import torch
 from pathlib import Path
+from typing import Optional
 import torch.distributed as dist
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
@@ -18,7 +19,7 @@ def setup_distributed():
     return True
   return False
 
-def create_dataloader(dataset: CachedDataset, batch_size: int):
+def create_dataloader(dataset: CachedDataset, batch_size: int, workers: int = 1):
     sampler = None
     if dist.is_initialized():
       sampler = DistributedSampler(dataset, shuffle=True)
@@ -28,7 +29,7 @@ def create_dataloader(dataset: CachedDataset, batch_size: int):
       batch_size=batch_size,
       sampler=sampler,
       shuffle=(sampler is None),
-      num_workers=1,
+      num_workers=workers,
       pin_memory=True,
       collate_fn=CachedDataset.collate_batch,
       persistent_workers=True,
@@ -84,17 +85,29 @@ def train_one_epoch(model, loader, optimizer, device, epoch, sampler=None):
 @click.option("--cache", "cache_name", type=str, required=True, help="Name of the cache to use for training")
 @click.option("--batch-size", type=int, help="Batch size for training")
 @click.option("--lr", type=float, help="Learning rate for optimizer")
+@click.option("--workers", type=int, help="Number of data loading workers")
+@click.option("--use-ram/--no-use-ram", help="Whether to load the entire cache into RAM")
 @click.option("--epochs", type=int, help="Number of training epochs")
 @config_options
-def main(config: ExperimentConfig, cache_name: str, batch_size: int, epochs: int, lr: float):
+def main(
+  config: ExperimentConfig, 
+  cache_name: str, 
+  batch_size: int, 
+  epochs: int, 
+  lr: float, 
+  workers: int, 
+  use_ram: Optional[bool]
+):
   if not batch_size:
     batch_size = config.training.batch_size
-
   if not epochs:
     epochs = config.training.epochs
-
+  if not workers:
+    workers = config.training.workers
   if not lr:
     lr = config.training.lr
+  if use_ram is None:
+    use_ram = config.training.use_ram
 
 
   distributed = setup_distributed()
@@ -113,6 +126,7 @@ def main(config: ExperimentConfig, cache_name: str, batch_size: int, epochs: int
   loader, sampler = create_dataloader(
     dataset=train_dataset,
     batch_size=batch_size,
+    workers=workers,
   )
 
   model = build_model(config, vocab_size=len(train_dataset.tokenizer.vocab))
