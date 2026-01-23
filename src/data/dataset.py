@@ -251,16 +251,7 @@ class CachedDataset(TorchDataset):
   @staticmethod
   def collate_batch(batch, pad_id: int = 0):
     mels, tokens, loss_masks = zip(*batch)
-
-    mel_lengths = torch.tensor([m.shape[0] for m in mels], dtype=torch.long)
-    max_mel_len = int(mel_lengths.max().item())
-    n_mels = mels[0].shape[1]
-
-    padded_mels = torch.zeros(len(mels), max_mel_len, n_mels, dtype=mels[0].dtype)
-    for i, m in enumerate(mels):
-        padded_mels[i, : m.shape[0]] = m
-
-    mel_pad_mask = torch.arange(max_mel_len)[None, :] >= mel_lengths[:, None]
+    mels = torch.stack(mels, dim=0)
 
     lengths = torch.tensor([t.size(0) for t in tokens], dtype=torch.long)
     max_len: int = int(lengths.max().item())
@@ -282,7 +273,7 @@ class CachedDataset(TorchDataset):
 
     token_pad_mask = padded_tokens == pad_id
 
-    return padded_mels, padded_tokens, padded_loss_mask, token_pad_mask, mel_pad_mask
+    return mels, padded_tokens, padded_loss_mask, token_pad_mask
 
 
   def __getitem__(self, idx):
@@ -312,9 +303,6 @@ class CachedDataset(TorchDataset):
         mode="constant",
         constant_values=0.0,
       )
-
-    if segment.shape[0] == 0:
-      raise IndexError
 
     segment = normalize_mel(
       segment,
