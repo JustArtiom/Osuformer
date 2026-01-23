@@ -1,9 +1,13 @@
+from typing import Optional, List
 from .config import TokenizerConfig
 from .constraints import build_vocab
 from .osu import Beatmap, TimingPoint, Circle, Slider, Spinner, SliderCurve, CurveType, Difficulty
+import numpy as np
 
 class Tokenizer:
-  def __init__(self, config: TokenizerConfig, with_styles: bool = True):
+  def __init__(self, config: Optional[TokenizerConfig] = None, with_styles: bool = True):
+    if config is None:
+      return
     self.config = config
     self.token_to_id, self.id_to_token = build_vocab(config)
     self.vocab = self.token_to_id
@@ -11,7 +15,24 @@ class Tokenizer:
     self.y_bin_width = 384 / config.Y_BINS
     self.with_styles = with_styles
 
-  def encode(self, beatmap: Beatmap):
+  def encode(self, beatmap):
+    tokens: List[int] = []
+    times: List[float] = []
+
+    current_time_ms = 0
+
+    for token, idx in [(self.id_to_token[i], i) for i in self.encode_tokens(beatmap)]:
+        tokens.append(idx)
+        times.append(current_time_ms)
+
+        if token.startswith("DT_"):
+            delta_ms = self.extract_number_from_token(token, "DT_")
+            if delta_ms is not None:
+                current_time_ms += delta_ms
+
+    return tokens, times
+
+  def encode_tokens(self, beatmap: Beatmap):
     tokens: list[int] = []
     beatmap_objects = sorted(
       beatmap.timing_points + beatmap.hit_objects,
@@ -245,7 +266,18 @@ class Tokenizer:
 
     return tokens
   
-  def save_vocab(self, filepath: str):
+  def save(self, filepath: str):
     import json
     with open(filepath, "w") as f:
       json.dump(self.vocab, f, indent=2)
+
+  def load(self, filepath: str):
+    import json
+    with open(filepath, "r") as f:
+      vocab = json.load(f)
+    self.vocab = vocab
+    self.token_to_id = vocab
+    self.id_to_token = ["" for _ in range(len(vocab))]
+    for token, idx in vocab.items():
+      self.id_to_token[idx] = token
+    return self

@@ -1,4 +1,4 @@
-from .dataset import Dataset
+from .dataset import Dataset, CachedDataset
 from .path import mkdir
 from .audio import audio_to_mel
 from .crypt import file_hash
@@ -8,4 +8,5 @@ __all__ = [
   "mkdir",
   "audio_to_mel",
   "file_hash",
+  "CachedDataset",
 ]

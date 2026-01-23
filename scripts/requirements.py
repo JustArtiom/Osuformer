@@ -96,7 +96,7 @@ def main():
   ))
 
   print(
-    "Recommended to update requirements.txt.\n------------", 
+    "Recommended to update requirements.txt.\n------------\n"+
     "\n".join([f"{pkg}=={compute_package_version(pkg)}" for pkg in generated.splitlines()]), 
     "\n------------"
   )

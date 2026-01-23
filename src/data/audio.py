@@ -46,6 +46,8 @@ class StreamingAudioStats:
       self.M2 = obj["M2"]
       self.std = obj["std"]
 
+    return self
+
 def ms_to_samples(sample_rate, hop_ms):
   return int(sample_rate * hop_ms / 1000)
 
