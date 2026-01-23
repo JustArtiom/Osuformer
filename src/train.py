@@ -21,10 +21,10 @@ def setup_distributed():
     return True
   return False
 
-def create_dataloader(dataset: CachedDataset, batch_size: int, workers: int = 1):
+def create_dataloader(dataset: CachedDataset, batch_size: int, workers: int = 1, shuffle: bool = True):
     sampler = None
     if dist.is_initialized():
-      sampler = DistributedSampler(dataset, shuffle=True)
+      sampler = DistributedSampler(dataset, shuffle=shuffle)
 
     loader = DataLoader(
       dataset,
@@ -130,6 +130,52 @@ def train_one_epoch(model, loader, optimizer, device, epoch, sampler=None, scale
   return total_loss / len(loader)
 
 
+@torch.no_grad()
+def validate_one_epoch(model, epoch, loader, device):
+  model.eval()
+  total_loss = 0.0
+  total_tokens = 0
+
+  progress = tqdm(
+    loader,
+    desc=f"Validate {epoch}",
+    leave=False,
+    dynamic_ncols=True,
+  )
+
+  for mel, tokens, loss_mask, token_pad_mask in progress:
+    mel = mel.to(device, non_blocking=True)
+    tokens = tokens.to(device, non_blocking=True)
+    loss_mask = loss_mask.to(device, non_blocking=True)
+    token_pad_mask = token_pad_mask.to(device, non_blocking=True)
+
+    tokens_in  = tokens[:, :-1]
+    tokens_out = tokens[:, 1:]
+
+    pad_mask  = token_pad_mask[:, :-1]
+    loss_mask = loss_mask[:, 1:].float()
+
+    logits = model(
+      src=mel,
+      tgt_tokens=tokens_in,
+      tgt_key_padding_mask=pad_mask,
+    )
+
+    loss = F.cross_entropy(
+      logits.reshape(-1, logits.size(-1)),
+      tokens_out.reshape(-1),
+      reduction="none",
+    )
+
+    loss = loss.view(tokens_out.shape)
+    loss = loss * loss_mask
+    progress.set_postfix(loss=f"{(loss.sum() / max(loss_mask.sum(), 1)).item():.4f}")
+
+    total_loss += loss.sum().item()
+    total_tokens += loss_mask.sum().item()
+
+  return total_loss / max(total_tokens, 1)
+
 @click.command()
 @click.option("--cache", "cache_name", type=str, required=True, help="Name of the cache to use for training")
 @click.option("--batch-size", type=int, help="Batch size for training")
@@ -173,10 +219,27 @@ def main(
     split="train"
   )
 
-  loader, sampler = create_dataloader(
+  val_dataset = CachedDataset(
+    parent_path=Path(config.cache.path) / cache_name,
+    window_ms=config.dataset.window_ms,
+    hop_ms=config.audio.hop_ms,
+    overlap=config.dataset.overlap,
+    use_ram=use_ram,
+    split="val"
+  )
+
+
+  train_loader, train_sampler = create_dataloader(
     dataset=train_dataset,
     batch_size=batch_size,
     workers=workers,
+  )
+
+  val_loader, _ = create_dataloader(
+    dataset=val_dataset,
+    batch_size=batch_size,
+    workers=workers,
+    shuffle=False,
   )
 
   model = build_model(config, vocab_size=len(train_dataset.tokenizer.vocab))
@@ -196,17 +259,18 @@ def main(
   for epoch in range(epochs):
     loss = train_one_epoch(
       model,
-      loader,
+      train_loader,
       optimizer,
       device,
       epoch,
-      sampler,
+      train_sampler,
       scaler=scaler,
       amp_dtype=amp_dtype,
     )
 
     if not distributed or dist.get_rank() == 0:
-      print(f"[Epoch {epoch}] loss = {loss:.4f}")
+      val_loss = validate_one_epoch(model, epoch, val_loader, device)
+      print(f"[Epoch {epoch}] loss = {loss:.4f}, val_loss = {val_loss:.4f}")
 
   if distributed:
     dist.destroy_process_group()
