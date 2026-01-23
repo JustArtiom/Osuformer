@@ -182,12 +182,12 @@ class CachedDataset(TorchDataset):
 
       if audio_id not in self.mels:
         audio_npz = np.load(self.audio_dir / f"{audio_id}.npz", mmap_mode="r" if not self.use_ram else None)
-        mel_len = audio_npz["mel"].shape[0]
         if self.use_ram:
           self.mels[audio_id] = audio_npz["mel"]
         else:
           self.audioStats.update(audio_npz["mel"])
-
+        
+        mel_len = (self.mels[audio_id] if audio_id in self.mels else audio_npz["mel"]).shape[0]
         for start in range(0, mel_len - self.segment_frames + 1, self.hop_frames):
           self.frames.append((map_idx, audio_id, start))
 
