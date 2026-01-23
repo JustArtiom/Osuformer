@@ -69,6 +69,8 @@ class TrainingConfig:
   batch_size: int = 16
   epochs: int = 100
   lr: float = 0.0001
+  use_ram: bool = True
+  workers: int = 4
 
 @dataclass
 class RootConfig:

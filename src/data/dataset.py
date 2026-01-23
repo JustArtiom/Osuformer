@@ -8,7 +8,7 @@ import numpy as np
 from multiprocessing import Pool, cpu_count
 from torch.utils.data import Dataset as TorchDataset
 
-from .audio import audio_to_mel, normalize_mel, compute_mel_stats
+from .audio import audio_to_mel, normalize_mel, compute_mel_stats, StreamingAudioStats
 from ..osu import Beatmap
 from .path import mkdir
 from .crypt import file_hash
@@ -113,23 +113,25 @@ def process_map_sample(args: tuple[Path, ExperimentConfig, Path, Tokenizer]):
     audio_path = osu_path.parent / beatmap.general.audio_filename
     hash_id = file_hash(audio_path)
     cache_audio_file = Path(pwd) / "audio" / f"{hash_id}.npz"
-    
-    audio_mel, duration_ms = audio_to_mel(
-      path=audio_path,
-      sample_rate=config.audio.sample_rate,
-      hop_ms=config.audio.hop_ms,
-      win_ms=config.audio.win_ms,
-      n_mels=config.audio.n_mels,
-      n_fft=config.audio.n_fft,
-    )
 
     new_audio = False
     if not cache_audio_file.exists():
+      audio_mel, duration_ms = audio_to_mel(
+        path=audio_path,
+        sample_rate=config.audio.sample_rate,
+        hop_ms=config.audio.hop_ms,
+        win_ms=config.audio.win_ms,
+        n_mels=config.audio.n_mels,
+        n_fft=config.audio.n_fft,
+      )
       new_audio = True
       np.savez_compressed(
         cache_audio_file,
         mel=audio_mel.T  # Transpose to (time, n_mels)
       )
+    else:
+      audio_npz = np.load(cache_audio_file, mmap_mode="r")
+      duration_ms: float = audio_npz["mel"].shape[0] * config.audio.hop_ms
 
     return beatmap, tokens, times, hash_id, duration_ms, new_audio
   except Exception as e:
@@ -145,6 +147,7 @@ class CachedDataset(TorchDataset):
     window_ms: int,
     hop_ms: int,
     overlap: float,
+    use_ram: bool = True,
   ):
     if not parent_path.exists():
       raise ValueError(f"Cache path does not exist: {parent_path}")
@@ -157,27 +160,37 @@ class CachedDataset(TorchDataset):
     self.overlap = overlap
     self.segment_frames = window_ms // hop_ms
     self.hop_frames = int(self.segment_frames * (1 - overlap))
+    self.use_ram = use_ram
+    self.audioStats = StreamingAudioStats()
 
     self.frames = []  # list of (map_idx, audio_id, start)
-    self.mels: dict[int, np.ndarray] = {}
+    self.mels = {}
     self.tokens = {}
     self.times = {}
 
     for map_idx, map_file in enumerate(tqdm(self.map_files, desc="Preparing dataset frames", unit="maps", total=len(self.map_files))):
-      map_npz = np.load(map_file, mmap_mode="r")
-      self.tokens[map_idx] = map_npz["tokens"]
-      self.times[map_idx] = map_npz["times"]
+      map_npz = np.load(map_file, mmap_mode="r" if not self.use_ram else None)
       audio_id = map_npz["audio_id"].item()
+      if self.use_ram:
+        self.tokens[map_idx] = map_npz["tokens"]
+        self.times[map_idx] = map_npz["times"]
 
-      audio_npz = np.load(self.audio_dir / f"{audio_id}.npz", mmap_mode="r")
-      self.mels[audio_id] = audio_npz["mel"]
+      audio_npz = np.load(self.audio_dir / f"{audio_id}.npz", mmap_mode="r" if not self.use_ram else None)
       mel_len = audio_npz["mel"].shape[0]
+      if self.use_ram:
+        self.mels[audio_id] = audio_npz["mel"]
+      else:
+        self.audioStats.update(audio_npz["mel"])
 
       for start in range(0, mel_len - self.segment_frames + 1, self.hop_frames):
         self.frames.append((map_idx, audio_id, start))
 
-    self.mean, self.std = compute_mel_stats(list(self.mels.values()))
-    
+      final_start = max(0, mel_len - self.segment_frames)
+      if len(self.frames) == 0 or self.frames[-1] != (map_idx, audio_id, final_start):
+        self.frames.append((map_idx, audio_id, final_start))
+
+    self.audioStats.mean, self.audioStats.std = compute_mel_stats(list(self.mels.values()))
+
 
   def __len__(self):
     return len(self.frames)
@@ -207,21 +220,25 @@ class CachedDataset(TorchDataset):
   def __getitem__(self, idx):
     map_idx, audio_id, start = self.frames[idx]
 
-    # map_npz = np.load(self.map_files[map_idx], mmap_mode="r")
-    # tokens = map_npz["tokens"]
-    # times  = map_npz["times"]
-    tokens = self.tokens[map_idx]
-    times  = self.times[map_idx]
+    if self.use_ram:
+      tokens = self.tokens[map_idx]
+      times  = self.times[map_idx]
+    else:
+      map_npz = np.load(self.map_files[map_idx], mmap_mode="r")
+      tokens = map_npz["tokens"]
+      times  = map_npz["times"]
 
-    # audio_npz = np.load(self.audio_dir / f"{audio_id}.npz", mmap_mode="r")
-    # mel = audio_npz["mel"]
-    mel = self.mels[audio_id]
-
+    if self.use_ram:
+      mel = self.mels[audio_id]
+    else:
+      audio_npz = np.load(self.audio_dir / f"{audio_id}.npz", mmap_mode="r")
+      mel = audio_npz["mel"]
+      
     segment = mel[start : start + self.segment_frames]
     segment = normalize_mel(
         segment,
-        self.mean,
-        self.std
+        self.audioStats.mean,
+        self.audioStats.std
     )
 
     segment_start_ms = start * self.hop_ms
