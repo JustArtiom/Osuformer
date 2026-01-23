@@ -9,7 +9,7 @@ from torch.utils.data.distributed import DistributedSampler
 import torch.nn.functional as F
 from torch.amp.grad_scaler import GradScaler
 from torch.amp.autocast_mode import autocast
-from .data import CachedDataset
+from .data import CachedDataset, StreamingAudioStats
 from .config import config_options, ExperimentConfig
 from .model import build_model
 from tqdm.auto import tqdm
@@ -210,11 +210,14 @@ def main(
   device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
   print(f"Using device: {device}")
 
+  audioStats = StreamingAudioStats()
+
   train_dataset = CachedDataset(
     parent_path=Path(config.cache.path) / cache_name,
     window_ms=config.dataset.window_ms,
     hop_ms=config.audio.hop_ms,
     overlap=config.dataset.overlap,
+    audioStats=audioStats,
     use_ram=use_ram,
     split="train"
   )
@@ -224,10 +227,13 @@ def main(
     window_ms=config.dataset.window_ms,
     hop_ms=config.audio.hop_ms,
     overlap=config.dataset.overlap,
+    audioStats=audioStats,
     use_ram=use_ram,
     split="val"
   )
 
+  train_dataset.compute_audio_stats()
+  val_dataset.compute_audio_stats()
 
   train_loader, train_sampler = create_dataloader(
     dataset=train_dataset,

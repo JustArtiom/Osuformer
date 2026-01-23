@@ -190,6 +190,7 @@ class CachedDataset(TorchDataset):
     self, 
     parent_path: Path, 
     split: Literal["train", "val"],
+    audioStats: StreamingAudioStats,
     window_ms: int,
     hop_ms: int,
     overlap: float,
@@ -202,12 +203,13 @@ class CachedDataset(TorchDataset):
     self.vocab_path = parent_path / "vocab.json"
     self.tokenizer = Tokenizer().load(str(self.vocab_path))
     self.window_ms = window_ms
+    self.split = split
     self.hop_ms = hop_ms
     self.overlap = overlap
     self.segment_frames = window_ms // hop_ms
     self.hop_frames = int(self.segment_frames * (1 - overlap))
     self.use_ram = use_ram
-    self.audioStats = StreamingAudioStats()
+    self.audioStats = audioStats
     self.token_window_builder = TokenWindowBuilder(
       tokenizer=self.tokenizer,
       max_tokens=1024, # TODO
@@ -219,7 +221,7 @@ class CachedDataset(TorchDataset):
     self.tokens = {}
     self.times = {}
 
-    for map_idx, map_file in enumerate(tqdm(self.map_files, desc="Preparing dataset frames", unit="maps", total=len(self.map_files))):
+    for map_idx, map_file in enumerate(tqdm(self.map_files, desc=f"[{self.split}]Preparing dataset frames", unit="maps", total=len(self.map_files))):
       map_npz = np.load(map_file, mmap_mode="r")
       audio_id = map_npz["audio_id"].item()
       if self.use_ram:
@@ -228,10 +230,9 @@ class CachedDataset(TorchDataset):
 
       if audio_id not in self.mels:
         audio_npz = np.load(self.audio_dir / f"{audio_id}.npz", mmap_mode="r")
+        self.audioStats.update(audio_npz["mel"])
         if self.use_ram:
           self.mels[audio_id] = audio_npz["mel"]
-        else:
-          self.audioStats.update(audio_npz["mel"])
         
         mel_len = (self.mels[audio_id] if audio_id in self.mels else audio_npz["mel"]).shape[0]
         for start in range(0, mel_len - self.segment_frames + 1, self.hop_frames):
@@ -241,9 +242,8 @@ class CachedDataset(TorchDataset):
         if len(self.frames) == 0 or self.frames[-1] != (map_idx, audio_id, final_start):
           self.frames.append((map_idx, audio_id, final_start))
 
-    if self.use_ram:
-      self.audioStats.mean, self.audioStats.std = compute_mel_stats(list(self.mels.values()))
-
+  def compute_audio_stats(self):
+    self.audioStats.mean, self.audioStats.std = self.audioStats.finalize()
 
   def __len__(self):
     return len(self.frames)
@@ -251,7 +251,16 @@ class CachedDataset(TorchDataset):
   @staticmethod
   def collate_batch(batch, pad_id: int = 0):
     mels, tokens, loss_masks = zip(*batch)
-    mels = torch.stack(mels, dim=0)
+
+    mel_lengths = torch.tensor([m.shape[0] for m in mels], dtype=torch.long)
+    max_mel_len = int(mel_lengths.max().item())
+    n_mels = mels[0].shape[1]
+
+    padded_mels = torch.zeros(len(mels), max_mel_len, n_mels, dtype=mels[0].dtype)
+    for i, m in enumerate(mels):
+        padded_mels[i, : m.shape[0]] = m
+
+    mel_pad_mask = torch.arange(max_mel_len)[None, :] >= mel_lengths[:, None]
 
     lengths = torch.tensor([t.size(0) for t in tokens], dtype=torch.long)
     max_len: int = int(lengths.max().item())
@@ -273,7 +282,7 @@ class CachedDataset(TorchDataset):
 
     token_pad_mask = padded_tokens == pad_id
 
-    return mels, padded_tokens, padded_loss_mask, token_pad_mask
+    return padded_mels, padded_tokens, padded_loss_mask, token_pad_mask, mel_pad_mask
 
 
   def __getitem__(self, idx):
@@ -294,6 +303,10 @@ class CachedDataset(TorchDataset):
       mel = audio_npz["mel"]
       
     segment = mel[start : start + self.segment_frames]
+
+    if segment.shape[0] == 0:
+      raise IndexError
+
     segment = normalize_mel(
       segment,
       self.audioStats.mean,

@@ -1,6 +1,6 @@
 from .dataset import Dataset, CachedDataset
 from .path import mkdir
-from .audio import audio_to_mel
+from .audio import audio_to_mel, normalize_mel, StreamingAudioStats
 from .crypt import file_hash
 
 __all__ = [
@@ -9,4 +9,6 @@ __all__ = [
   "audio_to_mel",
   "file_hash",
   "CachedDataset",
+  "normalize_mel",
+  "StreamingAudioStats"
 ]
