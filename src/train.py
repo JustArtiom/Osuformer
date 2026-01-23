@@ -120,6 +120,7 @@ def main(
     window_ms=config.dataset.window_ms,
     hop_ms=config.audio.hop_ms,
     overlap=config.dataset.overlap,
+    use_ram=use_ram,
     split="train"
   )
 
