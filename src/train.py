@@ -256,7 +256,13 @@ def main(
 
   optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
-  checkpoint = Checkpoint(config, train_dataset.tokenizer.vocab, name=checkpoint_name)
+  checkpoint = None
+  if not distributed or dist.get_rank() == 0:
+    checkpoint = Checkpoint(
+        config,
+        train_dataset.tokenizer.vocab,
+        name=checkpoint_name,
+    )
   for epoch in range(epochs):
     train_loss = train_one_epoch(
       model,
@@ -274,6 +280,7 @@ def main(
       val_loss = validate_one_epoch(model, epoch, val_loader, device)
       print(f"[Epoch {epoch}] loss = {train_loss:.4f}, val_loss = {val_loss:.4f}")
 
+      assert checkpoint is not None
       stop = checkpoint.step(
         model=model,
         optimizer=optimizer,
