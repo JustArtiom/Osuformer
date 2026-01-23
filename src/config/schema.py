@@ -28,6 +28,10 @@ class CacheConfig:
   path: str = "cache"
 
 @dataclass
+class CheckpointConfig:
+  path: str = "checkpoints"
+
+@dataclass
 class AudioConfig:
   sample_rate: int = 22050
   hop_ms: int = 10
@@ -73,17 +77,24 @@ class ModelConfig:
   decoder: DecoderConfig = field(default_factory=DecoderConfig)
 
 @dataclass
+class TrainingEarlyStopConfig:
+  patience: int = 10
+  delta: float = 0.0001
+
+@dataclass
 class TrainingConfig:
   batch_size: int = 16
   epochs: int = 100
   lr: float = 0.0001
   use_ram: bool = True
   workers: int = 4
+  early_stop: TrainingEarlyStopConfig = field(default_factory=TrainingEarlyStopConfig)
 
 @dataclass
 class RootConfig:
   dataset: DatasetConfig = field(default_factory=DatasetConfig)
   cache: CacheConfig = field(default_factory=CacheConfig)
+  checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
   audio: AudioConfig = field(default_factory=AudioConfig)
   tokenizer: TokenizerConfig = field(default_factory=TokenizerConfig)
   model: ModelConfig = field(default_factory=ModelConfig)

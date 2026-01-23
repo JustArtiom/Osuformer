@@ -15,6 +15,9 @@ dataset:
 cache:
   path: cache
 
+checkpoint:
+  path: checkpoints
+
 audio:
   sample_rate: 22050
   hop_ms: 10
@@ -56,3 +59,6 @@ training:
   workers: 4
   epochs: 100
   lr: 0.0001
+  early_stop:
+    patience: 10
+    delta: 0.0001
