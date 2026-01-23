@@ -36,8 +36,6 @@ class AnalyticsData:
   total_audios: int = 0
   total_audio_length: float = 0.0
   audio_durations_ms: List[float] = field(default_factory=list)
-  audio_mel_means: List[float] = field(default_factory=list)
-  audio_mel_stds: List[float] = field(default_factory=list)
 
 
 
@@ -127,12 +125,10 @@ class Analytics():
 
     self.data.map_styles.append(styles)
 
-  def collect_audio( self, *, duration_ms: float, mel: np.ndarray): 
+  def collect_audio(self, *, duration_ms: float): 
     self.data.total_audios += 1
     self.data.total_audio_length += duration_ms if duration_ms > 0 else 0.0
     self.data.audio_durations_ms.append(duration_ms if duration_ms > 0 else float("nan"))
-    self.data.audio_mel_means.append(float(np.mean(mel)))
-    self.data.audio_mel_stds.append(float(np.std(mel)))
 
   def get_beatmap_duration(self, beatmap: Beatmap) -> float:
     first_time = beatmap.hit_objects[0].time if beatmap.hit_objects else 0
@@ -603,22 +599,6 @@ class Analytics():
       title="Audio Duration Distribution",
       x_label="Duration (ms)",
       data=self.data.audio_durations_ms,
-      bins=40
-    )
-
-    self.create_numeric_histogram(
-      file_name="audio_mel_mean_distribution.png",
-      title="Audio Mel Mean Distribution",
-      x_label="Mean",
-      data=self.data.audio_mel_means,
-      bins=40
-    )
-
-    self.create_numeric_histogram(
-      file_name="audio_mel_std_distribution.png",
-      title="Audio Mel Std Distribution",
-      x_label="Std",
-      data=self.data.audio_mel_stds,
       bins=40
     )
 

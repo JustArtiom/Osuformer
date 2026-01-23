@@ -82,7 +82,6 @@ class Dataset:
             )
             analytics.collect_audio(
               duration_ms=duration_ms,
-              mel=audio_mel
             )
           save_i += 1
 
