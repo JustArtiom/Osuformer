@@ -9,12 +9,12 @@ from multiprocessing import Pool, cpu_count
 from torch.utils.data import Dataset as TorchDataset
 
 from .audio import audio_to_mel, normalize_mel, compute_mel_stats, StreamingAudioStats
-from ..osu import Beatmap
+from ..osu import Beatmap, Slider
 from .path import mkdir
 from .crypt import file_hash
 from ..config import ExperimentConfig
 from ..tokenizer import Tokenizer
-from .analytics import Analytics
+from .analytics import DatasetAnalytics
 
 class Dataset:
   def __init__(self, config: ExperimentConfig, workers: int | None = None):
@@ -34,8 +34,8 @@ class Dataset:
 
     print("Preparing cache directory...")
     pwd = mkdir(Path(self.config.cache.path) / name, overwrite=True)
-    analytics = Analytics(parent_path=pwd / "analytics")
-    audio_pwd = mkdir(pwd / "audio")
+    analytics = DatasetAnalytics(parent_path=pwd / "analytics")
+    mkdir(pwd / "audio")
     map_pwd = mkdir(pwd / "maps")
     print(f"Cache directory: {pwd}")
 
@@ -63,6 +63,7 @@ class Dataset:
         ):
           if hash_id is None or tokens is None or beatmap is None or duration_ms is None or times is None:
             continue
+
           np.savez_compressed(
             type_split_pwd / f"{save_i:08d}.npz",
             audio_id=hash_id,
@@ -80,6 +81,7 @@ class Dataset:
 
     print("Computing audio statistics...")
     analytics.save()
+    print("Cache build complete.")
 
   def get_split_ratios(self, amount: int, ratios: List[float]) -> List[int]:
     total = sum(ratios)
@@ -108,6 +110,9 @@ def process_map_sample(args: tuple[Path, ExperimentConfig, Path, Tokenizer]):
       return None, None, None, None, None, None
 
     beatmap = Beatmap(file_path=str(osu_path))
+    if not is_map_valid(beatmap, config):
+      return None, None, None, None, None, None
+    
     tokens, times = tokenizer.encode(beatmap)
 
     audio_path = osu_path.parent / beatmap.general.audio_filename
@@ -138,6 +143,47 @@ def process_map_sample(args: tuple[Path, ExperimentConfig, Path, Tokenizer]):
     print(f"Error processing {osu_path}: {e}")
     return None, None, None, None, None, None
 
+
+def is_map_valid(
+  beatmap: Beatmap,
+  config: ExperimentConfig,
+) -> bool:
+  sr = beatmap.get_difficulty().star_rating
+  if sr < config.dataset.map_filters.sr_min or sr > config.dataset.map_filters.sr_max:
+    return False
+
+  bpm_list = [tp.get_bpm() for tp in beatmap.timing_points if tp.uninherited]
+  bpm_min = min(bpm_list) if bpm_list else 0
+  bpm_max = max(bpm_list) if bpm_list else 0
+
+  if bpm_list:
+    if not config.dataset.map_filters.variable_bpm and bpm_min != bpm_max:
+      return False
+  else:
+    return False
+    
+  if config.dataset.map_filters.tokenizer_limits:
+    slider_cps = [len(ho.object_params.curves) for ho in beatmap.hit_objects if isinstance(ho, Slider)]
+    if slider_cps:
+      if max(slider_cps) > config.tokenizer.SLIDER_CP_LIMIT:
+        return False
+    
+    svs = [
+      tp.get_slider_velocity_multiplier() * beatmap.difficulty.slider_multiplier
+      for tp in beatmap.timing_points if tp.uninherited
+    ]
+    if svs and max(svs) > config.tokenizer.SLIDER_VEL_LIMIT:
+      return False
+    
+    if bpm_max > config.tokenizer.BPM_MAX or bpm_min < config.tokenizer.BPM_MIN:
+      return False
+    
+    sl_lens = [ho.object_params.length for ho in beatmap.hit_objects if isinstance(ho, Slider)]
+    max_sl_len = max(sl_lens) if sl_lens else 0
+    if max_sl_len > config.tokenizer.SLIDER_LEN_MAX:
+      return False
+    
+  return True
 
 class CachedDataset(TorchDataset):
   def __init__(
@@ -174,14 +220,14 @@ class CachedDataset(TorchDataset):
     self.times = {}
 
     for map_idx, map_file in enumerate(tqdm(self.map_files, desc="Preparing dataset frames", unit="maps", total=len(self.map_files))):
-      map_npz = np.load(map_file, mmap_mode="r" if not self.use_ram else None)
+      map_npz = np.load(map_file, mmap_mode="r")
       audio_id = map_npz["audio_id"].item()
       if self.use_ram:
         self.tokens[map_idx] = map_npz["tokens"]
         self.times[map_idx] = map_npz["times"]
 
       if audio_id not in self.mels:
-        audio_npz = np.load(self.audio_dir / f"{audio_id}.npz", mmap_mode="r" if not self.use_ram else None)
+        audio_npz = np.load(self.audio_dir / f"{audio_id}.npz", mmap_mode="r")
         if self.use_ram:
           self.mels[audio_id] = audio_npz["mel"]
         else:

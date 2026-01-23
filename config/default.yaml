@@ -6,6 +6,11 @@ dataset:
   split:
     train: 0.8
     val: 0.2
+  map_filters:
+    sr_min: 0
+    sr_max: 11
+    variable_bpm: false
+    tokenizer_limits: true
 
 cache:
   path: cache
