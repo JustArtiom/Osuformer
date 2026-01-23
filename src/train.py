@@ -72,6 +72,7 @@ def train_one_epoch(model, loader, optimizer, device, epoch, sampler=None):
         ignore_index=0,
     )
 
+    progress.set_postfix(loss=f"{loss.item():.4f}")
     total_loss += loss.item()
     loss.backward()
     optimizer.step()
