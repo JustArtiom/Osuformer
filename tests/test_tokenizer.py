@@ -20,7 +20,7 @@ def test_encoding_bpm_timing_point():
   tp = TimingPoint(time=0, beat_length=500, uninherited=1)
   beatmap.timing_points.append(tp)
 
-  tokens = tokenizer.encode(beatmap)
+  tokens, _ = tokenizer.encode(beatmap)
   readable = [tokenizer.id_to_token[t] for t in tokens]
 
   assert readable == ["SR_0", "MAP_START", "TP_START", "BPM_120", "TP_END", "MAP_END", "EOS"]
@@ -30,7 +30,7 @@ def test_encoding_sv_timing_point():
   tp = TimingPoint(time=0, beat_length=-50, uninherited=0)
   beatmap.timing_points.append(tp)
 
-  tokens = tokenizer.encode(beatmap)
+  tokens, _ = tokenizer.encode(beatmap)
   readable = [tokenizer.id_to_token[t] for t in tokens]
 
   assert readable == ["SR_0", "MAP_START", "TP_START", "SV_4.0", "TP_END", "MAP_END", "EOS"]
@@ -40,7 +40,7 @@ def test_encoding_circle_hit_object():
   circle = Circle(x=256, y=192, time=1000)
   beatmap.hit_objects.append(circle)
 
-  tokens = tokenizer.encode(beatmap)
+  tokens, _ = tokenizer.encode(beatmap)
   readable = [tokenizer.id_to_token[t] for t in tokens]
 
   assert readable == [
@@ -62,7 +62,7 @@ def test_encoding_slider_hit_object():
   )
   beatmap.hit_objects.append(slider)
 
-  tokens = tokenizer.encode(beatmap)
+  tokens, _ = tokenizer.encode(beatmap)
   readable = [tokenizer.id_to_token[t] for t in tokens]
 
   assert readable == [
@@ -83,7 +83,7 @@ def test_encode_spinner_hit_object():
   spinner = Spinner(x=256, y=192, time=3810, object_params=SpinnerObjectParams(end_time=5000))
   beatmap.hit_objects.append(spinner)
 
-  tokens = tokenizer.encode(beatmap)
+  tokens, _ = tokenizer.encode(beatmap)
   readable = [tokenizer.id_to_token[t] for t in tokens]
 
   assert readable == [
@@ -107,7 +107,7 @@ def test_encode_timing_margin_errors():
   for test in tests:
     circle.time = test
 
-    tokens = tokenizer.encode(beatmap)
+    tokens, _ = tokenizer.encode(beatmap)
     readable = [tokenizer.id_to_token[t] for t in tokens]
 
     assert readable == [
@@ -127,7 +127,7 @@ def test_encode_encode_margin_errors():
     circle.x = test[0]
     circle.y = test[1]
 
-    tokens = tokenizer.encode(beatmap)
+    tokens, _ = tokenizer.encode(beatmap)
     readable = [tokenizer.id_to_token[t] for t in tokens]
 
     assert readable == [
@@ -157,7 +157,7 @@ def test_encoding_slider_length_errors():
   for test in tests:
     slider.object_params.length = test
 
-    tokens = tokenizer.encode(beatmap)
+    tokens, _ = tokenizer.encode(beatmap)
     readable = [tokenizer.id_to_token[t] for t in tokens]
 
     assert readable == [
@@ -178,7 +178,7 @@ def test_timingpoint_priority_over_hitobject():
   beatmap.hit_objects.append(Circle(time=1000))
   beatmap.timing_points.append(TimingPoint(time=1000))
 
-  tokens = tokenizer.encode(beatmap)
+  tokens, _ = tokenizer.encode(beatmap)
   readable = [tokenizer.id_to_token[t] for t in tokens]
 
   tp_idx = readable.index("TP_START")
@@ -188,7 +188,7 @@ def test_timingpoint_priority_over_hitobject():
 
 def test_empty_map_encoding():
   beatmap = Beatmap()
-  tokens = tokenizer.encode(beatmap)
+  tokens, _ = tokenizer.encode(beatmap)
   readable = [tokenizer.id_to_token[t] for t in tokens]
 
   assert readable == ["SR_0","MAP_START","MAP_END","EOS"]
@@ -198,7 +198,7 @@ def test_simultaneous_objects():
   beatmap.hit_objects.append(Circle(time=1000))
   beatmap.hit_objects.append(Circle(time=1000))
 
-  tokens = tokenizer.encode(beatmap)
+  tokens, _ = tokenizer.encode(beatmap)
   readable = [tokenizer.id_to_token[t] for t in tokens]
 
   assert readable.count("DT_1000") == 1
@@ -211,7 +211,8 @@ def test_every_object_has_wrappers():
   beatmap = Beatmap()
   beatmap.hit_objects.append(Circle(x=0,y=0,time=0))
 
-  readable = [tokenizer.id_to_token[t] for t in tokenizer.encode(beatmap)]
+  tokens, _ = tokenizer.encode(beatmap)
+  readable = [tokenizer.id_to_token[t] for t in tokens]
 
   assert readable.count("OBJ_START") == readable.count("OBJ_END")
 
@@ -226,7 +227,7 @@ def test_large_map():
   for i in range(10000):
     beatmap.hit_objects.append(Circle(x=i%512,y=i%384,time=i*10))
 
-  tokens = tokenizer.encode(beatmap)
+  tokens, _ = tokenizer.encode(beatmap)
   assert len(tokens) > 0
 
 def test_decode_encode_similarity():
@@ -277,7 +278,7 @@ def test_decode_encode_similarity():
   ]
 
   decoded_beatmap = tokenizer.decode([tokenizer.vocab[t] for t in tokens])
-  reencoded_tokens = tokenizer.encode(decoded_beatmap)
+  reencoded_tokens, _ = tokenizer.encode(decoded_beatmap)
   reencoded_readable = [tokenizer.id_to_token[t] for t in reencoded_tokens]
 
   assert tokens == reencoded_readable

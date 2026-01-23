@@ -12,6 +12,8 @@ class DatasetConfig:
   path: str = "dataset"
   split: DatasetSplitConfig = field(default_factory=DatasetSplitConfig)
   workers: int = 1
+  window_ms: int = 8000
+  overlap: float = 0.9
 
 @dataclass
 class CacheConfig:
@@ -63,12 +65,19 @@ class ModelConfig:
   decoder: DecoderConfig = field(default_factory=DecoderConfig)
 
 @dataclass
+class TrainingConfig:
+  batch_size: int = 16
+  epochs: int = 100
+  lr: float = 0.0001
+
+@dataclass
 class RootConfig:
   dataset: DatasetConfig = field(default_factory=DatasetConfig)
   cache: CacheConfig = field(default_factory=CacheConfig)
   audio: AudioConfig = field(default_factory=AudioConfig)
   tokenizer: TokenizerConfig = field(default_factory=TokenizerConfig)
   model: ModelConfig = field(default_factory=ModelConfig)
+  training: TrainingConfig = field(default_factory=TrainingConfig)
 
 @dataclass
 class ExperimentConfig(RootConfig):

@@ -1,6 +1,8 @@
 from .config import TokenizerConfig
 from .osu import MapStyle
+
 def build_dsl_tokens(config: TokenizerConfig):
+  PAD_TOKENS = ["PAD"]
   STYLE_TOKENS = [f"STYLE_{style.name}" for style in MapStyle]
   DT_TOKENS = [ "DT_10", "DT_100", "DT_1000" ]
   X_TOKENS = [ f"X_{i}" for i in range(config.X_BINS) ]
@@ -15,10 +17,11 @@ def build_dsl_tokens(config: TokenizerConfig):
   SV_TOKENS = [ f"SV_{i/10:.1f}" for i in range(config.SLIDER_VEL_LIMIT * 10) ] # SV tokens are in 0.1 increments
   SR_TOKENS = [f"SR_{i}" for i in range(0, 11)]
   BPM_TOKENS = [f"BPM_{i}" for i in range(config.BPM_MIN, config.BPM_MAX + 1, config.BPM_JUMP)]
-  STRUCTURAL_TOKENS = [ "MAP_START", "MAP_END", "EOS", "PAD" ]
+  STRUCTURAL_TOKENS = [ "MAP_START", "MAP_END", "EOS", "BOS" ]
 
   ALL_TOKENS: list[str] = (
-    STYLE_TOKENS
+    PAD_TOKENS
+    + STYLE_TOKENS
     + DT_TOKENS
     + X_TOKENS
     + Y_TOKENS
