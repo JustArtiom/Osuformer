@@ -8,7 +8,7 @@ import numpy as np
 from multiprocessing import Pool, cpu_count
 from torch.utils.data import Dataset as TorchDataset
 
-from .audio import audio_to_mel, normalize_mel, StreamingAudioStats
+from .audio import audio_to_mel, normalize_mel, compute_mel_stats
 from ..osu import Beatmap
 from .path import mkdir
 from .crypt import file_hash
@@ -51,20 +51,17 @@ class Dataset:
       osu_files = osu_files[:limit]
 
     split = self.split_dataset(osu_files)
-    audioStats = StreamingAudioStats()
-
-
     for type_split, files in split.items():
       jobs = [(p, self.config, pwd, self.tokenizer) for p in files]
       save_i = 0
       type_split_pwd = mkdir(map_pwd / type_split)
       with Pool(min(self.workers, cpu_count())) as pool:
-        for (beatmap, tokens, times, hash_id, audio_mel, duration_ms) in tqdm(
+        for (beatmap, tokens, times, hash_id, duration_ms, new_audio) in tqdm(
           pool.imap_unordered(process_map_sample, jobs),
           total=len(jobs),
           desc=f"Processing {type_split} cache"
         ):
-          if hash_id is None or audio_mel is None or tokens is None or beatmap is None or duration_ms is None or times is None:
+          if hash_id is None or tokens is None or beatmap is None or duration_ms is None or times is None:
             continue
           np.savez_compressed(
             type_split_pwd / f"{save_i:08d}.npz",
@@ -74,12 +71,7 @@ class Dataset:
           )
           analytics.collect_beatmap(beatmap)
 
-          if not os.path.exists(audio_pwd / f"{hash_id}.npz"):
-            audioStats.update(audio_mel)
-            np.savez_compressed(
-              audio_pwd / f"{hash_id}.npz",
-              mel=audio_mel.T  # Transpose to (time, n_mels)
-            )
+          if new_audio:
             analytics.collect_audio(
               duration_ms=duration_ms,
             )
@@ -87,10 +79,6 @@ class Dataset:
 
 
     print("Computing audio statistics...")
-    mean, std = audioStats.finalize()
-    print(f"Mel spectrogram mean: {mean}, std: {std}")
-    audioStats.save(pwd / "mel_stats.json")
-
     analytics.save()
 
   def get_split_ratios(self, amount: int, ratios: List[float]) -> List[int]:
@@ -126,9 +114,6 @@ def process_map_sample(args: tuple[Path, ExperimentConfig, Path, Tokenizer]):
     hash_id = file_hash(audio_path)
     cache_audio_file = Path(pwd) / "audio" / f"{hash_id}.npz"
     
-    if cache_audio_file.exists():
-      return None, None, None, None, None, None
-
     audio_mel, duration_ms = audio_to_mel(
       path=audio_path,
       sample_rate=config.audio.sample_rate,
@@ -138,11 +123,19 @@ def process_map_sample(args: tuple[Path, ExperimentConfig, Path, Tokenizer]):
       n_fft=config.audio.n_fft,
     )
 
-    return beatmap, tokens, times, hash_id, audio_mel, duration_ms
+    new_audio = False
+    if not cache_audio_file.exists():
+      new_audio = True
+      np.savez_compressed(
+        cache_audio_file,
+        mel=audio_mel.T  # Transpose to (time, n_mels)
+      )
+
+    return beatmap, tokens, times, hash_id, duration_ms, new_audio
   except Exception as e:
     print(f"Error processing {osu_path}: {e}")
     return None, None, None, None, None, None
-  
+
 
 class CachedDataset(TorchDataset):
   def __init__(
@@ -159,7 +152,6 @@ class CachedDataset(TorchDataset):
     self.audio_dir = parent_path / "audio"
     self.vocab_path = parent_path / "vocab.json"
     self.tokenizer = Tokenizer().load(str(self.vocab_path))
-    self.audio_stats = StreamingAudioStats().load(parent_path / "mel_stats.json")
     self.window_ms = window_ms
     self.hop_ms = hop_ms
     self.overlap = overlap
@@ -167,7 +159,7 @@ class CachedDataset(TorchDataset):
     self.hop_frames = int(self.segment_frames * (1 - overlap))
 
     self.frames = []  # list of (map_idx, audio_id, start)
-    self.mels = {}
+    self.mels: dict[int, np.ndarray] = {}
     self.tokens = {}
     self.times = {}
 
@@ -184,6 +176,9 @@ class CachedDataset(TorchDataset):
       for start in range(0, mel_len - self.segment_frames + 1, self.hop_frames):
         self.frames.append((map_idx, audio_id, start))
 
+    self.mean, self.std = compute_mel_stats(list(self.mels.values()))
+    
+
   def __len__(self):
     return len(self.frames)
 
@@ -196,13 +191,13 @@ class CachedDataset(TorchDataset):
     max_len: int = int(lengths.max().item())
 
     padded_tokens = torch.full(
-        (len(tokens), max_len),
-        fill_value=pad_id,
-        dtype=torch.long,
+      (len(tokens), max_len),
+      fill_value=pad_id,
+      dtype=torch.long,
     )
 
     for i, t in enumerate(tokens):
-        padded_tokens[i, : t.size(0)] = t
+      padded_tokens[i, : t.size(0)] = t
 
     token_pad_mask = padded_tokens == pad_id
 
@@ -225,8 +220,8 @@ class CachedDataset(TorchDataset):
     segment = mel[start : start + self.segment_frames]
     segment = normalize_mel(
         segment,
-        self.audio_stats.mean,
-        self.audio_stats.std
+        self.mean,
+        self.std
     )
 
     segment_start_ms = start * self.hop_ms
