@@ -303,15 +303,18 @@ class ConformerEncoder(nn.Module):
     self.norm = nn.LayerNorm(d_model)
 
   def forward(
-    self, x: torch.Tensor, src_key_padding_mask: Optional[torch.Tensor]
+      self,
+      x: torch.Tensor,
+      src_key_padding_mask: Optional[torch.Tensor],
   ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
     if self.subsampling is not None:
-      x, src_key_padding_mask = self.subsampling(x, src_key_padding_mask)
-      if src_key_padding_mask is not None:
-        all_masked = src_key_padding_mask.all(dim=1)
+      x, new_mask = self.subsampling(x, src_key_padding_mask)
+      if new_mask is not None:
+        all_masked = new_mask.all(dim=1)
         if all_masked.any():
-          src_key_padding_mask = src_key_padding_mask.clone()
-          src_key_padding_mask[all_masked, 0] = False
+          new_mask = new_mask.clone()
+          new_mask[all_masked, 0] = False
+      src_key_padding_mask = new_mask
     x = self.input_proj(x)
     if self.positional_encoding is not None:
       x = self.positional_encoding(x)
