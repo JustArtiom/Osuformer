@@ -52,21 +52,29 @@ def train_one_epoch(model, loader, optimizer, device, epoch, sampler=None):
   )
 
   for mel, tokens, token_pad_mask in progress:
-      tokens_in  = tokens[:, :-1]
-      tokens_out = tokens[:, 1:]
-      tgt_mask   = token_pad_mask[:, :-1]
+    mel = mel.to(device, non_blocking=True)
+    tokens = tokens.to(device, non_blocking=True)
+    token_pad_mask = token_pad_mask.to(device, non_blocking=True)
 
-      logits = model(
-          src=mel,
-          tgt_tokens=tokens_in,
-          tgt_key_padding_mask=tgt_mask,
-      )
+    tokens_in  = tokens[:, :-1]
+    tokens_out = tokens[:, 1:]
+    tgt_mask   = token_pad_mask[:, :-1]
 
-      total_loss += F.cross_entropy(
-          logits.reshape(-1, logits.size(-1)),
-          tokens_out.reshape(-1),
-          ignore_index=0,
-      )
+    logits = model(
+        src=mel,
+        tgt_tokens=tokens_in,
+        tgt_key_padding_mask=tgt_mask,
+    )
+
+    loss = F.cross_entropy(
+        logits.reshape(-1, logits.size(-1)),
+        tokens_out.reshape(-1),
+        ignore_index=0,
+    )
+
+    total_loss += loss.item()
+    loss.backward()
+    optimizer.step()
 
   return total_loss / len(loader)
 
@@ -91,6 +99,7 @@ def main(config: ExperimentConfig, cache_name: str, batch_size: int, epochs: int
   distributed = setup_distributed()
 
   device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+  print(f"Using device: {device}")
 
   train_dataset = CachedDataset(
     parent_path=Path(config.cache.path) / cache_name,
