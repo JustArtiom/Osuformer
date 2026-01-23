@@ -7,6 +7,8 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 import torch.nn.functional as F
+from torch.amp.grad_scaler import GradScaler
+from torch.amp.autocast_mode import autocast
 from .data import CachedDataset
 from .config import config_options, ExperimentConfig
 from .model import build_model
@@ -32,13 +34,13 @@ def create_dataloader(dataset: CachedDataset, batch_size: int, workers: int = 1)
       num_workers=workers,
       pin_memory=True,
       collate_fn=CachedDataset.collate_batch,
-      persistent_workers=True,
+      persistent_workers=(workers > 0),
     )
 
     return loader, sampler
 
 
-def train_one_epoch(model, loader, optimizer, device, epoch, sampler=None):
+def train_one_epoch(model, loader, optimizer, device, epoch, sampler=None, scaler: Optional[GradScaler] = None, amp_dtype: Optional[torch.dtype] = None):
   if sampler is not None:
     sampler.set_epoch(epoch)
 
@@ -64,27 +66,66 @@ def train_one_epoch(model, loader, optimizer, device, epoch, sampler=None):
     pad_mask   = token_pad_mask[:, :-1]
     loss_mask  = loss_mask[:, 1:]
 
-    logits = model(
+    # AMP / GradScaler setup (scaler may be None for CPU)
+    use_amp = scaler is not None and device.type == "cuda"
+    if amp_dtype is None:
+      # bfloat16 is generally preferable on A100/H100; fallback to float16 otherwise
+      amp_dtype = torch.bfloat16
+
+    optimizer.zero_grad(set_to_none=True)
+
+    if use_amp:
+      with autocast(device_type="cuda", dtype=amp_dtype):
+        logits = model(
+          src=mel,
+          tgt_tokens=tokens_in,
+          tgt_key_padding_mask=pad_mask,
+        )
+
+        loss = F.cross_entropy(
+          logits.reshape(-1, logits.size(-1)),
+          tokens_out.reshape(-1),
+          reduction="none",
+        )
+
+        loss = loss.view(tokens_out.shape)  # (B, L-1)
+        loss = loss * loss_mask.float()    # zero out non-learning tokens
+        denom = loss_mask.float().sum().clamp(min=1)
+        loss = loss.sum() / denom
+
+      progress.set_postfix(loss=f"{loss.item():.4f}")
+      total_loss += loss.item()
+
+      assert scaler is not None  # for mypy
+      scaler.scale(loss).backward()
+      scaler.unscale_(optimizer)
+      torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+      scaler.step(optimizer)
+      scaler.update()
+    else:
+      logits = model(
         src=mel,
         tgt_tokens=tokens_in,
         tgt_key_padding_mask=pad_mask,
-    )
+      )
 
-    loss = F.cross_entropy(
-      logits.reshape(-1, logits.size(-1)),
-      tokens_out.reshape(-1),
-      reduction="none",
-    )
+      loss = F.cross_entropy(
+        logits.reshape(-1, logits.size(-1)),
+        tokens_out.reshape(-1),
+        reduction="none",
+      )
 
-    loss = loss.view(tokens_out.shape)      # (B, L-1)
-    loss = loss * loss_mask                 # zero out non-learning tokens
+      loss = loss.view(tokens_out.shape)  # (B, L-1)
+      loss = loss * loss_mask.float()
+      denom = loss_mask.float().sum().clamp(min=1)
+      loss = loss.sum() / denom
 
-    loss = loss.sum() / loss_mask.sum().clamp(min=1)
+      progress.set_postfix(loss=f"{loss.item():.4f}")
+      total_loss += loss.item()
 
-    progress.set_postfix(loss=f"{loss.item():.4f}")
-    total_loss += loss.item()
-    loss.backward()
-    optimizer.step()
+      loss.backward()
+      torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+      optimizer.step()
 
   return total_loss / len(loader)
 
@@ -147,6 +188,9 @@ def main(
           device_ids=[torch.cuda.current_device()],
       )
 
+  scaler = GradScaler(device="cuda", enabled=(device.type == "cuda"))
+  amp_dtype = torch.bfloat16
+
   optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
   for epoch in range(epochs):
@@ -157,6 +201,8 @@ def main(
       device,
       epoch,
       sampler,
+      scaler=scaler,
+      amp_dtype=amp_dtype,
     )
 
     if not distributed or dist.get_rank() == 0:
