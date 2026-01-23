@@ -7,6 +7,7 @@ import torch
 class Checkpoint():
   def __init__(self, config: ExperimentConfig, vocab: dict[str, int] , name: Optional[str] = None):
     self.parent_path = Path(config.checkpoint.path)
+    self.parent_path.mkdir(parents=True, exist_ok=True)
     if name is None:
       self.name = self.get_next_name()
     else: 
