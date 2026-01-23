@@ -180,19 +180,20 @@ class CachedDataset(TorchDataset):
         self.tokens[map_idx] = map_npz["tokens"]
         self.times[map_idx] = map_npz["times"]
 
-      audio_npz = np.load(self.audio_dir / f"{audio_id}.npz", mmap_mode="r" if not self.use_ram else None)
-      mel_len = audio_npz["mel"].shape[0]
-      if self.use_ram:
-        self.mels[audio_id] = audio_npz["mel"]
-      else:
-        self.audioStats.update(audio_npz["mel"])
+      if audio_id not in self.mels:
+        audio_npz = np.load(self.audio_dir / f"{audio_id}.npz", mmap_mode="r" if not self.use_ram else None)
+        mel_len = audio_npz["mel"].shape[0]
+        if self.use_ram:
+          self.mels[audio_id] = audio_npz["mel"]
+        else:
+          self.audioStats.update(audio_npz["mel"])
 
-      for start in range(0, mel_len - self.segment_frames + 1, self.hop_frames):
-        self.frames.append((map_idx, audio_id, start))
+        for start in range(0, mel_len - self.segment_frames + 1, self.hop_frames):
+          self.frames.append((map_idx, audio_id, start))
 
-      final_start = max(0, mel_len - self.segment_frames)
-      if len(self.frames) == 0 or self.frames[-1] != (map_idx, audio_id, final_start):
-        self.frames.append((map_idx, audio_id, final_start))
+        final_start = max(0, mel_len - self.segment_frames)
+        if len(self.frames) == 0 or self.frames[-1] != (map_idx, audio_id, final_start):
+          self.frames.append((map_idx, audio_id, final_start))
 
     if self.use_ram:
       self.audioStats.mean, self.audioStats.std = compute_mel_stats(list(self.mels.values()))
