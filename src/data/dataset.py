@@ -210,7 +210,7 @@ class CachedDataset(TorchDataset):
     self.audioStats = StreamingAudioStats()
     self.token_window_builder = TokenWindowBuilder(
       tokenizer=self.tokenizer,
-      max_tokens=512, # TODO
+      max_tokens=1024, # TODO
       overlap_ratio=self.overlap,
     )
 
