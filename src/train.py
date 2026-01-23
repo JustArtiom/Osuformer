@@ -278,7 +278,11 @@ def main(
     stop_tensor = torch.tensor(0, device=device)
     if not distributed or dist.get_rank() == 0:
       val_loss = validate_one_epoch(model, epoch, val_loader, device)
-      print(f"[Epoch {epoch}] loss = {train_loss:.4f}, val_loss = {val_loss:.4f}")
+
+      if distributed:
+        val_loss_tensor = torch.tensor(val_loss, device=device)
+        dist.all_reduce(val_loss_tensor, op=dist.ReduceOp.SUM)
+        val_loss = val_loss_tensor.item() / dist.get_world_size()
 
       assert checkpoint is not None
       stop = checkpoint.step(
