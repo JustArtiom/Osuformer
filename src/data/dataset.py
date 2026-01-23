@@ -168,12 +168,18 @@ class CachedDataset(TorchDataset):
     self.hop_frames = int(self.segment_frames * (1 - overlap))
 
     self.frames = []  # list of (map_idx, audio_id, start)
+    self.mels = {}
+    self.tokens = {}
+    self.times = {}
 
     for map_idx, map_file in enumerate(tqdm(self.map_files, desc="Preparing dataset frames", unit="maps", total=len(self.map_files))):
       map_npz = np.load(map_file, mmap_mode="r")
+      self.tokens[map_idx] = map_npz["tokens"]
+      self.times[map_idx] = map_npz["times"]
       audio_id = map_npz["audio_id"].item()
 
       audio_npz = np.load(self.audio_dir / f"{audio_id}.npz", mmap_mode="r")
+      self.mels[audio_id] = audio_npz["mel"]
       mel_len = audio_npz["mel"].shape[0]
 
       for start in range(0, mel_len - self.segment_frames + 1, self.hop_frames):
@@ -207,12 +213,15 @@ class CachedDataset(TorchDataset):
   def __getitem__(self, idx):
     map_idx, audio_id, start = self.frames[idx]
 
-    map_npz = np.load(self.map_files[map_idx], mmap_mode="r")
-    tokens = map_npz["tokens"]
-    times  = map_npz["times"]
+    # map_npz = np.load(self.map_files[map_idx], mmap_mode="r")
+    # tokens = map_npz["tokens"]
+    # times  = map_npz["times"]
+    tokens = self.tokens[map_idx]
+    times  = self.times[map_idx]
 
-    audio_npz = np.load(self.audio_dir / f"{audio_id}.npz", mmap_mode="r")
-    mel = audio_npz["mel"]
+    # audio_npz = np.load(self.audio_dir / f"{audio_id}.npz", mmap_mode="r")
+    # mel = audio_npz["mel"]
+    mel = self.mels[audio_id]
 
     segment = mel[start : start + self.segment_frames]
     segment = normalize_mel(
