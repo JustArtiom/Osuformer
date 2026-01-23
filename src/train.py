@@ -257,11 +257,11 @@ def main(
   optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
   checkpoint = None
-  if not distributed or dist.get_rank() == 0:
+  if (not distributed) or dist.get_rank() == 0:
     checkpoint = Checkpoint(
-        config,
-        train_dataset.tokenizer.vocab,
-        name=checkpoint_name,
+      config,
+      train_dataset.tokenizer.vocab,
+      name=checkpoint_name,
     )
   for epoch in range(epochs):
     train_loss = train_one_epoch(
@@ -275,15 +275,13 @@ def main(
       amp_dtype=amp_dtype,
     )
 
-    stop_tensor = torch.tensor(0, device=device)
-    if not distributed or dist.get_rank() == 0:
-      val_loss = validate_one_epoch(model, epoch, val_loader, device)
-
-      if distributed:
-        val_loss_tensor = torch.tensor(val_loss, device=device)
-        dist.all_reduce(val_loss_tensor, op=dist.ReduceOp.SUM)
-        val_loss = val_loss_tensor.item() / dist.get_world_size()
-
+    val_loss = validate_one_epoch(model, epoch, val_loader, device)
+    if distributed:
+      val_loss_tensor = torch.tensor(val_loss, device=device, dtype=torch.float32)
+      dist.all_reduce(val_loss_tensor, op=dist.ReduceOp.SUM)
+      val_loss = val_loss_tensor.item() / dist.get_world_size()
+    stop_tensor = torch.tensor(0, device=device, dtype=torch.int)
+    if (not distributed) or dist.get_rank() == 0:
       assert checkpoint is not None
       stop = checkpoint.step(
         model=model,
@@ -294,16 +292,15 @@ def main(
       )
 
       print(f"[Epoch {epoch}] loss = {train_loss:.4f}, val_loss = {val_loss:.4f}")
-
       stop_tensor.fill_(1 if stop else 0)
     if distributed:
-        dist.broadcast(stop_tensor, src=0)
-
+      dist.broadcast(stop_tensor, src=0)
     if stop_tensor.item() == 1:
-        if distributed:
-            dist.barrier()
+      if distributed:
+        dist.barrier()
+      if (not distributed) or dist.get_rank() == 0:
         print("Early stopping triggered.")
-        break
+      break
 
   if distributed:
     dist.destroy_process_group()
