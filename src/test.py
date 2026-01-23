@@ -6,7 +6,7 @@ import click
 @config_options
 def main(config_path, size):
   config = load_config(config_path, size)
-  tokens = build_dsl_tokens(config.tokenizer)
+  tokens, _ = build_dsl_tokens(config.tokenizer)
   print("DSL Tokens:")
   print(tokens)
   print("size:", len(tokens))

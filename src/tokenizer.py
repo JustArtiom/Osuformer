@@ -9,7 +9,7 @@ class Tokenizer:
     if config is None:
       return
     self.config = config
-    self.token_to_id, self.id_to_token = build_vocab(config)
+    self.token_to_id, self.id_to_token, self.DSL_TOKENS = build_vocab(config)
     self.vocab = self.token_to_id
     self.x_bin_width = 512 / config.X_BINS
     self.y_bin_width = 384 / config.Y_BINS
