@@ -181,7 +181,7 @@ def validate_one_epoch(model, epoch, loader, device):
 @click.option("--batch-size", type=int, help="Batch size for training")
 @click.option("--lr", type=float, help="Learning rate for optimizer")
 @click.option("--workers", type=int, help="Number of data loading workers")
-@click.option("--use-ram/--no-use-ram", help="Whether to load the entire cache into RAM")
+@click.option("--use-ram/--no-use-ram", default=None, help="Whether to load the entire cache into RAM")
 @click.option("--epochs", type=int, help="Number of training epochs")
 @config_options
 def main(
@@ -203,7 +203,6 @@ def main(
     lr = config.training.lr
   if use_ram is None:
     use_ram = config.training.use_ram
-
 
   distributed = setup_distributed()
 
