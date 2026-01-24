@@ -294,14 +294,14 @@ class CachedDataset(TorchDataset):
       
     segment = mel[start : start + self.segment_frames]
 
-    # if segment.shape[0] < self.segment_frames:
-    #   pad_len = self.segment_frames - segment.shape[0]
-    #   segment = np.pad(
-    #     segment,
-    #     ((0, pad_len), (0, 0)),
-    #     mode="constant",
-    #     constant_values=0.0,
-    #   )
+    if segment.shape[0] < self.segment_frames:
+      pad_len = self.segment_frames - segment.shape[0]
+      segment = np.pad(
+        segment,
+        ((0, pad_len), (0, 0)),
+        mode="constant",
+        constant_values=0.0,
+      )
 
     segment = normalize_mel(
       segment,
