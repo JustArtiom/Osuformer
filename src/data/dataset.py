@@ -1,7 +1,7 @@
 import torch
 import os
 from tqdm import tqdm
-from typing import List, Literal, Union, Tuple
+from typing import Dict, List, Literal, Union, Tuple
 from pathlib import Path
 import random
 import numpy as np
@@ -217,9 +217,9 @@ class CachedDataset(TorchDataset):
     )
 
     self.frames = [] 
-    self.mels = {}
-    self.tokens = {}
-    self.times = {}
+    self.mels: Dict[str, np.ndarray] = {}
+    self.tokens: Dict[int, np.ndarray] = {}
+    self.times: Dict[int, np.ndarray] = {}
 
     for map_idx, map_file in enumerate(tqdm(self.map_files, desc=f"[{self.split}]Preparing dataset frames", unit="maps", total=len(self.map_files))):
       map_npz = np.load(map_file, mmap_mode="r")
@@ -233,7 +233,6 @@ class CachedDataset(TorchDataset):
         self.audioStats.update(audio_npz["mel"])
         if self.use_ram:
           self.mels[audio_id] = audio_npz["mel"]
-        
         mel_len = (self.mels[audio_id] if audio_id in self.mels else audio_npz["mel"]).shape[0]
         for start in range(0, mel_len - self.segment_frames + 1, self.hop_frames):
           self.frames.append((map_idx, audio_id, start))
@@ -242,8 +241,8 @@ class CachedDataset(TorchDataset):
         if len(self.frames) == 0 or self.frames[-1] != (map_idx, audio_id, final_start):
           self.frames.append((map_idx, audio_id, final_start))
 
-  def compute_audio_stats(self):
-    self.audioStats.mean, self.audioStats.std = self.audioStats.finalize()
+  def load_audio_stats(self, mean, std):
+    self.mean, self.std = mean, std
 
   def __len__(self):
     return len(self.frames)
@@ -295,19 +294,19 @@ class CachedDataset(TorchDataset):
       
     segment = mel[start : start + self.segment_frames]
 
-    if segment.shape[0] < self.segment_frames:
-      pad_len = self.segment_frames - segment.shape[0]
-      segment = np.pad(
-        segment,
-        ((0, pad_len), (0, 0)),
-        mode="constant",
-        constant_values=0.0,
-      )
+    # if segment.shape[0] < self.segment_frames:
+    #   pad_len = self.segment_frames - segment.shape[0]
+    #   segment = np.pad(
+    #     segment,
+    #     ((0, pad_len), (0, 0)),
+    #     mode="constant",
+    #     constant_values=0.0,
+    #   )
 
     segment = normalize_mel(
       segment,
-      self.audioStats.mean,
-      self.audioStats.std
+      self.mean,
+      self.std
     )
 
     segment_start_ms = start * self.hop_ms
