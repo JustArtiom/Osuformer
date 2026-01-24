@@ -6,5 +6,6 @@ old/
 *.log
 *.mp3
 *.osu
+*.pt
 job*
 config/size/custom.yaml
