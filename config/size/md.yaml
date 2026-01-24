@@ -8,7 +8,7 @@ model:
     dropout: 0.1
   decoder:
     d_model: 768
-    layers: 10
+    layers: 4
     heads: 12
     ffn_dim: 3072
     dropout: 0.1
