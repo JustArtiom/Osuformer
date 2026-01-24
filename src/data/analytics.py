@@ -15,6 +15,39 @@ class Analytics():
     if not self.parent_path.exists():
       os.makedirs(self.parent_path)
 
+  def create_metric_curves(
+    self,
+    *,
+    file_name: str,
+    title: str,
+    metrics: dict[str, list[float | int]],
+    y_label: str = "Value",
+    x_label: str = "Epoch",
+  ):
+    import matplotlib.pyplot as plt
+
+    if not metrics:
+      return
+
+    plt.figure(figsize=(8, 4))
+
+    for name, values in metrics.items():
+      if not values:
+        continue
+      arr = np.asarray(values, dtype=float)
+      if arr.size == 0 or not np.any(np.isfinite(arr)):
+        continue
+      plt.plot(arr, label=name)
+
+    plt.xlabel(x_label)
+    plt.ylabel(y_label)
+    plt.title(title)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(self.parent_path / file_name, dpi=150)
+    plt.close()
+
+
   def create_histogram(
       self, *, 
       file_name: str, 
@@ -617,3 +650,38 @@ class DatasetAnalytics(Analytics):
     # FINAL FULL JSON DUMP
     # -------------------------
     self.create_json("analytics_full.json", self.data.__dict__)
+
+
+class CheckpointAnalytics(Analytics):
+  def __init__(self, parent_path: Union[str, Path]):
+    super().__init__(parent_path)
+    self.epochs: List[dict[str, Union[float, int]]] = []
+
+  def collect_epoch_metrics(
+    self,
+    *,
+    epoch: int,
+    val_loss: float,
+    train_loss: float,
+  ):
+    self.epochs.append({
+      "epoch": epoch,
+      "val_loss": val_loss,
+      "train_loss": train_loss,
+    })
+
+  def save(self):
+    self.create_metric_curves(
+      file_name="loss_curve.png",
+      title="Training and Validation Loss Curve",
+      metrics={
+        "Train Loss": [e["train_loss"] for e in self.epochs],
+        "Validation Loss": [e["val_loss"] for e in self.epochs],
+      },
+      y_label="Loss",
+      x_label="Epoch"
+    )
+
+    self.create_json("model_analytics.json", {
+      "epochs": self.epochs
+    })
