@@ -81,6 +81,12 @@ class TrainingEarlyStopConfig:
   patience: int = 10
   delta: float = 0.0001
 
+class LRSchedulerConfig:
+  factor: float = 0.5
+  patience: int = 2
+  threshold: float = 0.0001
+  min_lr: float = 1e-6
+
 @dataclass
 class TrainingConfig:
   batch_size: int = 16
@@ -89,6 +95,7 @@ class TrainingConfig:
   use_ram: bool = True
   workers: int = 4
   early_stop: TrainingEarlyStopConfig = field(default_factory=TrainingEarlyStopConfig)
+  lr_scheduler: LRSchedulerConfig = field(default_factory=LRSchedulerConfig)
 
 @dataclass
 class RootConfig:
