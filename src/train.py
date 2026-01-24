@@ -300,6 +300,7 @@ def main(
         optimizer=optimizer,
         scaler=scaler,
         epoch=epoch,
+        train_loss=train_loss,
         val_loss=val_loss,
       )
 

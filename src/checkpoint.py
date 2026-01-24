@@ -2,6 +2,7 @@ from typing import Optional
 from pathlib import Path
 from .config import ExperimentConfig
 from .tokenizer import Tokenizer
+from .data.analytics import CheckpointAnalytics
 import torch
 
 class Checkpoint():
@@ -14,6 +15,9 @@ class Checkpoint():
       self.name = name
     self.path = self.parent_path / self.name
     self.path.mkdir(parents=True, exist_ok=True)
+    self.analytics_path = self.path / "analytics"
+    self.analytics_path.mkdir(parents=True, exist_ok=True)
+    self.analytics = CheckpointAnalytics(self.analytics_path)
     self.vocab = vocab
     self.best_val = float("inf")
     self.bad_epochs = 0
@@ -69,8 +73,15 @@ class Checkpoint():
     optimizer,
     scaler,
     epoch,
+    train_loss,
     val_loss,
   ) -> bool:
+    self.analytics.collect_epoch_metrics(
+      val_loss=val_loss,
+      train_loss=train_loss,
+      epoch=epoch,
+    )
+    self.analytics.save()
     improved = val_loss < (self.best_val - self.min_delta)
 
     if improved:
