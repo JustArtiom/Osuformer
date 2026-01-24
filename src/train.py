@@ -210,30 +210,36 @@ def main(
   device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
   print(f"Using device: {device}")
 
-  audioStats = StreamingAudioStats()
-
+  train_audio_stats = StreamingAudioStats()
   train_dataset = CachedDataset(
     parent_path=Path(config.cache.path) / cache_name,
     window_ms=config.dataset.window_ms,
     hop_ms=config.audio.hop_ms,
     overlap=config.dataset.overlap,
-    audioStats=audioStats,
+    audioStats=train_audio_stats,
     use_ram=use_ram,
     split="train"
   )
 
+  val_audio_stats   = StreamingAudioStats()
   val_dataset = CachedDataset(
     parent_path=Path(config.cache.path) / cache_name,
     window_ms=config.dataset.window_ms,
     hop_ms=config.audio.hop_ms,
     overlap=config.dataset.overlap,
-    audioStats=audioStats,
+    audioStats=val_audio_stats,
     use_ram=use_ram,
     split="val"
   )
 
-  train_dataset.compute_audio_stats()
-  val_dataset.compute_audio_stats()
+  global_audio_stats = StreamingAudioStats()
+  global_audio_stats.merge(train_audio_stats)
+  global_audio_stats.merge(val_audio_stats)
+
+  mean, std = global_audio_stats.finalize()
+  print(f"Computed audio stats: mean={mean:.4f}, std={std:.4f}")
+  train_dataset.load_audio_stats(mean, std)
+  val_dataset.load_audio_stats(mean, std)
 
   train_loader, train_sampler = create_dataloader(
     dataset=train_dataset,

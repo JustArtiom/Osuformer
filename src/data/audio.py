@@ -1,4 +1,4 @@
-from typing import Union
+from typing import List, Union
 from pathlib import Path
 import librosa
 import numpy as np
@@ -8,45 +8,31 @@ warnings.filterwarnings("ignore")
 
 class StreamingAudioStats:
   def __init__(self):
-    self.count = 0
-    self.mean = 0.0
-    self.M2 = 0.0
-    self.std = 0.0
+    self.total_sum = 0.0
+    self.total_sumsq = 0.0
+    self.total_count = 0
 
-  def update(self, x: np.ndarray):
-    flat = x.flatten()
-    for v in flat:
-      self.count += 1
-      delta = v - self.mean
-      self.mean += delta / self.count
-      delta2 = v - self.mean
-      self.M2 += delta * delta2
+  def update(self, mel: np.ndarray):
+    mel = mel.astype(np.float64, copy=False)
+    self.total_sum += mel.sum()
+    self.total_sumsq += np.square(mel).sum()
+    self.total_count += mel.size
 
   def finalize(self):
-    if self.count < 2:
-      return self.mean, 0.0
-    variance = self.M2 / self.count
-    return self.mean, np.sqrt(variance)
+    if self.total_count == 0:
+        return 0.0, 1.0
+
+    mean = self.total_sum / self.total_count
+    var = self.total_sumsq / self.total_count - mean * mean
+    std = np.sqrt(max(var, 1e-8))
+    return float(mean), float(std)
+
+  def merge(self, other: "StreamingAudioStats"):
+    self.total_sum += other.total_sum
+    self.total_sumsq += other.total_sumsq
+    self.total_count += other.total_count
   
-  def save(self, path: Union[str, Path]):
-    mean, std = self.finalize()
-    with open(path, "w") as f:
-      json.dump({
-        "count": int(self.count),
-        "mean": float(mean),
-        "M2": float(self.M2),
-        "std": float(std)
-      }, f, indent=2)
 
-  def load(self, path: Union[str, Path]):
-    with open(path, "r") as f:
-      obj = json.load(f)
-      self.count = obj["count"]
-      self.mean = obj["mean"]
-      self.M2 = obj["M2"]
-      self.std = obj["std"]
-
-    return self
 
 def ms_to_samples(sample_rate, hop_ms):
   return int(sample_rate * hop_ms / 1000)
