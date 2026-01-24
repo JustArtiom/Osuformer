@@ -6,8 +6,6 @@ model:
     ffn_dim: 4096
     conv_kernel: 31
     dropout: 0.1
-    downsample: 2
-
   decoder:
     d_model: 1024
     layers: 12
