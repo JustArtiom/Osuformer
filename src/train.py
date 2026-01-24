@@ -267,6 +267,14 @@ def main(
   amp_dtype = torch.bfloat16
 
   optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+  scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer,
+    mode="min",
+    factor=config.training.lr_scheduler.factor,
+    patience=config.training.lr_scheduler.patience,
+    threshold=config.training.lr_scheduler.threshold,
+    min_lr=config.training.lr_scheduler.min_lr,
+  )
 
   checkpoint = None
   if (not distributed) or dist.get_rank() == 0:
@@ -294,7 +302,9 @@ def main(
       val_loss_tensor = torch.tensor(val_loss, device=device, dtype=torch.float32)
       dist.all_reduce(val_loss_tensor, op=dist.ReduceOp.SUM)
       val_loss = val_loss_tensor.item() / dist.get_world_size()
+    scheduler.step(val_loss)
     stop_tensor = torch.tensor(0, device=device, dtype=torch.int)
+    
     if (not distributed) or dist.get_rank() == 0:
       assert checkpoint is not None
       stop = checkpoint.step(
@@ -306,6 +316,8 @@ def main(
         val_loss=val_loss,
       )
 
+      current_lr = optimizer.param_groups[0]["lr"]
+      print(f"[Epoch {epoch}] lr={current_lr:.2e}")
       print(f"[Epoch {epoch}] loss = {train_loss:.4f}, val_loss = {val_loss:.4f}")
       stop_tensor.fill_(1 if stop else 0)
     if distributed:
