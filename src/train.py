@@ -307,6 +307,7 @@ def main(
     
     if (not distributed) or dist.get_rank() == 0:
       assert checkpoint is not None
+      current_lr = optimizer.param_groups[0]["lr"]
       stop = checkpoint.step(
         model=model,
         optimizer=optimizer,
@@ -314,9 +315,9 @@ def main(
         epoch=epoch,
         train_loss=train_loss,
         val_loss=val_loss,
+        current_lr=current_lr
       )
 
-      current_lr = optimizer.param_groups[0]["lr"]
       print(f"[Epoch {epoch}] lr={current_lr:.2e}")
       print(f"[Epoch {epoch}] loss = {train_loss:.4f}, val_loss = {val_loss:.4f}")
       stop_tensor.fill_(1 if stop else 0)

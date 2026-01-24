@@ -90,11 +90,13 @@ class Checkpoint():
     epoch,
     train_loss,
     val_loss,
+    current_lr,
   ) -> bool:
     self.analytics.collect_epoch_metrics(
+      epoch=epoch,
       val_loss=val_loss,
       train_loss=train_loss,
-      epoch=epoch,
+      current_lr=current_lr,
     )
     self.analytics.save()
     improved = val_loss < (self.best_val - self.min_delta)

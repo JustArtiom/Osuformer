@@ -663,11 +663,13 @@ class CheckpointAnalytics(Analytics):
     epoch: int,
     val_loss: float,
     train_loss: float,
+    current_lr: float,
   ):
     self.epochs.append({
       "epoch": epoch,
       "val_loss": val_loss,
       "train_loss": train_loss,
+      "current_lr": current_lr,
     })
 
   def save(self):
