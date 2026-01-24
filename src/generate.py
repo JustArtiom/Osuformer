@@ -7,6 +7,7 @@ from .osu import MapStyle
 from .tokenizer import Tokenizer
 from .model import build_model
 from .data import audio_to_mel, normalize_mel
+from .grammar import Grammar, GrammarState
 
 @click.command()
 @click.option("--audio", type=str, required=True, help="Path to input audio file")
@@ -77,13 +78,14 @@ def main(
       memory_key_padding_mask=memory_key_padding_mask,
       start_tokens=prefix_tokens,
       eos_id=tokenizer.vocab["EOS"],
+      tokenizer=tokenizer,
       max_len=max_len,
       temperature=temperature,
     )
 
   readable_tokens = [tokenizer.id_to_token[t] for t in token_ids]
-  print("Tokens:")
-  print(readable_tokens)
+  generated_map = tokenizer.decode(token_ids)
+  print(str(generated_map))
 
 
 def _parse_bpm(bpm: str) -> float:
@@ -173,20 +175,29 @@ def _sample_decode(
   memory_key_padding_mask: torch.Tensor | None,
   start_tokens: list[int],
   eos_id: int,
+  tokenizer: Tokenizer,
   max_len: int,
   temperature: float,
 ) -> list[int]:
-  if max_len <= 0:
-    return []
-
-  if len(start_tokens) >= max_len:
-    return start_tokens[:max_len]
 
   device = memory.device
   tokens = torch.tensor(start_tokens, dtype=torch.long, device=device).unsqueeze(0)
 
+  grammar = Grammar(tokenizer=tokenizer)
+  state = grammar.initial_state()
+
+  for tid in start_tokens:
+    state = grammar.consume(state, tid)
+
   steps = max_len - tokens.size(1)
-  progress = tqdm(range(steps), desc="generate", leave=False, dynamic_ncols=True)
+
+  progress = tqdm(
+    range(steps),
+    desc="Generating",
+    total=steps,
+    dynamic_ncols=True,
+  )
+
   for _ in progress:
     logits = model.decoder(
       tokens,
@@ -195,14 +206,29 @@ def _sample_decode(
       memory_key_padding_mask=memory_key_padding_mask,
       use_causal_mask=True,
     )
+
     next_logits = logits[:, -1, :]
+
+    # --- GRAMMAR MASK ---
+    allowed_ids = grammar.allowed_next_tokens(state)
+    mask = torch.full_like(next_logits, float("-inf"))
+    mask[:, list(allowed_ids)] = 0.0
+    next_logits = next_logits + mask
+
+    # --- SAMPLE ---
     if temperature <= 0:
       next_token = next_logits.argmax(dim=-1, keepdim=True)
     else:
       probs = torch.softmax(next_logits / temperature, dim=-1)
       next_token = torch.multinomial(probs, num_samples=1)
+
+    tid = int(next_token.item())
     tokens = torch.cat([tokens, next_token], dim=1)
-    if int(next_token.item()) == eos_id:
+
+    # --- UPDATE GRAMMAR ---
+    grammar.consume(state, tid)
+
+    if tid == eos_id:
       break
 
   return tokens.squeeze(0).tolist()
