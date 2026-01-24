@@ -81,6 +81,7 @@ class TrainingEarlyStopConfig:
   patience: int = 10
   delta: float = 0.0001
 
+@dataclass
 class LRSchedulerConfig:
   factor: float = 0.5
   patience: int = 2
