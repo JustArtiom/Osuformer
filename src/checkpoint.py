@@ -6,7 +6,14 @@ from .data.analytics import CheckpointAnalytics
 import torch
 
 class Checkpoint():
-  def __init__(self, config: ExperimentConfig, vocab: dict[str, int] , name: Optional[str] = None):
+  def __init__(
+      self, 
+      config: ExperimentConfig, 
+      tokenizer: Tokenizer, 
+      std: float,
+      mean: float,
+      name: Optional[str] = None,
+      ):
     self.parent_path = Path(config.checkpoint.path)
     self.parent_path.mkdir(parents=True, exist_ok=True)
     if name is None:
@@ -18,9 +25,11 @@ class Checkpoint():
     self.analytics_path = self.path / "analytics"
     self.analytics_path.mkdir(parents=True, exist_ok=True)
     self.analytics = CheckpointAnalytics(self.analytics_path)
-    self.vocab = vocab
+    self.tokenizer = tokenizer
     self.best_val = float("inf")
     self.bad_epochs = 0
+    self.mean = mean
+    self.std = std
     self.patience = config.training.early_stop.patience
     self.min_delta = config.training.early_stop.delta
 
@@ -53,6 +62,9 @@ class Checkpoint():
         "optimizer": optimizer.state_dict(),
         "scaler": scaler.state_dict(),
         "best_val": best_val,
+        "mean": self.mean,
+        "std": self.std,
+        "vocab": self.tokenizer.vocab,
       }
     )
 
@@ -63,6 +75,9 @@ class Checkpoint():
         "epoch": epoch,
         "model": model.state_dict(),
         "val_loss": val_loss,
+        "mean": self.mean,
+        "std": self.std,
+        "vocab": self.tokenizer.vocab,
       }
     )
 
