@@ -194,3 +194,16 @@ class Grammar():
         | {self.tok[Tok.OBJ_START]}
         | {self.tok[Tok.MAP_END]}
     )
+  
+  def consume(self, state: GrammarState, token_id: int):
+    allowed = self.allowed_next_tokens(state)
+
+    if token_id not in allowed:
+        token = self.rev[token_id]
+        allowed_tokens = [self.rev[i] for i in sorted(allowed)]
+        raise AssertionError(
+            f"Token '{token}' not allowed in current state.\n"
+            f"Allowed: {allowed_tokens}"
+        )
+
+    return self.update_state(state, token_id)
