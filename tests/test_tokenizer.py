@@ -230,55 +230,55 @@ def test_large_map():
   tokens, _ = tokenizer.encode(beatmap)
   assert len(tokens) > 0
 
+test_tokens = [
+  # Pre Context Tokens
+  'SR_2',
+  'MAP_START',
+    'DT_100', 'DT_10', 
+    'TP_START', 'BPM_240', 'TP_END', 
+    'TP_START', 'SV_1.4', 'TP_END', 
+
+    'OBJ_START', 'T_SLIDER', 'X_2', 'Y_21', 'SL_140', 'SEG_PERFECT', 'CP_0', 'X_5', 'Y_21', 'CP_1', 'X_10', 'Y_19', 'OBJ_END', 
+
+    'DT_100', 'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
+    'OBJ_START', 'T_CIRCLE', 'X_12', 'Y_10', 'OBJ_END', 
+    
+    'DT_100', 'DT_10', 'DT_10', 'DT_10', 
+    'OBJ_START', 'T_SLIDER', 'X_12', 'Y_10', 'SL_70', 'SEG_LINEAR', 'CP_0', 'X_13', 'Y_16', 'OBJ_END', 
+    
+    'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
+    'OBJ_START', 'T_SLIDER', 'X_18', 'Y_20', 'SL_70', 'SEG_LINEAR', 'CP_0', 'X_19', 'Y_16', 'OBJ_END', 
+
+    'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
+    'OBJ_START', 'T_SLIDER', 'X_31', 'Y_10', 'SL_140', 'SEG_PERFECT', 'CP_0', 'X_28', 'Y_12', 'CP_1', 'X_24', 'Y_12', 'OBJ_END', 
+
+    'DT_100', 'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
+    'OBJ_START', 'T_CIRCLE', 'X_12', 'Y_1', 'OBJ_END', 
+    
+    'DT_100', 'DT_10', 'DT_10', 'DT_10', 
+    'OBJ_START', 'T_SLIDER', 'X_12', 'Y_1', 'SL_70', 'SEG_PERFECT', 'CP_0', 'X_15', 'Y_1', 'CP_1', 'X_17', 'Y_3', 'OBJ_END', 
+    
+    'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
+    'OBJ_START', 'T_SLIDER', 'X_24', 'Y_11', 'SL_70', 'SEG_LINEAR', 'CP_0', 'X_23', 'Y_5', 'OBJ_END', 
+    
+    'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
+    'OBJ_START', 'T_CIRCLE', 'X_5', 'Y_7', 'OBJ_END', 
+    
+    'DT_100', 'DT_10', 'DT_10', 
+    'OBJ_START', 'T_SLIDER', 'X_5', 'Y_7', 'SL_140', 'SEG_BEZIER', 'CP_0', 'X_10', 'Y_7', 'CP_1', 'X_8', 'Y_9', 'CP_2', 'X_14', 'Y_9', 'OBJ_END', 
+    
+    'DT_100', 'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
+    'OBJ_START', 'T_CIRCLE', 'X_23', 'Y_2', 'OBJ_END', 
+    
+    "DT_10",
+    "OBJ_START", "T_SPINNER", *["DT_10"]*9, "OBJ_END",
+  'MAP_END', 
+  'EOS'
+]
+
 def test_decode_encode_similarity():
-  tokens = [
-    # Pre Context Tokens
-    'SR_2',
-    'MAP_START',
-      'DT_100', 'DT_10', 
-      'TP_START', 'BPM_240', 'TP_END', 
-      'TP_START', 'SV_1.4', 'TP_END', 
-
-      'OBJ_START', 'T_SLIDER', 'X_2', 'Y_21', 'SL_140', 'SEG_PERFECT', 'CP_0', 'X_5', 'Y_21', 'CP_1', 'X_10', 'Y_19', 'OBJ_END', 
-
-      'DT_100', 'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
-      'OBJ_START', 'T_CIRCLE', 'X_12', 'Y_10', 'OBJ_END', 
-      
-      'DT_100', 'DT_10', 'DT_10', 'DT_10', 
-      'OBJ_START', 'T_SLIDER', 'X_12', 'Y_10', 'SL_70', 'SEG_LINEAR', 'CP_0', 'X_13', 'Y_16', 'OBJ_END', 
-      
-      'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
-      'OBJ_START', 'T_SLIDER', 'X_18', 'Y_20', 'SL_70', 'SEG_LINEAR', 'CP_0', 'X_19', 'Y_16', 'OBJ_END', 
-
-      'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
-      'OBJ_START', 'T_SLIDER', 'X_31', 'Y_10', 'SL_140', 'SEG_PERFECT', 'CP_0', 'X_28', 'Y_12', 'CP_1', 'X_24', 'Y_12', 'OBJ_END', 
-
-      'DT_100', 'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
-      'OBJ_START', 'T_CIRCLE', 'X_12', 'Y_1', 'OBJ_END', 
-      
-      'DT_100', 'DT_10', 'DT_10', 'DT_10', 
-      'OBJ_START', 'T_SLIDER', 'X_12', 'Y_1', 'SL_70', 'SEG_PERFECT', 'CP_0', 'X_15', 'Y_1', 'CP_1', 'X_17', 'Y_3', 'OBJ_END', 
-      
-      'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
-      'OBJ_START', 'T_SLIDER', 'X_24', 'Y_11', 'SL_70', 'SEG_LINEAR', 'CP_0', 'X_23', 'Y_5', 'OBJ_END', 
-      
-      'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
-      'OBJ_START', 'T_CIRCLE', 'X_5', 'Y_7', 'OBJ_END', 
-      
-      'DT_100', 'DT_10', 'DT_10', 
-      'OBJ_START', 'T_SLIDER', 'X_5', 'Y_7', 'SL_140', 'SEG_BEZIER', 'CP_0', 'X_10', 'Y_7', 'CP_1', 'X_8', 'Y_9', 'CP_2', 'X_14', 'Y_9', 'OBJ_END', 
-      
-      'DT_100', 'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
-      'OBJ_START', 'T_CIRCLE', 'X_23', 'Y_2', 'OBJ_END', 
-      
-      "DT_10",
-      "OBJ_START", "T_SPINNER", *["DT_10"]*9, "OBJ_END",
-    'MAP_END', 
-    'EOS'
-  ]
-
-  decoded_beatmap = tokenizer.decode([tokenizer.vocab[t] for t in tokens])
+  decoded_beatmap = tokenizer.decode([tokenizer.vocab[t] for t in test_tokens])
   reencoded_tokens, _ = tokenizer.encode(decoded_beatmap)
   reencoded_readable = [tokenizer.id_to_token[t] for t in reencoded_tokens]
 
-  assert tokens == reencoded_readable
+  assert test_tokens == reencoded_readable
