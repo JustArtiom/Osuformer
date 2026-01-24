@@ -271,9 +271,11 @@ def main(
   checkpoint = None
   if (not distributed) or dist.get_rank() == 0:
     checkpoint = Checkpoint(
-      config,
-      train_dataset.tokenizer.vocab,
+      config=config,
+      tokenizer=train_dataset.tokenizer,
       name=checkpoint_name,
+      mean=mean,
+      std=std
     )
   for epoch in range(epochs):
     train_loss = train_one_epoch(
