@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, cast
 
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 def _causal_mask(t: int, device: torch.device) -> torch.Tensor:
@@ -105,6 +106,81 @@ class TransformerDecoderLayer(nn.Module):
 
     return x
 
+  def forward_step(
+    self,
+    x: torch.Tensor,
+    memory: torch.Tensor,
+    *,
+    cache: Optional[dict[str, torch.Tensor | None]] = None,
+    memory_key_padding_mask: Optional[torch.Tensor] = None,
+  ) -> tuple[torch.Tensor, dict[str, torch.Tensor | None]]:
+    if x.size(1) != 1:
+      raise ValueError("forward_step expects a single-step sequence (T=1).")
+
+    q = self.norm1(x)
+    attn_out, new_cache = self._self_attn_step(q, cache)
+    x = x + self.drop(attn_out)
+
+    q = self.norm2(x)
+    kv = memory
+    attn_out, _ = self.cross_attn(
+      query=q,
+      key=kv,
+      value=kv,
+      key_padding_mask=memory_key_padding_mask,
+      need_weights=False,
+    )
+    x = x + self.drop(attn_out)
+
+    q = self.norm3(x)
+    ff_out = self.ff(q)
+    x = x + self.drop(ff_out)
+    return x, new_cache
+
+  def _self_attn_step(
+    self,
+    x: torch.Tensor,
+    cache: Optional[dict[str, torch.Tensor | None]],
+  ) -> tuple[torch.Tensor, dict[str, torch.Tensor | None]]:
+    mha = self.self_attn
+    bsz, tgt_len, _ = x.shape
+    embed_dim = mha.embed_dim
+    num_heads = mha.num_heads
+    head_dim = embed_dim // num_heads
+
+    if mha.in_proj_weight is not None:
+      qkv = F.linear(x, mha.in_proj_weight, mha.in_proj_bias)
+      q, k, v = qkv.chunk(3, dim=-1)
+    else:
+      if mha.in_proj_bias is None:
+        q_bias = k_bias = v_bias = None
+      else:
+        q_bias, k_bias, v_bias = mha.in_proj_bias.chunk(3)
+      q = F.linear(x, mha.q_proj_weight, q_bias)
+      k = F.linear(x, mha.k_proj_weight, k_bias)
+      v = F.linear(x, mha.v_proj_weight, v_bias)
+
+    q = q.view(bsz, tgt_len, num_heads, head_dim).transpose(1, 2)
+    k = k.view(bsz, tgt_len, num_heads, head_dim).transpose(1, 2)
+    v = v.view(bsz, tgt_len, num_heads, head_dim).transpose(1, 2)
+
+    if cache is None:
+      cache = {"k": None, "v": None}
+    if cache.get("k") is not None:
+      k = torch.cat([cast(torch.Tensor, cache["k"]), k], dim=2)
+    if cache.get("v") is not None:
+      v = torch.cat([cast(torch.Tensor, cache["v"]), v], dim=2)
+
+    attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(head_dim)
+    attn_weights = torch.softmax(attn_scores, dim=-1)
+    attn_weights = F.dropout(attn_weights, p=mha.dropout, training=self.training)
+    attn_out = torch.matmul(attn_weights, v)
+    attn_out = attn_out.transpose(1, 2).contiguous().view(bsz, tgt_len, embed_dim)
+    attn_out = mha.out_proj(attn_out)
+
+    cache = {"k": k, "v": v}
+    return attn_out, cache
+
 
 @dataclass
 class TransformerDecoderConfig:
@@ -185,17 +261,58 @@ class TransformerDecoder(nn.Module):
       tgt_mask = _causal_mask(x.size(1), x.device)
 
     for layer in self.layers:
-      x = layer(
-          x,
-          memory,
-          tgt_mask=tgt_mask,
-          tgt_key_padding_mask=tgt_key_padding_mask,
-          memory_key_padding_mask=memory_key_padding_mask,
+      layer_mod = cast(TransformerDecoderLayer, layer)
+      x = layer_mod(
+        x,
+        memory,
+        tgt_mask=tgt_mask,
+        tgt_key_padding_mask=tgt_key_padding_mask,
+        memory_key_padding_mask=memory_key_padding_mask,
       )
 
     x = self.norm(x)
     logits = self.lm_head(x)
     return logits
+
+  def init_kv_cache(self) -> list[dict[str, torch.Tensor | None]]:
+    return [{"k": None, "v": None} for _ in range(len(self.layers))]
+
+  @torch.no_grad()
+  def forward_step(
+    self,
+    token_ids: torch.Tensor,
+    memory: torch.Tensor,
+    *,
+    cache: list[dict[str, torch.Tensor | None]],
+    memory_key_padding_mask: Optional[torch.Tensor] = None,
+    position: int,
+  ) -> tuple[torch.Tensor, list[dict[str, torch.Tensor | None]]]:
+    if token_ids.dtype != torch.long:
+      token_ids = token_ids.long()
+    if token_ids.dim() == 1:
+      token_ids = token_ids.unsqueeze(1)
+
+    x = self.embed(token_ids) * math.sqrt(self.cfg.d_model)
+    if position < 0 or position >= self.pos.pe.size(1):
+      raise ValueError(f"Position {position} out of range for positional encoding (max={self.pos.pe.size(1)-1}).")
+    x = x + self.pos.pe[:, position : position + 1, :].to(dtype=x.dtype)
+    x = self.in_drop(x)
+
+    new_cache: list[dict[str, torch.Tensor | None]] = []
+    for layer, layer_cache in zip(self.layers, cache):
+      layer_mod = cast(TransformerDecoderLayer, layer)
+      out, updated = layer_mod.forward_step(
+        x,
+        memory,
+        cache=layer_cache,
+        memory_key_padding_mask=memory_key_padding_mask,
+      )
+      x = out
+      new_cache.append(updated)
+
+    x = self.norm(x)
+    logits = self.lm_head(x)
+    return logits, new_cache
 
   @torch.no_grad()
   def greedy_decode(
