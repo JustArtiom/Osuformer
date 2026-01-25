@@ -117,7 +117,7 @@ def main(
       predict_start_ms=predict_start_ms,
       tokenizer=tokenizer,
       global_tokens=global_tokens,
-      max_tokens=2048,
+      max_tokens=256,
     )
 
     prefix_tokens = list(global_tokens) + [tokenizer.vocab[Tok.MAP_START]] + context_tokens
@@ -139,9 +139,7 @@ def main(
     all_tokens.extend(new_tokens)
     all_times.extend(new_times)
 
-  # Pretty printing large generations can dominate runtime due to stdout IO.
-  # Uncomment when debugging.
-  # pretty_tokens_printer([tokenizer.id_to_token[t] for t in all_tokens])
+  pretty_tokens_printer([tokenizer.id_to_token[t] for t in all_tokens])
 
   print(tokenizer.decode(all_tokens))
   print("Generation complete.")
@@ -400,14 +398,15 @@ def _generate_window_tokens(
   grammar = Grammar(tokenizer=tokenizer)
   state = grammar.initial_state()
 
-  cache = model.decoder.init_kv_cache()
+  cache = model.decoder.init_kv_cache(bsz=memory.size(0), device=memory.device, dtype=memory.dtype)
   last_logits: Optional[torch.Tensor] = None
   position = 0
 
   prefix_tokens, state = _sanitize_prefix_tokens(prefix_tokens, grammar, state)
 
   with torch.no_grad():
-    for tid in prefix_tokens:
+    logits_process = tqdm(prefix_tokens, desc="Prefix", leave=False, dynamic_ncols=True)
+    for tid in logits_process:
       token_tensor = torch.tensor([tid], device=memory.device)
       logits, cache = model.decoder.forward_step(
         token_tensor,
@@ -423,7 +422,7 @@ def _generate_window_tokens(
     new_times: list[int] = []
     finished = False
 
-    token_progress = tqdm(range(max_new_tokens), desc="tokens", leave=False, dynamic_ncols=True)
+    token_progress = tqdm(range(max_new_tokens), desc="Generating", leave=False, dynamic_ncols=True)
     for _ in token_progress:
       if last_logits is None:
         break

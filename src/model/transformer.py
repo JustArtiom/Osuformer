@@ -8,6 +8,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+@dataclass
+class KVCache:
+    k: torch.Tensor        # (B, H, max_len, D)
+    v: torch.Tensor        # (B, H, max_len, D)
+    length: int            # current sequence length
 
 def _causal_mask(t: int, device: torch.device) -> torch.Tensor:
   mask = torch.triu(torch.ones((t, t), device=device, dtype=torch.bool), diagonal=1)
@@ -111,14 +116,15 @@ class TransformerDecoderLayer(nn.Module):
     x: torch.Tensor,
     memory: torch.Tensor,
     *,
-    cache: Optional[dict[str, torch.Tensor | None]] = None,
+    cache: Optional[KVCache] = None,
     memory_key_padding_mask: Optional[torch.Tensor] = None,
-  ) -> tuple[torch.Tensor, dict[str, torch.Tensor | None]]:
+    max_len: int,
+  ) -> tuple[torch.Tensor, KVCache]:
     if x.size(1) != 1:
       raise ValueError("forward_step expects a single-step sequence (T=1).")
 
     q = self.norm1(x)
-    attn_out, new_cache = self._self_attn_step(q, cache)
+    attn_out, new_cache = self._self_attn_step(q, cache, max_len=max_len)
     x = x + self.drop(attn_out)
 
     q = self.norm2(x)
@@ -140,14 +146,20 @@ class TransformerDecoderLayer(nn.Module):
   def _self_attn_step(
     self,
     x: torch.Tensor,
-    cache: Optional[dict[str, torch.Tensor | None]],
-  ) -> tuple[torch.Tensor, dict[str, torch.Tensor | None]]:
+    cache: Optional[KVCache],
+    *,
+    max_len: int,
+  ) -> tuple[torch.Tensor, KVCache]:
     mha = self.self_attn
     bsz, tgt_len, _ = x.shape
+    if tgt_len != 1:
+      raise ValueError("_self_attn_step expects tgt_len=1.")
+
     embed_dim = mha.embed_dim
     num_heads = mha.num_heads
     head_dim = embed_dim // num_heads
 
+    # Project QKV
     if mha.in_proj_weight is not None:
       qkv = F.linear(x, mha.in_proj_weight, mha.in_proj_bias)
       q, k, v = qkv.chunk(3, dim=-1)
@@ -160,25 +172,45 @@ class TransformerDecoderLayer(nn.Module):
       k = F.linear(x, mha.k_proj_weight, k_bias)
       v = F.linear(x, mha.v_proj_weight, v_bias)
 
+    # (B, 1, E) -> (B, H, 1, D)
     q = q.view(bsz, tgt_len, num_heads, head_dim).transpose(1, 2)
     k = k.view(bsz, tgt_len, num_heads, head_dim).transpose(1, 2)
     v = v.view(bsz, tgt_len, num_heads, head_dim).transpose(1, 2)
 
+    # Lazy init preallocated cache
     if cache is None:
-      cache = {"k": None, "v": None}
-    if cache.get("k") is not None:
-      k = torch.cat([cast(torch.Tensor, cache["k"]), k], dim=2)
-    if cache.get("v") is not None:
-      v = torch.cat([cast(torch.Tensor, cache["v"]), v], dim=2)
+      if max_len <= 0:
+        raise ValueError(f"max_len must be > 0, got {max_len}.")
+      cache = KVCache(
+        k=torch.empty((bsz, num_heads, max_len, head_dim), device=x.device, dtype=k.dtype),
+        v=torch.empty((bsz, num_heads, max_len, head_dim), device=x.device, dtype=v.dtype),
+        length=0,
+      )
 
-    attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(head_dim)
+    if cache.length >= cache.k.size(2):
+      raise ValueError(
+        f"KV cache overflow: length={cache.length} >= max_len={cache.k.size(2)}. "
+        "Increase max_len or reduce generation length."
+      )
+
+    # Write this step into the cache (in-place, no cat)
+    t = cache.length
+    cache.k[:, :, t : t + 1, :] = k
+    cache.v[:, :, t : t + 1, :] = v
+    cache.length += 1
+
+    # Attention over cached keys/values
+    k_full = cache.k[:, :, : cache.length, :]
+    v_full = cache.v[:, :, : cache.length, :]
+
+    attn_scores = torch.matmul(q, k_full.transpose(-2, -1)) / math.sqrt(head_dim)
     attn_weights = torch.softmax(attn_scores, dim=-1)
     attn_weights = F.dropout(attn_weights, p=mha.dropout, training=self.training)
-    attn_out = torch.matmul(attn_weights, v)
+    attn_out = torch.matmul(attn_weights, v_full)
+
     attn_out = attn_out.transpose(1, 2).contiguous().view(bsz, tgt_len, embed_dim)
     attn_out = mha.out_proj(attn_out)
 
-    cache = {"k": k, "v": v}
     return attn_out, cache
 
 
@@ -274,8 +306,36 @@ class TransformerDecoder(nn.Module):
     logits = self.lm_head(x)
     return logits
 
-  def init_kv_cache(self) -> list[dict[str, torch.Tensor | None]]:
-    return [{"k": None, "v": None} for _ in range(len(self.layers))]
+  def init_kv_cache(
+    self,
+    *,
+    bsz: int,
+    device: torch.device,
+    dtype: torch.dtype | None = None,
+    max_len: int | None = None,
+  ) -> list[KVCache]:
+    """Allocate a pre-sized KV cache for fast incremental decoding."""
+    if dtype is None:
+      dtype = next(self.parameters()).dtype
+    if max_len is None:
+      max_len = self.cfg.max_len
+
+    if bsz <= 0:
+      raise ValueError(f"bsz must be > 0, got {bsz}.")
+    if max_len <= 0:
+      raise ValueError(f"max_len must be > 0, got {max_len}.")
+
+    head_dim = self.cfg.d_model // self.cfg.n_heads
+    caches: list[KVCache] = []
+    for _ in range(len(self.layers)):
+      caches.append(
+        KVCache(
+          k=torch.empty((bsz, self.cfg.n_heads, max_len, head_dim), device=device, dtype=dtype),
+          v=torch.empty((bsz, self.cfg.n_heads, max_len, head_dim), device=device, dtype=dtype),
+          length=0,
+        )
+      )
+    return caches
 
   @torch.no_grad()
   def forward_step(
@@ -283,10 +343,10 @@ class TransformerDecoder(nn.Module):
     token_ids: torch.Tensor,
     memory: torch.Tensor,
     *,
-    cache: list[dict[str, torch.Tensor | None]],
+    cache: list[KVCache],
     memory_key_padding_mask: Optional[torch.Tensor] = None,
     position: int,
-  ) -> tuple[torch.Tensor, list[dict[str, torch.Tensor | None]]]:
+  ) -> tuple[torch.Tensor, list[KVCache]]:
     if token_ids.dtype != torch.long:
       token_ids = token_ids.long()
     if token_ids.dim() == 1:
@@ -298,7 +358,7 @@ class TransformerDecoder(nn.Module):
     x = x + self.pos.pe[:, position : position + 1, :].to(dtype=x.dtype)
     x = self.in_drop(x)
 
-    new_cache: list[dict[str, torch.Tensor | None]] = []
+    new_cache: list[KVCache] = []
     for layer, layer_cache in zip(self.layers, cache):
       layer_mod = cast(TransformerDecoderLayer, layer)
       out, updated = layer_mod.forward_step(
@@ -306,6 +366,7 @@ class TransformerDecoder(nn.Module):
         memory,
         cache=layer_cache,
         memory_key_padding_mask=memory_key_padding_mask,
+        max_len=cache[0].k.size(2) if cache else self.cfg.max_len,
       )
       x = out
       new_cache.append(updated)
