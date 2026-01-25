@@ -1,7 +1,7 @@
 import click
 import math
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 import torch
@@ -53,6 +53,8 @@ def main(
   checkpoint, state_dict, mean, std, vocab = _load_checkpoint_assets(checkpoint_path, device)
   tokenizer = _tokenizer_from_vocab(config, vocab)
 
+  dt_ms_by_id = _build_dt_ms_by_id(tokenizer)
+
   model = build_model(config, vocab_size=len(tokenizer.vocab))
   model.to(device)
   model.eval()
@@ -65,7 +67,7 @@ def main(
   all_times: list[int] = []
   current_time_ms = 0
   for tid in initial_tokens:
-    token_time, current_time_ms = _advance_time(tokenizer, tid, current_time_ms)
+    token_time, current_time_ms = _advance_time(tokenizer, tid, current_time_ms, dt_ms_by_id)
     all_tokens.append(tid)
     all_times.append(token_time)
 
@@ -126,6 +128,7 @@ def main(
       memory=memory,
       memory_key_padding_mask=memory_key_padding_mask,
       tokenizer=tokenizer,
+      dt_ms_by_id=dt_ms_by_id,
       prefix_tokens=prefix_tokens,
       current_time_ms=current_time_ms,
       window_end_ms=window_end_ms,
@@ -136,7 +139,9 @@ def main(
     all_tokens.extend(new_tokens)
     all_times.extend(new_times)
 
-  pretty_tokens_printer([tokenizer.id_to_token[t] for t in all_tokens])
+  # Pretty printing large generations can dominate runtime due to stdout IO.
+  # Uncomment when debugging.
+  # pretty_tokens_printer([tokenizer.id_to_token[t] for t in all_tokens])
 
   print(tokenizer.decode(all_tokens))
   print("Generation complete.")
@@ -337,13 +342,31 @@ def _build_context_tokens(
   return context
 
 
-def _advance_time(tokenizer: Tokenizer, token_id: int, current_time_ms: int) -> tuple[int, int]:
+def _build_dt_ms_by_id(tokenizer: Tokenizer) -> list[int]:
+  """Precompute DT token deltas per token id.
+
+  This avoids repeated string parsing/regex work in the tight generation loop.
+  """
+  dt_ms_by_id = [0 for _ in range(len(tokenizer.id_to_token))]
+  for tid, tok in enumerate(tokenizer.id_to_token):
+    if tok.startswith(Tok.DT):
+      delta = tokenizer.extract_number_from_token(tok, Tok.DT)
+      if delta is not None:
+        dt_ms_by_id[tid] = int(delta)
+  return dt_ms_by_id
+
+
+def _advance_time(
+  tokenizer: Tokenizer,
+  token_id: int,
+  current_time_ms: int,
+  dt_ms_by_id: Sequence[int],
+) -> tuple[int, int]:
   token_time = current_time_ms
-  token = tokenizer.id_to_token[token_id]
-  if token.startswith(Tok.DT):
-    delta = tokenizer.extract_number_from_token(token, Tok.DT)
-    if delta is not None:
-      current_time_ms += int(delta)
+  # Hot path: avoid string parsing on every token by using a precomputed lookup.
+  delta = int(dt_ms_by_id[token_id])
+  if delta:
+    current_time_ms += delta
   return token_time, current_time_ms
 
 
@@ -367,6 +390,7 @@ def _generate_window_tokens(
   memory: torch.Tensor,
   memory_key_padding_mask: torch.Tensor | None,
   tokenizer: Tokenizer,
+  dt_ms_by_id: Sequence[int],
   prefix_tokens: list[int],
   current_time_ms: int,
   window_end_ms: int,
@@ -409,8 +433,9 @@ def _generate_window_tokens(
       next_logits = last_logits[:, -1, :]
       allowed_ids = grammar.allowed_next_tokens(state)
       if allowed_ids:
+        allowed_list = list(allowed_ids)
         mask = torch.full_like(next_logits, float("-inf"))
-        mask[:, list(allowed_ids)] = 0.0
+        mask[:, allowed_list] = 0.0
         next_logits = next_logits + mask
 
       if temperature <= 0:
@@ -420,7 +445,7 @@ def _generate_window_tokens(
         next_token = torch.multinomial(probs, num_samples=1)
 
       tid = int(next_token.item())
-      token_time, current_time_ms = _advance_time(tokenizer, tid, current_time_ms)
+      token_time, current_time_ms = _advance_time(tokenizer, tid, current_time_ms, dt_ms_by_id)
       new_tokens.append(tid)
       new_times.append(token_time)
 
