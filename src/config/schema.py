@@ -38,7 +38,6 @@ class AudioConfig:
   win_ms: int = 25
   n_mels: int = 80
   n_fft: int = 1024
-  normalize: bool = True
 
 @dataclass
 class TokenizerConfig:

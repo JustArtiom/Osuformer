@@ -108,9 +108,12 @@ class Tokenizer:
       elif isinstance(obj, Spinner):
         tokens.append(self.vocab["OBJ_START"])
         tokens.append(self.vocab["T_SPINNER"])
-        spinning_duration = obj.object_params.end_time - obj.time + time_error
-        tokens += self.encode_delta_time(spinning_duration)
+        spinning_duration = (obj.object_params.end_time - obj.time) + time_error
+        quantized = int(round(spinning_duration / self.config.DT_BIN_MS)) * self.config.DT_BIN_MS
+        time_error = spinning_duration - quantized
+        tokens += self.encode_delta_time(quantized)
         tokens.append(self.vocab["OBJ_END"])
+        last_time = obj.object_params.end_time
     tokens.append(self.vocab["MAP_END"])
     tokens.append(self.vocab["EOS"])
     return tokens
@@ -216,7 +219,10 @@ class Tokenizer:
             building_slider_params = None
       elif token.startswith("DT_") and building_spinner_params:
         delta_ms = self.extract_number_from_token(token, "DT_")
+        if delta_ms is None:
+          continue
         building_object.object_params.end_time += delta_ms # type: ignore
+        time += delta_ms
       elif token == "OBJ_END" and building_object:
         beatmap.hit_objects.append(building_object)
         building_object = None

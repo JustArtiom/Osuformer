@@ -8,7 +8,7 @@ import numpy as np
 from multiprocessing import Pool, cpu_count
 from torch.utils.data import Dataset as TorchDataset
 
-from .audio import audio_to_mel, normalize_mel, compute_mel_stats, StreamingAudioStats
+from .audio import audio_to_mel, normalize_mel, compute_mel_stats, StreamingAudioStats, ms_to_samples
 from ..osu import Beatmap, Slider
 from .path import mkdir
 from .crypt import file_hash
@@ -194,6 +194,7 @@ class CachedDataset(TorchDataset):
     window_ms: int,
     hop_ms: int,
     overlap: float,
+    sample_rate: int | None = None,
     use_ram: bool = True,
   ):
     if not parent_path.exists():
@@ -208,6 +209,11 @@ class CachedDataset(TorchDataset):
     self.overlap = overlap
     self.segment_frames = window_ms // hop_ms
     self.hop_frames = int(self.segment_frames * (1 - overlap))
+    if sample_rate is None:
+      self.hop_ms_actual = float(hop_ms)
+    else:
+      hop_samples = ms_to_samples(sample_rate, hop_ms)
+      self.hop_ms_actual = hop_samples * 1000.0 / sample_rate
     self.use_ram = use_ram
     self.audioStats = audioStats
     self.token_window_builder = TokenWindowBuilder(
@@ -309,8 +315,8 @@ class CachedDataset(TorchDataset):
       self.std
     )
 
-    segment_start_ms = start * self.hop_ms
-    segment_end_ms  = segment_start_ms + self.window_ms
+    segment_start_ms = int(round(start * self.hop_ms_actual))
+    segment_end_ms  = int(round(segment_start_ms + (self.segment_frames * self.hop_ms_actual)))
 
     window_tokens, loss_mask = self.token_window_builder.build(
       tokens=tokens,

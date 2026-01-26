@@ -3,6 +3,7 @@ checkpoints/
 dataset/
 cache/
 old/
+scripts/frames_test
 *.log
 *.mp3
 *.osu

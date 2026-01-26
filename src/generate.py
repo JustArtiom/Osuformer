@@ -9,7 +9,7 @@ from tqdm.auto import tqdm
 
 from .config import config_options, ExperimentConfig
 from .constraints import Tok
-from .data import audio_to_mel, normalize_mel
+from .data import audio_to_mel, normalize_mel, ms_to_samples
 from .grammar import Grammar, GrammarState
 from .model import build_model
 from .osu import MapStyle
@@ -87,6 +87,8 @@ def main(
 
   segment_frames = config.dataset.window_ms // config.audio.hop_ms
   hop_frames = int(segment_frames * (1 - config.dataset.overlap))
+  hop_samples = ms_to_samples(config.audio.sample_rate, config.audio.hop_ms)
+  hop_ms_actual = hop_samples * 1000.0 / config.audio.sample_rate
 
   window_starts = _build_window_starts(mel.shape[0], segment_frames, hop_frames)
   if not window_starts:
@@ -107,9 +109,9 @@ def main(
     with torch.no_grad():
       memory, memory_key_padding_mask = model.encoder(src, None)
 
-    window_start_ms = start * config.audio.hop_ms
-    window_end_ms = window_start_ms + config.dataset.window_ms
-    predict_start_ms = window_start_ms + int(config.dataset.window_ms * config.dataset.overlap)
+    window_start_ms = int(round(start * hop_ms_actual))
+    window_end_ms = int(round(window_start_ms + (segment_frames * hop_ms_actual)))
+    predict_start_ms = window_start_ms + int(round((window_end_ms - window_start_ms) * config.dataset.overlap))
 
     context_tokens = _build_context_tokens(
       tokens=all_tokens,
