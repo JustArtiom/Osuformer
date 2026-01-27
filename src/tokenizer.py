@@ -105,15 +105,15 @@ class Tokenizer:
             tokens.append(self.vocab[cp_y_token])
         tokens.append(self.vocab["OBJ_END"])
 
-      elif isinstance(obj, Spinner):
-        tokens.append(self.vocab["OBJ_START"])
-        tokens.append(self.vocab["T_SPINNER"])
-        spinning_duration = (obj.object_params.end_time - obj.time) + time_error
-        quantized = int(round(spinning_duration / self.config.DT_BIN_MS)) * self.config.DT_BIN_MS
-        time_error = spinning_duration - quantized
-        tokens += self.encode_delta_time(quantized)
-        tokens.append(self.vocab["OBJ_END"])
-        last_time = obj.object_params.end_time
+      # elif isinstance(obj, Spinner):
+      #   tokens.append(self.vocab["OBJ_START"])
+      #   tokens.append(self.vocab["T_SPINNER"])
+      #   spinning_duration = (obj.object_params.end_time - obj.time) + time_error
+      #   quantized = int(round(spinning_duration / self.config.DT_BIN_MS)) * self.config.DT_BIN_MS
+      #   time_error = spinning_duration - quantized
+      #   tokens += self.encode_delta_time(quantized)
+      #   tokens.append(self.vocab["OBJ_END"])
+      #   last_time = obj.object_params.end_time
     tokens.append(self.vocab["MAP_END"])
     tokens.append(self.vocab["EOS"])
     return tokens
