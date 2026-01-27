@@ -7,10 +7,11 @@ from .config import config_options, ExperimentConfig
 @click.argument("name", type=str)
 @click.option("--limit", type=int, default=-1)
 @click.option("--workers", type=int, default=None)
+@click.option("--overwrite/--no-overwrite", default=True)
 @config_options
-def main(config: ExperimentConfig, name: str, limit: int, workers: int):
+def main(config: ExperimentConfig, name: str, limit: int, workers: int, overwrite: bool):
   dataset = Dataset(config, workers=workers)
-  dataset.build_cache(name=name, limit=limit)
+  dataset.build_cache(name=name, limit=limit, overwrite=overwrite)
 
 
 if __name__ == "__main__":
