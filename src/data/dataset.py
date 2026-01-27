@@ -163,14 +163,19 @@ def is_map_valid(
     return False
     
   if config.dataset.map_filters.tokenizer_limits:
-    slider_cps = [len(ho.object_params.curves) for ho in beatmap.hit_objects if isinstance(ho, Slider)]
+    slider_cps = [
+      len(curve.curve_points)
+      for ho in beatmap.hit_objects
+      if isinstance(ho, Slider)
+      for curve in ho.object_params.curves
+    ]
     if slider_cps:
       if max(slider_cps) > config.tokenizer.SLIDER_CP_LIMIT:
         return False
     
     svs = [
       tp.get_slider_velocity_multiplier() * beatmap.difficulty.slider_multiplier
-      for tp in beatmap.timing_points if tp.uninherited
+      for tp in beatmap.timing_points if not tp.uninherited
     ]
     if svs and max(svs) > config.tokenizer.SLIDER_VEL_LIMIT:
       return False
