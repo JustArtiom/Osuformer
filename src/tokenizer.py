@@ -14,6 +14,15 @@ class Tokenizer:
     self.y_bin_width = 384 / config.Y_BINS
     self.with_styles = with_styles
 
+    dt_bins: list[tuple[int, int]] = []
+    for tok, tok_id in self.vocab.items():
+        if tok.startswith("DT_"):
+            size = self.extract_number_from_token(tok, "DT_")
+            if size is not None and size > 0:
+                dt_bins.append((int(size), tok_id))
+    dt_bins.sort(reverse=True, key=lambda x: x[0])
+    self.dt_bins = dt_bins
+
   def encode(self, beatmap):
     tokens: List[int] = []
     times: List[float] = []
@@ -105,15 +114,15 @@ class Tokenizer:
             tokens.append(self.vocab[cp_y_token])
         tokens.append(self.vocab["OBJ_END"])
 
-      # elif isinstance(obj, Spinner):
-      #   tokens.append(self.vocab["OBJ_START"])
-      #   tokens.append(self.vocab["T_SPINNER"])
-      #   spinning_duration = (obj.object_params.end_time - obj.time) + time_error
-      #   quantized = int(round(spinning_duration / self.config.DT_BIN_MS)) * self.config.DT_BIN_MS
-      #   time_error = spinning_duration - quantized
-      #   tokens += self.encode_delta_time(quantized)
-      #   tokens.append(self.vocab["OBJ_END"])
-      #   last_time = obj.object_params.end_time
+      elif isinstance(obj, Spinner):
+        tokens.append(self.vocab["OBJ_START"])
+        tokens.append(self.vocab["T_SPINNER"])
+        spinning_duration = (obj.object_params.end_time - obj.time) + time_error
+        quantized = int(round(spinning_duration / self.config.DT_BIN_MS)) * self.config.DT_BIN_MS
+        time_error = spinning_duration - quantized
+        tokens += self.encode_delta_time(quantized)
+        tokens.append(self.vocab["OBJ_END"])
+        last_time = obj.object_params.end_time
     tokens.append(self.vocab["MAP_END"])
     tokens.append(self.vocab["EOS"])
     return tokens
@@ -255,19 +264,14 @@ class Tokenizer:
 
   def encode_delta_time(self, delta_ms: float) -> list[int]:
     delta = int(round(delta_ms / self.config.DT_BIN_MS)) * self.config.DT_BIN_MS
-    tokens = []
+    tokens: list[int] = []
 
-    while delta >= 1000:
-      tokens.append(self.vocab["DT_1000"])
-      delta -= 1000
-
-    while delta >= 100:
-      tokens.append(self.vocab["DT_100"])
-      delta -= 100
-
-    while delta >= 10:
-      tokens.append(self.vocab["DT_10"])
-      delta -= 10
+    for size, tok_id in self.dt_bins:
+        if delta <= 0:
+            break
+        count, delta = divmod(delta, size)
+        if count:
+            tokens.extend([tok_id] * count)
 
     return tokens
   

@@ -42,6 +42,7 @@ class AudioConfig:
 @dataclass
 class TokenizerConfig:
   DT_BIN_MS: int = 10
+  DT_MAX_MS: int = 32000
   X_BINS: int = 32
   Y_BINS: int = 24
   SLIDER_CP_LIMIT: int = 9

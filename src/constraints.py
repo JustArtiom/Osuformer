@@ -53,7 +53,7 @@ def build_dsl_tokens(config: TokenizerConfig):
   dsl_tokens = DSLTokens(
     PAD_TOKENS = ["PAD"],
     STYLE_TOKENS = [tok(Tok.STYLE, style.name) for style in MapStyle],
-    DT_TOKENS = [tok(Tok.DT, i) for i in [10, 100, 1000]],
+    DT_TOKENS = [tok(Tok.DT, i) for i in [i for i in range(config.DT_BIN_MS, config.DT_MAX_MS + config.DT_BIN_MS, config.DT_BIN_MS)]],
     X_TOKENS = [tok(Tok.X, i) for i in range(config.X_BINS)],
     Y_TOKENS = [tok(Tok.Y, i) for i in range(config.Y_BINS)],
     OBJ_TOKENS = [tok(Tok.OBJ_START), tok(Tok.OBJ_END)],

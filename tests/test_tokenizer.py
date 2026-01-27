@@ -15,6 +15,34 @@ from src.tokenizer import Tokenizer
 
 tokenizer = Tokenizer(config=TokenizerConfig(), with_styles=False)
 
+def dt_tokens(delta_ms: float):
+  return [tokenizer.id_to_token[t] for t in tokenizer.encode_delta_time(delta_ms)]
+
+def collapse_dt_tokens(tokens: list[str]) -> list[str]:
+  merged: list[str] = []
+  acc = 0.0
+
+  def flush():
+    nonlocal acc
+    if acc:
+      merged.extend(dt_tokens(acc))
+      acc = 0.0
+
+  for tok in tokens:
+    if tok.startswith("DT_"):
+      value = tokenizer.extract_number_from_token(tok, "DT_")
+      if value is None:
+        flush()
+        merged.append(tok)
+      else:
+        acc += value
+    else:
+      flush()
+      merged.append(tok)
+
+  flush()
+  return merged
+
 def test_encoding_bpm_timing_point():
   beatmap = Beatmap()
   tp = TimingPoint(time=0, beat_length=500, uninherited=1)
@@ -44,7 +72,7 @@ def test_encoding_circle_hit_object():
   readable = [tokenizer.id_to_token[t] for t in tokens]
 
   assert readable == [
-    "SR_0", "MAP_START", "DT_1000",
+    "SR_0", "MAP_START", *dt_tokens(1000),
     "OBJ_START", "T_CIRCLE", "X_16", "Y_12", "OBJ_END",
     "MAP_END", "EOS"
   ]
@@ -67,7 +95,7 @@ def test_encoding_slider_hit_object():
 
   assert readable == [
     "SR_0", "MAP_START", 
-    "DT_1000", "DT_1000",
+    *dt_tokens(2000),
     "OBJ_START", "T_SLIDER", 
     "X_16", "Y_12",
     "SL_240",
@@ -88,11 +116,9 @@ def test_encode_spinner_hit_object():
 
   assert readable == [
     "SR_0", "MAP_START", 
-    *["DT_1000"] * 3,
-    *["DT_100"] * 8,
-    "DT_10",
+    *dt_tokens(3810),
     "OBJ_START", "T_SPINNER", 
-    "DT_1000", "DT_100", *["DT_10"]*9,
+    *dt_tokens(1190),
     "OBJ_END",
     "MAP_END", "EOS"
   ]
@@ -112,7 +138,7 @@ def test_encode_timing_margin_errors():
 
     assert readable == [
       "SR_0", "MAP_START", 
-      "DT_1000", "DT_100", "DT_100", "DT_10",
+      *dt_tokens(test),
       "OBJ_START", "T_CIRCLE", "X_16", "Y_12", "OBJ_END",
       "MAP_END", "EOS"
     ]
@@ -162,7 +188,7 @@ def test_encoding_slider_length_errors():
 
     assert readable == [
       "SR_0", "MAP_START", 
-      "DT_1000", "DT_1000",
+      *dt_tokens(2000),
       "OBJ_START", "T_SLIDER", 
       "X_16", "Y_12",
       "SL_240",
@@ -281,4 +307,4 @@ def test_decode_encode_similarity():
   reencoded_tokens, _ = tokenizer.encode(decoded_beatmap)
   reencoded_readable = [tokenizer.id_to_token[t] for t in reencoded_tokens]
 
-  assert test_tokens == reencoded_readable
+  assert collapse_dt_tokens(test_tokens) == reencoded_readable

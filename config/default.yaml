@@ -27,6 +27,7 @@ audio:
 
 tokenizer:
   DT_BIN_MS: 10
+  DT_MAX_MS: 8000
   X_BINS: 32
   Y_BINS: 24
   SLIDER_CP_LIMIT: 9
