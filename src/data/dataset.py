@@ -28,15 +28,15 @@ class Dataset:
       desc="Scanning osu files"
     ))
 
-  def build_cache(self, name: str, limit: int = -1):
+  def build_cache(self, name: str, limit: int = -1, overwrite: bool = True):
     if not name:
       raise ValueError("Cache name must be provided")
 
     print("Preparing cache directory...")
-    pwd = mkdir(Path(self.config.cache.path) / name, overwrite=True)
+    pwd = mkdir(Path(self.config.cache.path) / name, overwrite=overwrite)
     analytics = DatasetAnalytics(parent_path=pwd / "analytics")
     mkdir(pwd / "audio")
-    map_pwd = mkdir(pwd / "maps")
+    map_pwd = mkdir(pwd / "maps", overwrite=True)
     print(f"Cache directory: {pwd}")
 
     print("Saving tokenizer vocabulary...")
