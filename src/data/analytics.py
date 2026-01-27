@@ -334,6 +334,8 @@ class DatasetAnalyticsData:
   obj_per_sec: List[float] = field(default_factory=list)
   circle_ratio: List[float] = field(default_factory=list)
   slider_ratio: List[float] = field(default_factory=list)
+  spinner_ratio: List[float] = field(default_factory=list)
+  spinner_time_distribution: List[float] = field(default_factory=list)
   avg_sv_multiplier: List[float] = field(default_factory=list)
   min_sv_multiplier: List[float] = field(default_factory=list)
   max_sv_multiplier: List[float] = field(default_factory=list)
@@ -381,6 +383,10 @@ class DatasetAnalytics(Analytics):
     if total_object > 0 and bm_diff.slider_count > 0:
         slider_ratio = bm_diff.slider_count / total_object
 
+    spinner_ratio = None
+    if total_object > 0 and bm_diff.spinner_count > 0:
+        spinner_ratio = bm_diff.spinner_count / total_object
+
     svms: List[float] = []
     for tp in beatmap.timing_points:
         if tp.uninherited == 0 and tp.beat_length < 0:
@@ -397,6 +403,9 @@ class DatasetAnalytics(Analytics):
         if isinstance(ho, Slider):
             for curve in ho.object_params.curves:
                 cps.append(len(curve.curve_points))
+
+        if isinstance(ho, Spinner):
+            self.data.spinner_time_distribution.append(ho.object_params.end_time - ho.time)
 
     avg_cp = min_cp = max_cp = None
     if cps:
@@ -422,6 +431,7 @@ class DatasetAnalytics(Analytics):
 
     self.data.circle_ratio.append(circle_ratio if circle_ratio is not None else float("nan"))
     self.data.slider_ratio.append(slider_ratio if slider_ratio is not None else float("nan"))
+    self.data.spinner_ratio.append(spinner_ratio if spinner_ratio is not None else float("nan"))
 
     self.data.avg_sv_multiplier.append(avg_sv if avg_sv is not None else float("nan"))
     self.data.min_sv_multiplier.append(min_sv if min_sv is not None else float("nan"))
@@ -544,6 +554,7 @@ class DatasetAnalytics(Analytics):
       data={
           "Circles": float(np.nanmean(self.data.circle_ratio)),
           "Sliders": float(np.nanmean(self.data.slider_ratio)),
+          "Spinners": float(np.nanmean(self.data.spinner_ratio)),
       }
     )
     # -------------------------
@@ -561,6 +572,16 @@ class DatasetAnalytics(Analytics):
       title="Max Slider Velocity Multiplier",
       x_label="SV Multiplier",
       data=self.data.max_sv_multiplier,
+      bins=40
+    )
+    # -------------------------
+    # SPINNER TIME DISTRIBUTION
+    # -------------------------
+    self.create_numeric_histogram(
+      file_name="spinner_time_distribution.png",
+      title="Spinner Time Distribution",
+      x_label="Time (ms)",
+      data=self.data.spinner_time_distribution,
       bins=40
     )
     # -------------------------

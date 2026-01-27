@@ -346,6 +346,13 @@ class TokenWindowBuilder():
     self.MAP_START = tokenizer.token_to_id["MAP_START"]
     self.MAP_END   = tokenizer.token_to_id["MAP_END"]
     self.EOS       = tokenizer.token_to_id["EOS"]
+    self._sr_style_ids = np.array(
+      [
+        idx for tok, idx in tokenizer.token_to_id.items()
+        if tok.startswith("SR_") or tok.startswith("STYLE_")
+      ],
+      dtype=np.int64,
+    )
 
   def build(
     self,
@@ -421,4 +428,6 @@ class TokenWindowBuilder():
       & (tokens != self.MAP_END)
       & (tokens != self.EOS)
     )
+    if self._sr_style_ids.size:
+      mask &= ~np.isin(tokens, self._sr_style_ids)
     return tokens[mask]
