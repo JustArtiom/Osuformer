@@ -53,7 +53,7 @@ def build_dsl_tokens(config: TokenizerConfig):
   dsl_tokens = DSLTokens(
     PAD_TOKENS = ["PAD"],
     STYLE_TOKENS = [tok(Tok.STYLE, style.name) for style in MapStyle],
-    DT_TOKENS = [tok(Tok.DT, i) for i in [i for i in range(config.DT_BIN_MS, config.DT_MAX_MS + config.DT_BIN_MS, config.DT_BIN_MS)]],
+    DT_TOKENS = [tok(Tok.DT, i) for i in range(1, int(config.DT_MAX_MS / config.DT_BIN_MS) + 1)],
     X_TOKENS = [tok(Tok.X, i) for i in range(config.X_BINS)],
     Y_TOKENS = [tok(Tok.Y, i) for i in range(config.Y_BINS)],
     OBJ_TOKENS = [tok(Tok.OBJ_START), tok(Tok.OBJ_END)],
@@ -62,7 +62,7 @@ def build_dsl_tokens(config: TokenizerConfig):
     SL_TOKENS = [tok(Tok.SL, i) for i in range(0, config.SLIDER_LEN_MAX, config.SLIDER_LEN_BINS)],
     CP_TOKENS = [tok(Tok.CP, i) for i in range(config.SLIDER_CP_LIMIT)],
     TP_TOKENS = [tok(Tok.TP_START), tok(Tok.TP_END)],
-    SV_TOKENS = [tok(Tok.SV, i/10) for i in range(config.SLIDER_VEL_LIMIT * 10)], # SV tokens are in 0.1 increments,
+    SV_TOKENS = [tok(Tok.SV, i/10) for i in range(1, config.SLIDER_VEL_LIMIT * 10 + 1)], # SV tokens are in 0.1 increments,
     SR_TOKENS = [tok(Tok.SR, i) for i in range(0, 11)],
     BPM_TOKENS = [tok(Tok.BPM, i) for i in range(config.BPM_MIN, config.BPM_MAX + 1, config.BPM_JUMP)],
     STRUCTURAL_TOKENS = [tok(Tok.MAP_START), tok(Tok.MAP_END), tok(Tok.EOS), tok(Tok.BOS)]

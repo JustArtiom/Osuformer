@@ -153,7 +153,7 @@ class Grammar():
         return {
           self.tok[Tok.T_CIRCLE],
           self.tok[Tok.T_SLIDER],
-          self.tok[Tok.T_SPINNER],
+          # self.tok[Tok.T_SPINNER],
         }
 
       if state.expect_x:

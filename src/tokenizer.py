@@ -18,6 +18,8 @@ class Tokenizer:
     for tok, tok_id in self.vocab.items():
         if tok.startswith("DT_"):
             size = self.extract_number_from_token(tok, "DT_")
+            assert size is not None
+            size *= self.config.DT_BIN_MS
             if size is not None and size > 0:
                 dt_bins.append((int(size), tok_id))
     dt_bins.sort(reverse=True, key=lambda x: x[0])
@@ -36,7 +38,7 @@ class Tokenizer:
         if token.startswith("DT_"):
             delta_ms = self.extract_number_from_token(token, "DT_")
             if delta_ms is not None:
-                current_time_ms += delta_ms
+                current_time_ms += delta_ms * self.config.DT_BIN_MS
 
     return tokens, times
 
@@ -155,7 +157,7 @@ class Tokenizer:
       elif token.startswith("DT_") and not building_object:
         delta_ms = self.extract_number_from_token(token, "DT_")
         if delta_ms is not None:
-          time += delta_ms
+          time += delta_ms * self.config.DT_BIN_MS
       elif token == "TP_START":
         building_timing_point = TimingPoint(time=time)
       elif token.startswith("SV_"):
@@ -230,6 +232,7 @@ class Tokenizer:
         delta_ms = self.extract_number_from_token(token, "DT_")
         if delta_ms is None:
           continue
+        delta_ms *= self.config.DT_BIN_MS
         building_object.object_params.end_time += delta_ms # type: ignore
         time += delta_ms
       elif token == "OBJ_END" and building_object:
@@ -239,6 +242,8 @@ class Tokenizer:
         building_slider_segment = None
         building_slider_control_point = None
         building_spinner_params = None
+
+    beatmap._recalculate_slider_durations()  
     return beatmap
 
   def extract_number_from_token(self, token: str, prefix: str) -> float | None:
