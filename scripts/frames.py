@@ -22,7 +22,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 HIT_ASSET_NAMES = ("hit.ogg", "hit.mp3", "hit.wav")
-HIT_GAIN = 0.6
+HIT_GAIN = 5
 
 
 @click.command()
@@ -71,7 +71,7 @@ def main(path: str, config: ExperimentConfig):
 
   builder = TokenWindowBuilder(
     tokenizer=tokenizer,
-    max_tokens=1024,
+    max_tokens=99999999,
     overlap_ratio=config.dataset.overlap,
   )
 
@@ -171,7 +171,7 @@ def main(path: str, config: ExperimentConfig):
         f.write(str(tp) + "\n")
       f.write("\n")
 
-      f.write("Decoded hit objects (window-relative time):\n")
+      f.write("Decoded hit objects (token time):\n")
       for ho in decoded.hit_objects:
         f.write(str(ho) + "\n")
       f.write("\n")
@@ -190,7 +190,7 @@ def main(path: str, config: ExperimentConfig):
       for kind, t in raw_hit_events:
         f.write(f"{kind}@{int(t)}ms\n")
       f.write("\n")
-      f.write("Decoded hit events (window-aligned):\n")
+      f.write("Decoded hit events (absolute):\n")
       for kind, t in decoded_hit_events:
         f.write(f"{kind}@{int(t)}ms\n")
       f.write("\n")
@@ -344,30 +344,29 @@ def _collect_decoded_hit_events(
   window_start_ms: int,
   window_end_ms: int,
 ) -> list[Tuple[str, float]]:
-  """Collect events from decoded objects and align them to the window start."""
-  window_len = max(window_end_ms - window_start_ms, 0)
+  """Collect events from decoded objects using absolute times."""
   events: list[Tuple[str, float]] = []
   for obj in objects:
     if isinstance(obj, Circle):
       t = float(obj.time)
-      if 0 <= t < window_len:
-        events.append(("circle", window_start_ms + t))
+      if window_start_ms <= t < window_end_ms:
+        events.append(("circle", t))
       continue
     if isinstance(obj, Slider):
       start_time = float(obj.time)
       end_time = float(obj.time + obj.object_params.duration)
-      if 0 <= start_time < window_len:
-        events.append(("slider_start", window_start_ms + start_time))
-      if 0 <= end_time < window_len:
-        events.append(("slider_end", window_start_ms + end_time))
+      if window_start_ms <= start_time < window_end_ms:
+        events.append(("slider_start", start_time))
+      if window_start_ms <= end_time < window_end_ms:
+        events.append(("slider_end", end_time))
       continue
     if isinstance(obj, Spinner):
       start_time = float(obj.time)
       end_time = float(obj.object_params.end_time)
-      if 0 <= start_time < window_len:
-        events.append(("spinner_start", window_start_ms + start_time))
-      if 0 <= end_time < window_len:
-        events.append(("spinner_end", window_start_ms + end_time))
+      if window_start_ms <= start_time < window_end_ms:
+        events.append(("spinner_start", start_time))
+      if window_start_ms <= end_time < window_end_ms:
+        events.append(("spinner_end", end_time))
   events.sort(key=lambda x: x[1])
   return events
 

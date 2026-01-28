@@ -183,6 +183,11 @@ def is_map_valid(
     if bpm_max > config.tokenizer.BPM_MAX or bpm_min < config.tokenizer.BPM_MIN:
       return False
     
+    slides = [ho.object_params.slides for ho in beatmap.hit_objects if isinstance(ho, Slider)]
+    max_slides = max(slides) if slides else 0
+    if max_slides > config.tokenizer.SLIDES_MAX:
+      return False
+
     sl_lens = [ho.object_params.length for ho in beatmap.hit_objects if isinstance(ho, Slider)]
     max_sl_len = max(sl_lens) if sl_lens else 0
     if max_sl_len > config.tokenizer.SLIDER_LEN_MAX:
