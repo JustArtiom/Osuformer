@@ -16,6 +16,7 @@ from tqdm.auto import tqdm
 from .checkpoint import Checkpoint
 
 DT_LOSS_WEIGHT = 3.0
+SL_LOSS_WEIGHT = 2.0
 
 def build_token_weights(tokenizer, device: torch.device) -> torch.Tensor:
   vocab_size = len(tokenizer.vocab)
@@ -23,6 +24,8 @@ def build_token_weights(tokenizer, device: torch.device) -> torch.Tensor:
   for tok, idx in tokenizer.token_to_id.items():
     if tok.startswith("DT_"):
       weights[idx] = DT_LOSS_WEIGHT
+    elif tok.startswith("SL_"):
+      weights[idx] = SL_LOSS_WEIGHT
   return weights
 
 def setup_distributed():
