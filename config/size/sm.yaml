@@ -1,14 +1,14 @@
 model:
   encoder:
     d_model: 512
-    layers: 8
-    heads: 8
+    layers: 6
+    heads: 6
     ffn_dim: 2048
     conv_kernel: 15
     dropout: 0.1
   decoder:
     d_model: 512
     layers: 6
-    heads: 8
+    heads: 6
     ffn_dim: 2048
     dropout: 0.1

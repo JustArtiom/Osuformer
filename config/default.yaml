@@ -1,7 +1,7 @@
 dataset:
   path: dataset
   workers: 16
-  window_ms: 8000
+  window_ms: 10000
   overlap: 0.9
   split:
     train: 0.8
@@ -19,15 +19,15 @@ checkpoint:
   path: checkpoints
 
 audio:
-  sample_rate: 22050
+  sample_rate: 16000
   hop_ms: 10
   win_ms: 25
-  n_mels: 80
+  n_mels: 388
   n_fft: 1024
 
 tokenizer:
   DT_BIN_MS: 10
-  DT_MAX_MS: 8000
+  DT_MAX_MS: 10000
   X_BINS: 32
   Y_BINS: 24
   SLIDER_CP_LIMIT: 9

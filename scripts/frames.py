@@ -54,7 +54,7 @@ def main(path: str, config: ExperimentConfig):
   )
   mel = mel.T  # (time, n_mels)
 
-  audio, sr = librosa.load(str(audio_path), sr=config.audio.sample_rate, mono=True)
+  audio, sr = librosa.load(audio_path, sr=config.audio.sample_rate, mono=True)
   hit_sound, hit_note = _load_hit_sound(Path(__file__).resolve().parent / "assets", int(sr))
 
   segment_frames = config.dataset.window_ms // config.audio.hop_ms
@@ -106,24 +106,39 @@ def main(path: str, config: ExperimentConfig):
     )
 
     decoded = tokenizer.decode(window_tokens.tolist())
-
     raw_timing_points = _filter_timing_points(beatmap.timing_points, window_start_ms, window_end_ms)
     raw_hit_objects = _filter_hit_objects(beatmap.hit_objects, window_start_ms, window_end_ms)
-    hit_events = _collect_hit_events(raw_hit_objects, window_start_ms, window_end_ms)
+    raw_hit_events = _collect_hit_events(raw_hit_objects, window_start_ms, window_end_ms)
+    decoded_hit_events = _collect_decoded_hit_events(
+      decoded.hit_objects,
+      window_start_ms=window_start_ms,
+      window_end_ms=window_end_ms,
+    )
 
     _save_spectrogram(
-      frame_dir / "spectrogram.png",
+      frame_dir / "spectrogram_raw.png",
       segment,
-      hit_events=hit_events,
+      hit_events=raw_hit_events,
+      window_start_ms=window_start_ms,
+      window_end_ms=window_end_ms,
+    )
+    _save_spectrogram(
+      frame_dir / "spectrogram_decoded.png",
+      segment,
+      hit_events=decoded_hit_events,
       window_start_ms=window_start_ms,
       window_end_ms=window_end_ms,
     )
 
     mixed_ext = None
     mixed_log = None
+    decoded_mixed_ext = None
+    decoded_mixed_log = None
     if hit_sound is not None:
-      mixed_audio = _mix_hits(audio_segment, hit_sound, hit_events, window_start_ms, int(sr))
-      mixed_ext, mixed_log = _write_audio_segment(frame_dir, mixed_audio, int(sr), name="audio-mixed")
+      mixed_audio = _mix_hits(audio_segment, hit_sound, raw_hit_events, window_start_ms, int(sr))
+      mixed_ext, mixed_log = _write_audio_segment(frame_dir, mixed_audio, int(sr), name="audio-mixed-raw")
+      decoded_mixed_audio = _mix_hits(audio_segment, hit_sound, decoded_hit_events, window_start_ms, int(sr))
+      decoded_mixed_ext, decoded_mixed_log = _write_audio_segment(frame_dir, decoded_mixed_audio, int(sr), name="audio-mixed-decoded")
 
     log_path = frame_dir / "frame.log"
     with open(log_path, "w", encoding="utf-8") as f:
@@ -137,7 +152,7 @@ def main(path: str, config: ExperimentConfig):
       if hit_note:
         f.write(f"Hit sound: {hit_note}\n")
       if mixed_ext:
-        f.write(f"Audio mixed: audio-mixed.{mixed_ext}\n")
+        f.write(f"Audio mixed raw: audio-mixed-raw.{mixed_ext}\n")
         if mixed_log:
           f.write(f"Audio mixed note: {mixed_log}\n")
       f.write("\n")
@@ -156,7 +171,7 @@ def main(path: str, config: ExperimentConfig):
         f.write(str(tp) + "\n")
       f.write("\n")
 
-      f.write("Decoded hit objects:\n")
+      f.write("Decoded hit objects (window-relative time):\n")
       for ho in decoded.hit_objects:
         f.write(str(ho) + "\n")
       f.write("\n")
@@ -171,10 +186,18 @@ def main(path: str, config: ExperimentConfig):
         f.write(str(ho) + "\n")
       f.write("\n")
 
-      f.write("Hit events in window:\n")
-      for kind, t in hit_events:
+      f.write("Raw hit events in window:\n")
+      for kind, t in raw_hit_events:
         f.write(f"{kind}@{int(t)}ms\n")
       f.write("\n")
+      f.write("Decoded hit events (window-aligned):\n")
+      for kind, t in decoded_hit_events:
+        f.write(f"{kind}@{int(t)}ms\n")
+      f.write("\n")
+      if decoded_mixed_ext:
+        f.write(f"Audio mixed decoded: audio-mixed-decoded.{decoded_mixed_ext}\n")
+        if decoded_mixed_log:
+          f.write(f"Audio mixed decoded note: {decoded_mixed_log}\n")
 
 
 
@@ -311,6 +334,40 @@ def _collect_hit_events(
         events.append(("spinner_start", start_time))
       if start_ms <= end_time < end_ms:
         events.append(("spinner_end", end_time))
+  events.sort(key=lambda x: x[1])
+  return events
+
+
+def _collect_decoded_hit_events(
+  objects: list[Circle | Slider | Spinner],
+  *,
+  window_start_ms: int,
+  window_end_ms: int,
+) -> list[Tuple[str, float]]:
+  """Collect events from decoded objects and align them to the window start."""
+  window_len = max(window_end_ms - window_start_ms, 0)
+  events: list[Tuple[str, float]] = []
+  for obj in objects:
+    if isinstance(obj, Circle):
+      t = float(obj.time)
+      if 0 <= t < window_len:
+        events.append(("circle", window_start_ms + t))
+      continue
+    if isinstance(obj, Slider):
+      start_time = float(obj.time)
+      end_time = float(obj.time + obj.object_params.duration)
+      if 0 <= start_time < window_len:
+        events.append(("slider_start", window_start_ms + start_time))
+      if 0 <= end_time < window_len:
+        events.append(("slider_end", window_start_ms + end_time))
+      continue
+    if isinstance(obj, Spinner):
+      start_time = float(obj.time)
+      end_time = float(obj.object_params.end_time)
+      if 0 <= start_time < window_len:
+        events.append(("spinner_start", window_start_ms + start_time))
+      if 0 <= end_time < window_len:
+        events.append(("spinner_end", window_start_ms + end_time))
   events.sort(key=lambda x: x[1])
   return events
 
