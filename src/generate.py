@@ -119,7 +119,7 @@ def main(
       predict_start_ms=predict_start_ms,
       tokenizer=tokenizer,
       global_tokens=global_tokens,
-      max_tokens=256,
+      max_tokens=1024,
     )
 
     prefix_tokens = list(global_tokens) + [tokenizer.vocab[Tok.MAP_START]] + context_tokens
