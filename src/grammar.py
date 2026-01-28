@@ -21,6 +21,7 @@ class GrammarState:
     # slider-specific state
     slider_has_base_xy: bool = False
     slider_has_length: bool = False
+    slider_has_slides: bool = False
     slider_has_segment: bool = False
     slider_expect_cp_xy: Optional[str] = None  # None | "X" | "Y"
 
@@ -38,6 +39,7 @@ class Grammar():
       "SV":       self._by_prefix("SV_"),
       "CP":       self._by_prefix("CP_"),
       "SL":       self._by_prefix("SL_"),
+      "SLIDES":   self._by_prefix("SLIDES_"),
       "SEG":      self._by_prefix("SEG_"),
     }
 
@@ -77,6 +79,7 @@ class Grammar():
       state.object_type = None
       state.slider_has_base_xy = False
       state.slider_has_length = False
+      state.slider_has_slides = False
       state.slider_has_segment = False
       state.slider_expect_cp_xy = None
 
@@ -87,6 +90,7 @@ class Grammar():
       state.expect_y = False
       state.slider_has_base_xy = False
       state.slider_has_length = False
+      state.slider_has_slides = False
       state.slider_has_segment = False
       state.slider_expect_cp_xy = None
 
@@ -98,6 +102,7 @@ class Grammar():
         state.expect_y = False
         state.slider_has_base_xy = False
         state.slider_has_length = False
+        state.slider_has_slides = False
         state.slider_has_segment = False
         state.slider_expect_cp_xy = None
 
@@ -130,6 +135,8 @@ class Grammar():
 
     elif tok.startswith("SL_"):
       state.slider_has_length = True
+    elif tok.startswith("SLIDES_"):
+      state.slider_has_slides = True
 
     elif tok.startswith("SEG_"):
       state.slider_has_segment = True
@@ -153,7 +160,7 @@ class Grammar():
         return {
           self.tok[Tok.T_CIRCLE],
           self.tok[Tok.T_SLIDER],
-          # self.tok[Tok.T_SPINNER],
+          self.tok[Tok.T_SPINNER],
         }
 
       if state.expect_x:
@@ -171,6 +178,8 @@ class Grammar():
       if state.object_type == Tok.T_SLIDER:
         if not state.slider_has_length:
           return self.groups["SL"]
+        if not state.slider_has_slides:
+          return self.groups["SLIDES"]
 
         if not state.slider_has_segment:
           return self.groups["SEG"]

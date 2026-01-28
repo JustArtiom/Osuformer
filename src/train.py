@@ -15,6 +15,16 @@ from .model import build_model
 from tqdm.auto import tqdm
 from .checkpoint import Checkpoint
 
+DT_LOSS_WEIGHT = 3.0
+
+def build_token_weights(tokenizer, device: torch.device) -> torch.Tensor:
+  vocab_size = len(tokenizer.vocab)
+  weights = torch.ones(vocab_size, device=device, dtype=torch.float32)
+  for tok, idx in tokenizer.token_to_id.items():
+    if tok.startswith("DT_"):
+      weights[idx] = DT_LOSS_WEIGHT
+  return weights
+
 def setup_distributed():
   if "RANK" in os.environ:
     dist.init_process_group(backend="nccl")
@@ -41,7 +51,7 @@ def create_dataloader(dataset: CachedDataset, batch_size: int, workers: int = 1,
     return loader, sampler
 
 
-def train_one_epoch(model, loader, optimizer, device, epoch, sampler=None, scaler: Optional[GradScaler] = None, amp_dtype: Optional[torch.dtype] = None):
+def train_one_epoch(model, loader, optimizer, device, epoch, sampler=None, scaler: Optional[GradScaler] = None, amp_dtype: Optional[torch.dtype] = None, token_weights: Optional[torch.Tensor] = None):
   if sampler is not None:
     sampler.set_epoch(epoch)
 
@@ -88,6 +98,8 @@ def train_one_epoch(model, loader, optimizer, device, epoch, sampler=None, scale
         )
 
         loss = loss.view(tokens_out.shape)  # (B, L-1)
+        if token_weights is not None:
+          loss = loss * token_weights[tokens_out]
         loss = loss * loss_mask.float()    # zero out non-learning tokens
         denom = loss_mask.float().sum().clamp(min=1)
         loss = loss.sum() / denom
@@ -115,6 +127,8 @@ def train_one_epoch(model, loader, optimizer, device, epoch, sampler=None, scale
       )
 
       loss = loss.view(tokens_out.shape)  # (B, L-1)
+      if token_weights is not None:
+        loss = loss * token_weights[tokens_out]
       loss = loss * loss_mask.float()
       denom = loss_mask.float().sum().clamp(min=1)
       loss = loss.sum() / denom
@@ -130,7 +144,7 @@ def train_one_epoch(model, loader, optimizer, device, epoch, sampler=None, scale
 
 
 @torch.no_grad()
-def validate_one_epoch(model, epoch, loader, device):
+def validate_one_epoch(model, epoch, loader, device, token_weights: Optional[torch.Tensor] = None):
   model.eval()
   total_loss = 0.0
   total_tokens = 0
@@ -167,6 +181,8 @@ def validate_one_epoch(model, epoch, loader, device):
     )
 
     loss = loss.view(tokens_out.shape)
+    if token_weights is not None:
+      loss = loss * token_weights[tokens_out]
     loss = loss * loss_mask
     progress.set_postfix(loss=f"{(loss.sum() / max(loss_mask.sum(), 1)).item():.4f}")
 
@@ -243,6 +259,8 @@ def main(
   train_dataset.load_audio_stats(mean, std)
   val_dataset.load_audio_stats(mean, std)
 
+  token_weights = build_token_weights(train_dataset.tokenizer, device)
+
   train_loader, train_sampler = create_dataloader(
     dataset=train_dataset,
     batch_size=batch_size,
@@ -297,9 +315,10 @@ def main(
       train_sampler,
       scaler=scaler,
       amp_dtype=amp_dtype,
+      token_weights=token_weights,
     )
 
-    val_loss = validate_one_epoch(model, epoch, val_loader, device)
+    val_loss = validate_one_epoch(model, epoch, val_loader, device, token_weights=token_weights)
     if distributed:
       val_loss_tensor = torch.tensor(val_loss, device=device, dtype=torch.float32)
       dist.all_reduce(val_loss_tensor, op=dist.ReduceOp.SUM)

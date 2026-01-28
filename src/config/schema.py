@@ -46,6 +46,7 @@ class TokenizerConfig:
   X_BINS: int = 32
   Y_BINS: int = 24
   SLIDER_CP_LIMIT: int = 9
+  SLIDES_MAX: int = 10
   SLIDER_VEL_LIMIT: int = 5
   BPM_MIN: int = 30
   BPM_MAX: int = 300

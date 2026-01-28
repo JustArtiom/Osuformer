@@ -13,6 +13,7 @@ class Tok:
   SV      = "SV_"
   CP      = "CP_"
   SL      = "SL_"
+  SLIDES  = "SLIDES_"
   SEG     = "SEG_"
 
   MAP_START = "MAP_START"
@@ -42,6 +43,7 @@ class DSLTokens:
   TYPE_TOKENS: list[str]
   SEG_TYPE_TOKENS: list[str]
   SL_TOKENS: list[str]
+  SLIDES_TOKENS: list[str]
   CP_TOKENS: list[str]
   TP_TOKENS: list[str]
   SV_TOKENS: list[str]
@@ -60,6 +62,7 @@ def build_dsl_tokens(config: TokenizerConfig):
     TYPE_TOKENS = [tok(Tok.T_CIRCLE), tok(Tok.T_SLIDER), tok(Tok.T_SPINNER)],
     SEG_TYPE_TOKENS = [tok(Tok.SEG, seg_type) for seg_type in ["LINEAR", "BEZIER", "CAT", "PERFECT"]],
     SL_TOKENS = [tok(Tok.SL, i) for i in range(0, config.SLIDER_LEN_MAX, config.SLIDER_LEN_BINS)],
+    SLIDES_TOKENS = [tok(Tok.SLIDES, i) for i in range(1, config.SLIDES_MAX + 1)],
     CP_TOKENS = [tok(Tok.CP, i) for i in range(config.SLIDER_CP_LIMIT)],
     TP_TOKENS = [tok(Tok.TP_START), tok(Tok.TP_END)],
     SV_TOKENS = [tok(Tok.SV, i/10) for i in range(1, config.SLIDER_VEL_LIMIT * 10 + 1)], # SV tokens are in 0.1 increments,
@@ -78,6 +81,7 @@ def build_dsl_tokens(config: TokenizerConfig):
     + dsl_tokens.TYPE_TOKENS
     + dsl_tokens.SEG_TYPE_TOKENS
     + dsl_tokens.SL_TOKENS
+    + dsl_tokens.SLIDES_TOKENS
     + dsl_tokens.CP_TOKENS
     + dsl_tokens.TP_TOKENS
     + dsl_tokens.SV_TOKENS

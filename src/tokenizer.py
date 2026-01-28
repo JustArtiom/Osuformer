@@ -103,6 +103,8 @@ class Tokenizer:
         tokens.append(self.vocab[y_token])
         len_token = self.find_closest_token_from_vocab(obj.object_params.length, "SL_")
         tokens.append(self.vocab[len_token])
+        slides_token = self.find_closest_token_from_vocab(obj.object_params.slides, "SLIDES_")
+        tokens.append(self.vocab[slides_token])
         for curve in obj.object_params.curves:
           tokens.append(self.vocab[f"SEG_{curve.curve_type.name}"])
           for idx, (cp_x, cp_y) in enumerate(curve.curve_points):
@@ -203,6 +205,10 @@ class Tokenizer:
         sl = self.extract_number_from_token(token, "SL_")
         if sl is not None:
           building_slider_params.length = sl
+      elif token.startswith("SLIDES_") and building_slider_params:
+        slides = self.extract_number_from_token(token, "SLIDES_")
+        if slides is not None:
+          building_slider_params.slides = int(slides)
       elif token.startswith("SEG_") and building_slider_params:
         curve_type_str = token[len("SEG_"):]
         curve_type = CurveType[curve_type_str]
