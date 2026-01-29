@@ -51,7 +51,7 @@ def test_encoding_bpm_timing_point():
   tokens, _ = tokenizer.encode(beatmap)
   readable = [tokenizer.id_to_token[t] for t in tokens]
 
-  assert readable == ["SR_0", "MAP_START", "TP_START", "BPM_120", "TP_END", "MAP_END", "EOS"]
+  assert readable == ["SR_0", "MAP_START", "BPM_120", "MAP_END", "EOS"]
 
 def test_encoding_sv_timing_point():
   beatmap = Beatmap(difficulty=Difficulty(slider_multiplier=2.0))
@@ -61,7 +61,7 @@ def test_encoding_sv_timing_point():
   tokens, _ = tokenizer.encode(beatmap)
   readable = [tokenizer.id_to_token[t] for t in tokens]
 
-  assert readable == ["SR_0", "MAP_START", "TP_START", "SV_4.0", "TP_END", "MAP_END", "EOS"]
+  assert readable == ["SR_0", "MAP_START", "MAP_END", "EOS"]
 
 def test_encoding_circle_hit_object():
   beatmap = Beatmap()
@@ -97,7 +97,7 @@ def test_encoding_slider_hit_object():
     "SR_0", "MAP_START", 
     *dt_tokens(2000),
     "OBJ_START", "T_SLIDER", 
-    "X_16", "Y_12",
+    "X_16", "Y_12", "SV_1.4",
     "SL_240",
     "SLIDES_1",
     "SEG_BEZIER", 
@@ -191,7 +191,7 @@ def test_encoding_slider_length_errors():
       "SR_0", "MAP_START", 
       *dt_tokens(2000),
       "OBJ_START", "T_SLIDER", 
-      "X_16", "Y_12",
+      "X_16", "Y_12", "SV_1.4",
       "SL_240",
       "SLIDES_1",
       "SEG_BEZIER", 
@@ -209,10 +209,10 @@ def test_timingpoint_priority_over_hitobject():
   tokens, _ = tokenizer.encode(beatmap)
   readable = [tokenizer.id_to_token[t] for t in tokens]
 
-  tp_idx = readable.index("TP_START")
+  bpm_idx = next(i for i, tok in enumerate(readable) if tok.startswith("BPM_"))
   obj_idx = readable.index("OBJ_START")
 
-  assert tp_idx < obj_idx
+  assert bpm_idx < obj_idx
 
 def test_empty_map_encoding():
   beatmap = Beatmap()
@@ -263,37 +263,36 @@ test_tokens = [
   'SR_2',
   'MAP_START',
     'DT_100', 'DT_10', 
-    'TP_START', 'BPM_240', 'TP_END', 
-    'TP_START', 'SV_1.4', 'TP_END', 
+    'BPM_240', 
 
-    'OBJ_START', 'T_SLIDER', 'X_2', 'Y_21', 'SL_140', 'SLIDES_1', 'SEG_PERFECT', 'CP_0', 'X_5', 'Y_21', 'CP_1', 'X_10', 'Y_19', 'OBJ_END', 
+    'OBJ_START', 'T_SLIDER', 'X_2', 'Y_21', 'SV_1.4', 'SL_140', 'SLIDES_1', 'SEG_PERFECT', 'CP_0', 'X_5', 'Y_21', 'CP_1', 'X_10', 'Y_19', 'OBJ_END', 
 
     'DT_100', 'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
     'OBJ_START', 'T_CIRCLE', 'X_12', 'Y_10', 'OBJ_END', 
     
     'DT_100', 'DT_10', 'DT_10', 'DT_10', 
-    'OBJ_START', 'T_SLIDER', 'X_12', 'Y_10', 'SL_70', 'SLIDES_1', 'SEG_LINEAR', 'CP_0', 'X_13', 'Y_16', 'OBJ_END', 
+    'OBJ_START', 'T_SLIDER', 'X_12', 'Y_10', 'SV_1.4', 'SL_70', 'SLIDES_1', 'SEG_LINEAR', 'CP_0', 'X_13', 'Y_16', 'OBJ_END', 
     
     'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
-    'OBJ_START', 'T_SLIDER', 'X_18', 'Y_20', 'SL_70', 'SLIDES_1', 'SEG_LINEAR', 'CP_0', 'X_19', 'Y_16', 'OBJ_END', 
+    'OBJ_START', 'T_SLIDER', 'X_18', 'Y_20', 'SV_1.4', 'SL_70', 'SLIDES_1', 'SEG_LINEAR', 'CP_0', 'X_19', 'Y_16', 'OBJ_END', 
 
     'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
-    'OBJ_START', 'T_SLIDER', 'X_31', 'Y_10', 'SL_140', 'SLIDES_1', 'SEG_PERFECT', 'CP_0', 'X_28', 'Y_12', 'CP_1', 'X_24', 'Y_12', 'OBJ_END', 
+    'OBJ_START', 'T_SLIDER', 'X_31', 'Y_10', 'SV_1.4', 'SL_140', 'SLIDES_1', 'SEG_PERFECT', 'CP_0', 'X_28', 'Y_12', 'CP_1', 'X_24', 'Y_12', 'OBJ_END', 
 
     'DT_100', 'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
     'OBJ_START', 'T_CIRCLE', 'X_12', 'Y_1', 'OBJ_END', 
     
     'DT_100', 'DT_10', 'DT_10', 'DT_10', 
-    'OBJ_START', 'T_SLIDER', 'X_12', 'Y_1', 'SL_70', 'SLIDES_1', 'SEG_PERFECT', 'CP_0', 'X_15', 'Y_1', 'CP_1', 'X_17', 'Y_3', 'OBJ_END', 
+    'OBJ_START', 'T_SLIDER', 'X_12', 'Y_1', 'SV_1.4', 'SL_70', 'SLIDES_1', 'SEG_PERFECT', 'CP_0', 'X_15', 'Y_1', 'CP_1', 'X_17', 'Y_3', 'OBJ_END', 
     
     'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
-    'OBJ_START', 'T_SLIDER', 'X_24', 'Y_11', 'SL_70', 'SLIDES_1', 'SEG_LINEAR', 'CP_0', 'X_23', 'Y_5', 'OBJ_END', 
+    'OBJ_START', 'T_SLIDER', 'X_24', 'Y_11', 'SV_1.4', 'SL_70', 'SLIDES_1', 'SEG_LINEAR', 'CP_0', 'X_23', 'Y_5', 'OBJ_END', 
     
     'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
     'OBJ_START', 'T_CIRCLE', 'X_5', 'Y_7', 'OBJ_END', 
     
     'DT_100', 'DT_10', 'DT_10', 
-    'OBJ_START', 'T_SLIDER', 'X_5', 'Y_7', 'SL_140', 'SLIDES_1', 'SEG_BEZIER', 'CP_0', 'X_10', 'Y_7', 'CP_1', 'X_8', 'Y_9', 'CP_2', 'X_14', 'Y_9', 'OBJ_END', 
+    'OBJ_START', 'T_SLIDER', 'X_5', 'Y_7', 'SV_1.4', 'SL_140', 'SLIDES_1', 'SEG_BEZIER', 'CP_0', 'X_10', 'Y_7', 'CP_1', 'X_8', 'Y_9', 'CP_2', 'X_14', 'Y_9', 'OBJ_END', 
     
     'DT_100', 'DT_100', 'DT_100', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 'DT_10', 
     'OBJ_START', 'T_CIRCLE', 'X_23', 'Y_2', 'OBJ_END', 
