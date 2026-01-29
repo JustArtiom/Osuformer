@@ -45,7 +45,7 @@ class Tokenizer:
   def encode_tokens(self, beatmap: Beatmap):
     tokens: list[int] = []
     beatmap_objects = sorted(
-      beatmap.timing_points + beatmap.hit_objects,
+      [tp for tp in beatmap.timing_points if tp.uninherited == 1] + beatmap.hit_objects,
       key=lambda obj: (obj.time, 0 if isinstance(obj, TimingPoint) else 1)
     )
 
@@ -75,15 +75,7 @@ class Tokenizer:
       if isinstance(obj, TimingPoint) and obj.uninherited == 1:
         bpm = obj.get_bpm()
         bpm_token = self.find_closest_token_from_vocab(bpm, "BPM_")
-        tokens.append(self.vocab["TP_START"])
         tokens.append(self.vocab[bpm_token])
-        tokens.append(self.vocab["TP_END"])
-      elif isinstance(obj, TimingPoint) and obj.uninherited == 0:
-        svm = obj.get_slider_velocity_multiplier()
-        sv_token = self.find_closest_token_from_vocab(svm * beatmap.difficulty.slider_multiplier, "SV_")
-        tokens.append(self.vocab["TP_START"])
-        tokens.append(self.vocab[sv_token])
-        tokens.append(self.vocab["TP_END"])
 
       elif isinstance(obj, Circle):
         tokens.append(self.vocab["OBJ_START"])
@@ -101,6 +93,9 @@ class Tokenizer:
         y_token = self.find_closest_token_from_vocab(obj.y / self.y_bin_width, "Y_")
         tokens.append(self.vocab[x_token])
         tokens.append(self.vocab[y_token])
+        sv_multiplier = beatmap.get_slider_velocity_multiplier_at(obj.time) * beatmap.difficulty.slider_multiplier
+        sv_token = self.find_closest_token_from_vocab(sv_multiplier, "SV_")
+        tokens.append(self.vocab[sv_token])
         len_token = self.find_closest_token_from_vocab(obj.object_params.length, "SL_")
         tokens.append(self.vocab[len_token])
         slides_token = self.find_closest_token_from_vocab(obj.object_params.slides, "SLIDES_")
@@ -145,7 +140,7 @@ class Tokenizer:
     building_slider_segment = None
     building_slider_control_point = None
     building_spinner_params = None
-    building_timing_point = None
+    building_slider_sv = None
 
     for i, token in enumerate(readable_tokens):
       if token == "MAP_START":
@@ -160,32 +155,22 @@ class Tokenizer:
         delta_ms = self.extract_number_from_token(token, "DT_")
         if delta_ms is not None:
           time += delta_ms * self.config.DT_BIN_MS
-      elif token == "TP_START":
-        building_timing_point = TimingPoint(time=time)
-      elif token.startswith("SV_"):
-        if building_timing_point:
-          sv_multiplier = self.extract_number_from_token(token, "SV_")
-          if sv_multiplier is None:
-            continue
-          building_timing_point.beat_length = -100.0 / (sv_multiplier / beatmap.difficulty.slider_multiplier)
-          building_timing_point.uninherited = 0
       elif token.startswith("BPM_"):
-        if building_timing_point:
+        if not building_object:
           bpm = self.extract_number_from_token(token, "BPM_")
           if bpm is None:
             continue
-          building_timing_point.beat_length = 60000.0 / bpm
-          building_timing_point.uninherited = 1
-      elif token == "TP_END":
-        if building_timing_point:
-          beatmap.timing_points.append(building_timing_point)
-          building_timing_point = None
+          timing_point = TimingPoint(time=time)
+          timing_point.beat_length = 60000.0 / bpm
+          timing_point.uninherited = 1
+          beatmap.timing_points.append(timing_point)
       elif token == "OBJ_START":
         continue
       elif token == "T_CIRCLE":
         building_object = Circle(time=time)
       elif token == "T_SLIDER":
         building_object = Slider(time=time)
+        building_slider_sv = None
       elif token == "T_SPINNER":
         building_object = Spinner(time=time)
         building_spinner_params = building_object.object_params
@@ -201,6 +186,10 @@ class Tokenizer:
           building_object.y = y
         if isinstance(building_object, Slider):
           building_slider_params = building_object.object_params
+      elif token.startswith("SV_") and building_slider_params:
+        sv_multiplier = self.extract_number_from_token(token, "SV_")
+        if sv_multiplier is not None:
+          building_slider_sv = sv_multiplier
       elif token.startswith("SL_") and building_slider_params:
         sl = self.extract_number_from_token(token, "SL_")
         if sl is not None:
@@ -242,12 +231,19 @@ class Tokenizer:
         building_object.object_params.end_time += delta_ms # type: ignore
         time += delta_ms
       elif token == "OBJ_END" and building_object:
+        if isinstance(building_object, Slider):
+          sv_multiplier = building_slider_sv if building_slider_sv is not None else 1.0
+          timing_point = TimingPoint(time=building_object.time)
+          timing_point.beat_length = -100.0 / (sv_multiplier / beatmap.difficulty.slider_multiplier)
+          timing_point.uninherited = 0
+          beatmap.timing_points.append(timing_point)
         beatmap.hit_objects.append(building_object)
         building_object = None
         building_slider_params = None
         building_slider_segment = None
         building_slider_control_point = None
         building_spinner_params = None
+        building_slider_sv = None
 
     beatmap._recalculate_slider_durations()  
     return beatmap

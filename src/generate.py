@@ -164,17 +164,6 @@ def pretty_tokens_printer(tokens: list[str]) -> None:
       flush_dt(dt_buffer)
       print(f"\n{tok}\n")
 
-    # Timing points
-    elif tok == "TP_START":
-      flush_dt(dt_buffer)
-      block = [tok]
-      i += 1
-      while i < len(tokens) and tokens[i] != "TP_END":
-        block.append(tokens[i])
-        i += 1
-      block.append("TP_END")
-      print(" ".join(block))
-
     # Objects
     elif tok == "OBJ_START":
       flush_dt(dt_buffer)
@@ -277,9 +266,7 @@ def _build_initial_tokens(tokenizer: Tokenizer, *, global_tokens: list[int], bpm
   offset_tokens = tokenizer.encode_delta_time(offset)
   for tok in offset_tokens:
     tokens.append(tok)
-  tokens.append(tokenizer.vocab[Tok.TP_START])
   tokens.append(tokenizer.vocab[bpm_token])
-  tokens.append(tokenizer.vocab[Tok.TP_END])
   return tokens
 
 

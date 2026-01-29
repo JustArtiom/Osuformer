@@ -20,9 +20,6 @@ class Tok:
   MAP_END   = "MAP_END"
   EOS       = "EOS"
   BOS       = "BOS"
-  
-  TP_START  = "TP_START"
-  TP_END    = "TP_END"
 
   OBJ_START = "OBJ_START"
   OBJ_END   = "OBJ_END"
@@ -45,7 +42,6 @@ class DSLTokens:
   SL_TOKENS: list[str]
   SLIDES_TOKENS: list[str]
   CP_TOKENS: list[str]
-  TP_TOKENS: list[str]
   SV_TOKENS: list[str]
   SR_TOKENS: list[str]
   BPM_TOKENS: list[str]
@@ -64,7 +60,6 @@ def build_dsl_tokens(config: TokenizerConfig):
     SL_TOKENS = [tok(Tok.SL, i) for i in range(0, config.SLIDER_LEN_MAX, config.SLIDER_LEN_BINS)],
     SLIDES_TOKENS = [tok(Tok.SLIDES, i) for i in range(1, config.SLIDES_MAX + 1)],
     CP_TOKENS = [tok(Tok.CP, i) for i in range(config.SLIDER_CP_LIMIT)],
-    TP_TOKENS = [tok(Tok.TP_START), tok(Tok.TP_END)],
     SV_TOKENS = [tok(Tok.SV, i/10) for i in range(1, config.SLIDER_VEL_LIMIT * 10 + 1)], # SV tokens are in 0.1 increments,
     SR_TOKENS = [tok(Tok.SR, i) for i in range(0, 11)],
     BPM_TOKENS = [tok(Tok.BPM, i) for i in range(config.BPM_MIN, config.BPM_MAX + 1, config.BPM_JUMP)],
@@ -83,7 +78,6 @@ def build_dsl_tokens(config: TokenizerConfig):
     + dsl_tokens.SL_TOKENS
     + dsl_tokens.SLIDES_TOKENS
     + dsl_tokens.CP_TOKENS
-    + dsl_tokens.TP_TOKENS
     + dsl_tokens.SV_TOKENS
     + dsl_tokens.SR_TOKENS
     + dsl_tokens.BPM_TOKENS

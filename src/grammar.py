@@ -6,7 +6,6 @@ from .constraints import Tok
 @dataclass
 class GrammarState:
     in_map: bool = False
-    in_tp: bool = False
     in_object: bool = False
 
     object_type: Optional[str] = None
@@ -15,11 +14,9 @@ class GrammarState:
     expect_x: bool = False
     expect_y: bool = False
 
-    # timing point
-    tp_has_value: bool = False
-
     # slider-specific state
     slider_has_base_xy: bool = False
+    slider_has_sv: bool = False
     slider_has_length: bool = False
     slider_has_slides: bool = False
     slider_has_segment: bool = False
@@ -62,22 +59,12 @@ class Grammar():
     elif tok == Tok.MAP_END:
       state.in_map = False
 
-    elif tok == Tok.TP_START:
-      state.in_tp = True
-      state.tp_has_value = False
-
-    elif tok == Tok.TP_END:
-      state.in_tp = False
-      state.tp_has_value = False
-
-    elif tok.startswith("BPM_") or tok.startswith("SV_"):
-      state.tp_has_value = True
-
     # OBJECT
     elif tok == Tok.OBJ_START:
       state.in_object = True
       state.object_type = None
       state.slider_has_base_xy = False
+      state.slider_has_sv = False
       state.slider_has_length = False
       state.slider_has_slides = False
       state.slider_has_segment = False
@@ -89,6 +76,7 @@ class Grammar():
       state.expect_x = False
       state.expect_y = False
       state.slider_has_base_xy = False
+      state.slider_has_sv = False
       state.slider_has_length = False
       state.slider_has_slides = False
       state.slider_has_segment = False
@@ -101,6 +89,7 @@ class Grammar():
         state.expect_x = True
         state.expect_y = False
         state.slider_has_base_xy = False
+        state.slider_has_sv = False
         state.slider_has_length = False
         state.slider_has_slides = False
         state.slider_has_segment = False
@@ -133,6 +122,10 @@ class Grammar():
       else:
         state.expect_y = False
 
+    elif tok.startswith("SV_"):
+      if state.object_type == Tok.T_SLIDER and state.slider_has_base_xy and not state.slider_expect_cp_xy:
+        state.slider_has_sv = True
+
     elif tok.startswith("SL_"):
       state.slider_has_length = True
     elif tok.startswith("SLIDES_"):
@@ -149,11 +142,6 @@ class Grammar():
   def allowed_next_tokens(self, state: GrammarState) -> set[int]:
     if not state.in_map:
       return self.groups["SR"] | self.groups["STYLE"] | {self.tok[Tok.MAP_START]} | {self.tok[Tok.EOS]}
-
-    if state.in_tp:
-      if state.tp_has_value:
-          return {self.tok[Tok.TP_END]}
-      return self.groups["BPM"] | self.groups["SV"]
 
     if state.in_object:
       if state.object_type is None:
@@ -176,6 +164,8 @@ class Grammar():
         return self.groups["DT"] | {self.tok[Tok.OBJ_END]}
 
       if state.object_type == Tok.T_SLIDER:
+        if not state.slider_has_sv and state.slider_has_base_xy:
+          return self.groups["SV"]
         if not state.slider_has_length:
           return self.groups["SL"]
         if not state.slider_has_slides:
@@ -199,7 +189,7 @@ class Grammar():
 
     return (
         self.groups["DT"]
-        | {self.tok[Tok.TP_START]}
+        | self.groups["BPM"]
         | {self.tok[Tok.OBJ_START]}
         | {self.tok[Tok.MAP_END]}
     )
