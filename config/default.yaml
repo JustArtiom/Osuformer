@@ -22,7 +22,7 @@ audio:
   sample_rate: 16000
   hop_ms: 10
   win_ms: 25
-  n_mels: 388
+  n_mels: 128
   n_fft: 1024
 
 tokenizer:
