@@ -274,8 +274,9 @@ def _build_initial_tokens(tokenizer: Tokenizer, *, global_tokens: list[int], bpm
   tokens.append(tokenizer.vocab[Tok.MAP_START])
   bpm_value = _parse_bpm(bpm)
   bpm_token = tokenizer.find_closest_token_from_vocab(bpm_value, Tok.BPM)
-  offset_token = tokenizer.find_closest_token_from_vocab(offset, Tok.DT)
-  tokens.append(tokenizer.vocab[offset_token])
+  offset_tokens = tokenizer.encode_delta_time(offset)
+  for tok in offset_tokens:
+    tokens.append(tok)
   tokens.append(tokenizer.vocab[Tok.TP_START])
   tokens.append(tokenizer.vocab[bpm_token])
   tokens.append(tokenizer.vocab[Tok.TP_END])
