@@ -20,6 +20,7 @@ from .tokenizer import Tokenizer
 @click.option("--output", type=str, help="Path to output generated file (unused)")
 @click.option("--template", type=str, help="Path to template map file to base generation on (unused)")
 @click.option("--bpm", type=str, required=True, help="Beats per minute for the generated file")
+@click.option("--offset", type=int, required=True, help="Offset in milliseconds for the generated file (unused)")
 @click.option("--sr", type=int, default=4, help="Osu difficulty star rating target")
 @click.option("--model", "checkpoint_path", type=str, required=True, help="Path to model checkpoint")
 @click.option("--styles", type=str, help=f"Comma-separated list of styles to use for generation, {', '.join([s.value for s in MapStyle])}")
@@ -35,6 +36,7 @@ def main(
   output: str,
   template: str,
   bpm: str,
+  offset: int,
   sr: int,
   checkpoint_path: str,
   styles: str,
@@ -61,7 +63,7 @@ def main(
   _load_state_dict(model, state_dict, strict=strict)
 
   global_tokens = _build_global_tokens(tokenizer, sr=sr, styles=styles)
-  initial_tokens = _build_initial_tokens(tokenizer, global_tokens=global_tokens, bpm=bpm)
+  initial_tokens = _build_initial_tokens(tokenizer, global_tokens=global_tokens, bpm=bpm, offset=offset)
 
   all_tokens: list[int] = []
   all_times: list[int] = []
@@ -267,11 +269,13 @@ def _build_global_tokens(tokenizer: Tokenizer, *, sr: int, styles: str | None) -
   return tokens
 
 
-def _build_initial_tokens(tokenizer: Tokenizer, *, global_tokens: list[int], bpm: str) -> list[int]:
+def _build_initial_tokens(tokenizer: Tokenizer, *, global_tokens: list[int], bpm: str, offset: int) -> list[int]:
   tokens = list(global_tokens)
   tokens.append(tokenizer.vocab[Tok.MAP_START])
   bpm_value = _parse_bpm(bpm)
   bpm_token = tokenizer.find_closest_token_from_vocab(bpm_value, Tok.BPM)
+  offset_token = tokenizer.find_closest_token_from_vocab(offset, Tok.DT)
+  tokens.append(tokenizer.vocab[offset_token])
   tokens.append(tokenizer.vocab[Tok.TP_START])
   tokens.append(tokenizer.vocab[bpm_token])
   tokens.append(tokenizer.vocab[Tok.TP_END])
