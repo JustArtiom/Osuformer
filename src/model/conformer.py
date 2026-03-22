@@ -322,9 +322,13 @@ class ConformerEncoder(nn.Module):
           new_mask[all_masked, 0] = False
       src_key_padding_mask = new_mask
     # Concatenate conditioning (e.g., song position [start_frac, end_frac]) to every frame
-    if conditioning is not None and self.conditioning_dim > 0:
-      # conditioning: (B, conditioning_dim) -> broadcast to (B, T, conditioning_dim)
-      cond_expanded = conditioning.unsqueeze(1).expand(-1, x.size(1), -1)
+    if self.conditioning_dim > 0:
+      if conditioning is not None:
+        # conditioning: (B, conditioning_dim) -> broadcast to (B, T, conditioning_dim)
+        cond_expanded = conditioning.unsqueeze(1).expand(-1, x.size(1), -1)
+      else:
+        # Zero-pad when no conditioning provided (backward compat)
+        cond_expanded = torch.zeros(x.size(0), x.size(1), self.conditioning_dim, device=x.device, dtype=x.dtype)
       x = torch.cat([x, cond_expanded], dim=-1)
     x = self.input_proj(x)
     if self.positional_encoding is not None:

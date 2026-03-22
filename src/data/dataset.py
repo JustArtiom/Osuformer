@@ -73,6 +73,12 @@ class Dataset:
             duration_ms=duration_ms,
           )
           analytics.collect_beatmap(beatmap)
+          analytics.collect_tokens(
+            tokens=tokens.tolist() if hasattr(tokens, 'tolist') else list(tokens),
+            times=times.tolist() if hasattr(times, 'tolist') else list(times),
+            snaps=snaps.tolist() if hasattr(snaps, 'tolist') else list(snaps),
+            id_to_token=self.tokenizer.id_to_token,
+          )
 
           if new_audio:
             analytics.collect_audio(

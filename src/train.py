@@ -31,6 +31,114 @@ def build_token_weights(tokenizer, device: torch.device) -> torch.Tensor:
       weights[idx] = SL_LOSS_WEIGHT
   return weights
 
+
+def build_token_family_masks(tokenizer, device: torch.device) -> dict:
+  """Precompute boolean masks for each token family for efficient accuracy computation."""
+  vocab_size = len(tokenizer.vocab)
+  families = {
+    "ts": torch.zeros(vocab_size, dtype=torch.bool, device=device),
+    "snap": torch.zeros(vocab_size, dtype=torch.bool, device=device),
+    "position": torch.zeros(vocab_size, dtype=torch.bool, device=device),
+    "type": torch.zeros(vocab_size, dtype=torch.bool, device=device),
+    "timing": torch.zeros(vocab_size, dtype=torch.bool, device=device),
+    "structure": torch.zeros(vocab_size, dtype=torch.bool, device=device),
+  }
+  ts_values = {}
+
+  for tok, idx in tokenizer.token_to_id.items():
+    if tok.startswith("TS_"):
+      families["ts"][idx] = True
+      families["timing"][idx] = True
+      try:
+        ts_values[idx] = int(float(tok[3:]))
+      except ValueError:
+        pass
+    elif tok.startswith("SNAP_"):
+      families["snap"][idx] = True
+      families["timing"][idx] = True
+    elif tok.startswith("X_") or tok.startswith("Y_"):
+      families["position"][idx] = True
+    elif tok in ("T_CIRCLE", "T_SLIDER", "T_SPINNER"):
+      families["type"][idx] = True
+    elif tok in ("OBJ_START", "OBJ_END", "MAP_START", "MAP_END", "EOS", "BOS"):
+      families["structure"][idx] = True
+
+  return families, ts_values
+
+
+def compute_token_accuracies(
+  logits: torch.Tensor,
+  targets: torch.Tensor,
+  loss_mask: torch.Tensor,
+  families: dict,
+  ts_values: dict,
+) -> dict:
+  """Compute per-token-family accuracies for monitoring training progress.
+
+  Returns dict with keys like 'ts_accuracy', 'snap_accuracy', etc.
+  """
+  preds = logits.argmax(dim=-1)  # (B, L)
+  correct = (preds == targets)    # (B, L)
+  masked_correct = correct & loss_mask  # only count target tokens
+
+  result = {}
+
+  # Overall accuracy
+  total = loss_mask.sum().item()
+  if total > 0:
+    result["overall_accuracy"] = masked_correct.sum().item() / total
+
+  # Per-family accuracy
+  for name, mask in families.items():
+    family_mask = mask[targets] & loss_mask  # (B, L)
+    family_total = family_mask.sum().item()
+    if family_total > 0:
+      family_correct = (masked_correct & family_mask).sum().item()
+      result[f"{name}_accuracy"] = family_correct / family_total
+
+  # Fuzzy TS accuracy (±1 and ±2 tolerance = ±10ms and ±20ms)
+  ts_mask = families["ts"][targets] & loss_mask
+  ts_total = ts_mask.sum().item()
+  if ts_total > 0 and ts_values:
+    # Build value tensors for targets and predictions
+    device = targets.device
+    target_vals = torch.zeros_like(targets, dtype=torch.float)
+    pred_vals = torch.zeros_like(preds, dtype=torch.float)
+    for tid, val in ts_values.items():
+      target_vals[targets == tid] = val
+      pred_vals[preds == tid] = val
+
+    diff = (pred_vals - target_vals).abs()
+    fuzzy_1 = ((diff <= 1) & ts_mask).sum().item()
+    fuzzy_2 = ((diff <= 2) & ts_mask).sum().item()
+    result["ts_fuzzy_1_accuracy"] = fuzzy_1 / ts_total
+    result["ts_fuzzy_2_accuracy"] = fuzzy_2 / ts_total
+
+  return result
+
+
+def compute_loss_decomposition(
+  logits: torch.Tensor,
+  targets: torch.Tensor,
+  loss_mask: torch.Tensor,
+  families: dict,
+) -> dict:
+  """Compute loss decomposed by token family."""
+  per_token_loss = F.cross_entropy(
+    logits.reshape(-1, logits.size(-1)),
+    targets.reshape(-1),
+    reduction="none",
+  ).view(targets.shape)
+
+  result = {}
+  for name, mask in families.items():
+    family_mask = mask[targets] & loss_mask
+    family_total = family_mask.float().sum().clamp(min=1)
+    family_loss = (per_token_loss * family_mask.float()).sum() / family_total
+    result[f"{name}_loss"] = family_loss.item()
+
+  return result
+
 def setup_distributed():
   if "RANK" in os.environ:
     dist.init_process_group(backend="nccl")
@@ -153,10 +261,16 @@ def train_one_epoch(model, loader, optimizer, device, epoch, sampler=None, scale
 
 
 @torch.no_grad()
-def validate_one_epoch(model, epoch, loader, device, token_weights: Optional[torch.Tensor] = None):
+def validate_one_epoch(model, epoch, loader, device, token_weights: Optional[torch.Tensor] = None, families: Optional[dict] = None, ts_values: Optional[dict] = None):
   model.eval()
   total_loss = 0.0
   total_tokens = 0
+
+  # Accumulators for per-token accuracy across batches
+  acc_sums: dict = {}
+  acc_counts: dict = {}
+  loss_decomp_sums: dict = {}
+  loss_decomp_batches = 0
 
   progress = tqdm(
     loader,
@@ -176,7 +290,7 @@ def validate_one_epoch(model, epoch, loader, device, token_weights: Optional[tor
     tokens_out = tokens[:, 1:]
 
     pad_mask  = token_pad_mask[:, :-1]
-    loss_mask = loss_mask[:, 1:].float()
+    lm = loss_mask[:, 1:]
 
     logits = model(
       src=mel,
@@ -194,13 +308,31 @@ def validate_one_epoch(model, epoch, loader, device, token_weights: Optional[tor
     loss = loss.view(tokens_out.shape)
     if token_weights is not None:
       loss = loss * token_weights[tokens_out]
-    loss = loss * loss_mask
-    progress.set_postfix(loss=f"{(loss.sum() / max(loss_mask.sum(), 1)).item():.4f}")
+    loss_masked = loss * lm.float()
+    progress.set_postfix(loss=f"{(loss_masked.sum() / max(lm.float().sum(), 1)).item():.4f}")
 
-    total_loss += loss.sum().item()
-    total_tokens += loss_mask.sum().item()
+    total_loss += loss_masked.sum().item()
+    total_tokens += lm.float().sum().item()
 
-  return total_loss / max(total_tokens, 1)
+    # Compute per-token accuracies
+    if families is not None and ts_values is not None:
+      batch_acc = compute_token_accuracies(logits, tokens_out, lm, families, ts_values)
+      for k, v in batch_acc.items():
+        acc_sums[k] = acc_sums.get(k, 0.0) + v
+        acc_counts[k] = acc_counts.get(k, 0) + 1
+
+      batch_decomp = compute_loss_decomposition(logits, tokens_out, lm, families)
+      for k, v in batch_decomp.items():
+        loss_decomp_sums[k] = loss_decomp_sums.get(k, 0.0) + v
+      loss_decomp_batches += 1
+
+  avg_loss = total_loss / max(total_tokens, 1)
+
+  # Average accuracies across batches
+  avg_accuracies = {k: v / acc_counts[k] for k, v in acc_sums.items()} if acc_sums else None
+  avg_decomposition = {k: v / loss_decomp_batches for k, v in loss_decomp_sums.items()} if loss_decomp_sums else None
+
+  return avg_loss, avg_accuracies, avg_decomposition
 
 @click.command()
 @click.option("--cache", "cache_name", type=str, required=True, help="Name of the cache to use for training")
@@ -271,6 +403,7 @@ def main(
   val_dataset.load_audio_stats(mean, std)
 
   token_weights = build_token_weights(train_dataset.tokenizer, device)
+  families, ts_values = build_token_family_masks(train_dataset.tokenizer, device)
 
   train_loader, train_sampler = create_dataloader(
     dataset=train_dataset,
@@ -329,7 +462,12 @@ def main(
       token_weights=token_weights,
     )
 
-    val_loss = validate_one_epoch(model, epoch, val_loader, device, token_weights=token_weights)
+    val_loss, token_accuracies, loss_decomposition = validate_one_epoch(
+      model, epoch, val_loader, device,
+      token_weights=token_weights,
+      families=families,
+      ts_values=ts_values,
+    )
     if distributed:
       val_loss_tensor = torch.tensor(val_loss, device=device, dtype=torch.float32)
       dist.all_reduce(val_loss_tensor, op=dist.ReduceOp.SUM)
@@ -347,7 +485,9 @@ def main(
         epoch=epoch,
         train_loss=train_loss,
         val_loss=val_loss,
-        current_lr=current_lr
+        current_lr=current_lr,
+        token_accuracies=token_accuracies,
+        loss_decomposition=loss_decomposition,
       )
 
       print(f"[Epoch {epoch}] lr={current_lr:.2e}")
