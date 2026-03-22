@@ -15,15 +15,18 @@ from .model import build_model
 from tqdm.auto import tqdm
 from .checkpoint import Checkpoint
 
-DT_LOSS_WEIGHT = 3.0
+TS_LOSS_WEIGHT = 3.0
+SNAP_LOSS_WEIGHT = 1.5
 SL_LOSS_WEIGHT = 2.0
 
 def build_token_weights(tokenizer, device: torch.device) -> torch.Tensor:
   vocab_size = len(tokenizer.vocab)
   weights = torch.ones(vocab_size, device=device, dtype=torch.float32)
   for tok, idx in tokenizer.token_to_id.items():
-    if tok.startswith("DT_"):
-      weights[idx] = DT_LOSS_WEIGHT
+    if tok.startswith("TS_"):
+      weights[idx] = TS_LOSS_WEIGHT
+    elif tok.startswith("SNAP_"):
+      weights[idx] = SNAP_LOSS_WEIGHT
     elif tok.startswith("SL_"):
       weights[idx] = SL_LOSS_WEIGHT
   return weights
@@ -68,11 +71,12 @@ def train_one_epoch(model, loader, optimizer, device, epoch, sampler=None, scale
     dynamic_ncols=True,
   )
 
-  for mel, tokens, loss_mask, token_pad_mask in progress:
+  for mel, tokens, loss_mask, token_pad_mask, song_position in progress:
     mel = mel.to(device, non_blocking=True)
     tokens = tokens.to(device, non_blocking=True)
     loss_mask = loss_mask.to(device, non_blocking=True)
     token_pad_mask = token_pad_mask.to(device, non_blocking=True)
+    song_position = song_position.to(device, non_blocking=True)
 
     tokens_in  = tokens[:, :-1]
     tokens_out = tokens[:, 1:]
@@ -92,6 +96,7 @@ def train_one_epoch(model, loader, optimizer, device, epoch, sampler=None, scale
           src=mel,
           tgt_tokens=tokens_in,
           tgt_key_padding_mask=pad_mask,
+          conditioning=song_position,
         )
 
         loss = F.cross_entropy(
@@ -121,6 +126,7 @@ def train_one_epoch(model, loader, optimizer, device, epoch, sampler=None, scale
         src=mel,
         tgt_tokens=tokens_in,
         tgt_key_padding_mask=pad_mask,
+        conditioning=song_position,
       )
 
       loss = F.cross_entropy(
@@ -159,11 +165,12 @@ def validate_one_epoch(model, epoch, loader, device, token_weights: Optional[tor
     dynamic_ncols=True,
   )
 
-  for mel, tokens, loss_mask, token_pad_mask in progress:
+  for mel, tokens, loss_mask, token_pad_mask, song_position in progress:
     mel = mel.to(device, non_blocking=True)
     tokens = tokens.to(device, non_blocking=True)
     loss_mask = loss_mask.to(device, non_blocking=True)
     token_pad_mask = token_pad_mask.to(device, non_blocking=True)
+    song_position = song_position.to(device, non_blocking=True)
 
     tokens_in  = tokens[:, :-1]
     tokens_out = tokens[:, 1:]
@@ -175,6 +182,7 @@ def validate_one_epoch(model, epoch, loader, device, token_weights: Optional[tor
       src=mel,
       tgt_tokens=tokens_in,
       tgt_key_padding_mask=pad_mask,
+      conditioning=song_position,
     )
 
     loss = F.cross_entropy(
@@ -204,12 +212,12 @@ def validate_one_epoch(model, epoch, loader, device, token_weights: Optional[tor
 @click.option("--ckp", "checkpoint_name", type=str, help="Path to save checkpoints")
 @config_options
 def main(
-  config: ExperimentConfig, 
-  cache_name: str, 
-  batch_size: int, 
-  epochs: int, 
-  lr: float, 
-  workers: int, 
+  config: ExperimentConfig,
+  cache_name: str,
+  batch_size: int,
+  epochs: int,
+  lr: float,
+  workers: int,
   use_ram: Optional[bool],
   checkpoint_name: Optional[str],
 ):
@@ -328,7 +336,7 @@ def main(
       val_loss = val_loss_tensor.item() / dist.get_world_size()
     scheduler.step(val_loss)
     stop_tensor = torch.tensor(0, device=device, dtype=torch.int)
-    
+
     if (not distributed) or dist.get_rank() == 0:
       assert checkpoint is not None
       current_lr = optimizer.param_groups[0]["lr"]

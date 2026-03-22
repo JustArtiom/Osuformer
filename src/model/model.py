@@ -22,6 +22,7 @@ def build_model(
     max_relative_position=128,
     relative_style="bias",
     subsampling=True,
+    conditioning_dim=2,  # song position: [start_frac, end_frac]
   )
 
   dec_cfg = config.model.decoder

@@ -43,6 +43,11 @@ class AudioConfig:
 class TokenizerConfig:
   DT_BIN_MS: int = 10
   DT_MAX_MS: int = 32000
+  TS_MAX_STEPS: int = 1000
+  SNAP_BINS: int = 17
+  SPOS_BINS: int = 100
+  SUSTAIN_INTERVAL_MS: int = 100
+  MAX_SUSTAIN_PER_OBJECT: int = 50
   X_BINS: int = 32
   Y_BINS: int = 24
   SLIDER_CP_LIMIT: int = 9
