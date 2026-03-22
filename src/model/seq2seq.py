@@ -25,10 +25,12 @@ class Seq2SeqModel(nn.Module):
     tgt_tokens: torch.Tensor,
     src_key_padding_mask: Optional[torch.Tensor] = None,
     tgt_key_padding_mask: Optional[torch.Tensor] = None,
+    conditioning: Optional[torch.Tensor] = None,
   ) -> torch.Tensor:
     memory, memory_key_padding_mask = self.encoder(
       src,
       src_key_padding_mask,
+      conditioning=conditioning,
     )
 
     logits = self.decoder(

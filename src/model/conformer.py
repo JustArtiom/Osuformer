@@ -278,12 +278,17 @@ class ConformerEncoder(nn.Module):
     max_relative_position: int = 128,
     relative_style: str = "bias",
     subsampling: bool = False,
+    conditioning_dim: int = 0,
   ) -> None:
     super().__init__()
+    self.conditioning_dim = conditioning_dim
     self.use_absolute_positional_encoding = positional_encoding.lower() != "relative"
-    proj_in_dim = d_model if subsampling else input_dim
+    # When using subsampling, input_proj takes d_model from Conv2dSubsampling + conditioning
+    # When not using subsampling, input_proj takes raw input_dim + conditioning
+    proj_in_dim = (d_model if subsampling else input_dim) + conditioning_dim
     self.input_proj = nn.Linear(proj_in_dim, d_model)
     self.positional_encoding = PositionalEncoding(d_model, dropout) if self.use_absolute_positional_encoding else None
+    # Subsampling operates on raw input_dim (before conditioning concat)
     self.subsampling = Conv2dSubsampling(input_dim, d_model, dropout) if subsampling else None
     self.layers = nn.ModuleList(
         [
@@ -306,6 +311,7 @@ class ConformerEncoder(nn.Module):
       self,
       x: torch.Tensor,
       src_key_padding_mask: Optional[torch.Tensor],
+      conditioning: Optional[torch.Tensor] = None,
   ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
     if self.subsampling is not None:
       x, new_mask = self.subsampling(x, src_key_padding_mask)
@@ -315,6 +321,15 @@ class ConformerEncoder(nn.Module):
           new_mask = new_mask.clone()
           new_mask[all_masked, 0] = False
       src_key_padding_mask = new_mask
+    # Concatenate conditioning (e.g., song position [start_frac, end_frac]) to every frame
+    if self.conditioning_dim > 0:
+      if conditioning is not None:
+        # conditioning: (B, conditioning_dim) -> broadcast to (B, T, conditioning_dim)
+        cond_expanded = conditioning.unsqueeze(1).expand(-1, x.size(1), -1)
+      else:
+        # Zero-pad when no conditioning provided (backward compat)
+        cond_expanded = torch.zeros(x.size(0), x.size(1), self.conditioning_dim, device=x.device, dtype=x.dtype)
+      x = torch.cat([x, cond_expanded], dim=-1)
     x = self.input_proj(x)
     if self.positional_encoding is not None:
       x = self.positional_encoding(x)

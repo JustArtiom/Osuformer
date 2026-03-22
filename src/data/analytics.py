@@ -349,6 +349,13 @@ class DatasetAnalyticsData:
   total_audio_length: float = 0.0
   audio_durations_ms: List[float] = field(default_factory=list)
 
+  # New: token-level analytics
+  token_family_counts: dict = field(default_factory=dict)
+  tokens_per_map: List[int] = field(default_factory=list)
+  snap_values: List[int] = field(default_factory=list)
+  delta_times_ms: List[float] = field(default_factory=list)
+  object_song_positions: List[float] = field(default_factory=list)
+
 
 
 class DatasetAnalytics(Analytics):
@@ -443,7 +450,38 @@ class DatasetAnalytics(Analytics):
 
     self.data.map_styles.append(styles)
 
-  def collect_audio(self, *, duration_ms: float): 
+  def collect_tokens(self, tokens: list, times: list, snaps: list, id_to_token: list):
+    """Collect token-level analytics from encoded beatmap data."""
+    self.data.tokens_per_map.append(len(tokens))
+
+    # Token family counts
+    for tok_id in tokens:
+      tok_str = id_to_token[tok_id]
+      prefix = tok_str.split("_")[0] + "_" if "_" in tok_str else tok_str
+      self.data.token_family_counts[prefix] = self.data.token_family_counts.get(prefix, 0) + 1
+
+    # Snap values (from snaps array where tokens are OBJ_START)
+    for s in snaps:
+      if s > 0:
+        self.data.snap_values.append(int(s))
+
+    # Delta times between consecutive objects and object song positions
+    obj_times = []
+    duration = max(float(times[-1]), 1.0) if len(times) > 0 else 1.0
+    for i, tok_id in enumerate(tokens):
+      tok_str = id_to_token[tok_id]
+      if tok_str == "OBJ_START":
+        t = float(times[i])
+        obj_times.append(t)
+        if duration > 0:
+          self.data.object_song_positions.append(t / duration)
+
+    for i in range(1, len(obj_times)):
+      dt = obj_times[i] - obj_times[i-1]
+      if dt >= 0:
+        self.data.delta_times_ms.append(dt)
+
+  def collect_audio(self, *, duration_ms: float):
     self.data.total_audios += 1
     self.data.total_audio_length += duration_ms if duration_ms > 0 else 0.0
     self.data.audio_durations_ms.append(duration_ms if duration_ms > 0 else float("nan"))
@@ -668,6 +706,75 @@ class DatasetAnalytics(Analytics):
     )
 
     # -------------------------
+    # TOKEN TYPE DISTRIBUTION
+    # -------------------------
+    if self.data.token_family_counts:
+      sorted_families = dict(sorted(
+        self.data.token_family_counts.items(),
+        key=lambda x: x[1], reverse=True
+      )[:20])  # top 20 families
+      self.create_histogram(
+        file_name="token_family_distribution.png",
+        title="Token Family Distribution (Top 20)",
+        x_label="Token Family",
+        y_label="Count",
+        data={k: float(v) for k, v in sorted_families.items()},
+        color="#0c7bdc",
+      )
+
+    # -------------------------
+    # TOKENS PER MAP
+    # -------------------------
+    self.create_numeric_histogram(
+      file_name="tokens_per_map.png",
+      title="Tokens per Map",
+      x_label="Token Count",
+      data=self.data.tokens_per_map,
+      bins=50,
+    )
+
+    # -------------------------
+    # SNAP DISTRIBUTION
+    # -------------------------
+    if self.data.snap_values:
+      snap_counter: dict[str, float] = {}
+      for s in self.data.snap_values:
+        key = f"1/{s}" if s > 0 else "off-grid"
+        snap_counter[key] = snap_counter.get(key, 0) + 1
+      self.create_histogram(
+        file_name="snap_distribution.png",
+        title="Beat Snap Distribution",
+        x_label="Snap Subdivision",
+        y_label="Count",
+        data=snap_counter,
+        color="#ffc107",
+      )
+
+    # -------------------------
+    # DELTA TIME HISTOGRAM
+    # -------------------------
+    self.create_numeric_histogram(
+      file_name="delta_time_distribution.png",
+      title="Delta Time Between Objects",
+      x_label="Delta Time (ms)",
+      data=self.data.delta_times_ms,
+      bins=100,
+      color="#28a745",
+    )
+
+    # -------------------------
+    # OBJECT DENSITY OVER SONG POSITION
+    # -------------------------
+    self.create_numeric_histogram(
+      file_name="object_song_position.png",
+      title="Object Density Over Song Position",
+      x_label="Song Position (0=start, 1=end)",
+      data=self.data.object_song_positions,
+      bins=50,
+      color="#dc3545",
+    )
+
+    # -------------------------
     # FINAL FULL JSON DUMP
     # -------------------------
     self.create_json("analytics_full.json", self.data.__dict__)
@@ -685,13 +792,20 @@ class CheckpointAnalytics(Analytics):
     val_loss: float,
     train_loss: float,
     current_lr: float,
+    token_accuracies: Optional[dict] = None,
+    loss_decomposition: Optional[dict] = None,
   ):
-    self.epochs.append({
+    entry: dict[str, Union[float, int]] = {
       "epoch": epoch,
       "val_loss": val_loss,
       "train_loss": train_loss,
       "current_lr": current_lr,
-    })
+    }
+    if token_accuracies is not None:
+      entry.update(token_accuracies)
+    if loss_decomposition is not None:
+      entry.update(loss_decomposition)
+    self.epochs.append(entry)
 
   def save(self):
     self.create_metric_curves(
@@ -705,6 +819,166 @@ class CheckpointAnalytics(Analytics):
       x_label="Epoch"
     )
 
+    # Learning rate curve
+    self.create_metric_curves(
+      file_name="lr_curve.png",
+      title="Learning Rate Schedule",
+      metrics={
+        "Learning Rate": [e["current_lr"] for e in self.epochs],
+      },
+      y_label="LR",
+      x_label="Epoch",
+    )
+
+    # Per-token-type accuracy curves (if available)
+    accuracy_keys = [
+      ("ts_accuracy", "TS Exact"),
+      ("ts_fuzzy_1_accuracy", "TS Fuzzy \u00b11"),
+      ("ts_fuzzy_2_accuracy", "TS Fuzzy \u00b12"),
+      ("snap_accuracy", "SNAP"),
+      ("position_accuracy", "Position (X+Y)"),
+      ("type_accuracy", "Object Type"),
+      ("overall_accuracy", "Overall"),
+    ]
+    acc_metrics = {}
+    for key, label in accuracy_keys:
+      vals = [e.get(key) for e in self.epochs if key in e]
+      if vals:
+        acc_metrics[label] = vals
+
+    if acc_metrics:
+      self.create_metric_curves(
+        file_name="token_accuracy_curves.png",
+        title="Per-Token-Type Accuracy",
+        metrics=acc_metrics,
+        y_label="Accuracy",
+        x_label="Epoch",
+      )
+
+    # Loss decomposition curves (if available)
+    loss_keys = [
+      ("timing_loss", "Timing (TS+SNAP)"),
+      ("position_loss", "Position (X+Y)"),
+      ("structure_loss", "Structure"),
+    ]
+    loss_metrics = {}
+    for key, label in loss_keys:
+      vals = [e.get(key) for e in self.epochs if key in e]
+      if vals:
+        loss_metrics[label] = vals
+
+    if loss_metrics:
+      self.create_metric_curves(
+        file_name="loss_decomposition.png",
+        title="Loss Decomposition by Token Type",
+        metrics=loss_metrics,
+        y_label="Loss",
+        x_label="Epoch",
+      )
+
     self.create_json("model_analytics.json", {
       "epochs": self.epochs
     })
+
+
+class GenerationAnalytics(Analytics):
+  """Analytics for generated beatmaps."""
+
+  def __init__(self, parent_path: Union[str, Path]):
+    super().__init__(parent_path)
+
+  def save_generation_report(
+    self,
+    *,
+    beatmap: Beatmap,
+    star_rating: Optional[float] = None,
+    mel_rms: Optional[np.ndarray] = None,
+    hop_ms: float = 10.0,
+  ):
+    """Create all generation analytics plots for a generated beatmap."""
+    import matplotlib.pyplot as plt
+
+    obj_times = []
+    obj_xs = []
+    obj_ys = []
+    for ho in beatmap.hit_objects:
+      obj_times.append(ho.time)
+      obj_xs.append(ho.x)
+      obj_ys.append(ho.y)
+
+    if not obj_times:
+      return
+
+    # -------------------------
+    # POSITION HEATMAP
+    # -------------------------
+    plt.figure(figsize=(6, 5))
+    plt.hist2d(
+      obj_xs, obj_ys,
+      bins=[32, 24],
+      range=[[0, 512], [0, 384]],
+      cmap="hot",
+    )
+    plt.colorbar(label="Object Count")
+    plt.xlabel("X")
+    plt.ylabel("Y")
+    plt.title("Generated Object Position Heatmap")
+    plt.gca().invert_yaxis()
+    plt.tight_layout()
+    plt.savefig(self.parent_path / "position_heatmap.png", dpi=150)
+    plt.close()
+
+    # -------------------------
+    # OBJECT DENSITY HISTOGRAM
+    # -------------------------
+    total_duration_s = (max(obj_times) - min(obj_times)) / 1000.0 if len(obj_times) > 1 else 1.0
+    n_bins = max(1, int(total_duration_s / 2))  # 2-second bins
+    self.create_numeric_histogram(
+      file_name="object_density.png",
+      title="Object Density Over Time",
+      x_label="Time (ms)",
+      data=obj_times,
+      bins=n_bins,
+      color="#17a2b8",
+    )
+
+    # -------------------------
+    # OBJECT TIMELINE vs AUDIO ENERGY
+    # -------------------------
+    if mel_rms is not None and len(mel_rms) > 0:
+      fig, ax1 = plt.subplots(figsize=(12, 4))
+
+      # Audio energy
+      rms_times = np.arange(len(mel_rms)) * hop_ms
+      ax1.fill_between(rms_times, mel_rms, alpha=0.3, color="blue", label="Audio RMS")
+      ax1.set_xlabel("Time (ms)")
+      ax1.set_ylabel("Audio Energy", color="blue")
+      ax1.tick_params(axis="y", labelcolor="blue")
+
+      # Objects as scatter
+      ax2 = ax1.twinx()
+      y_positions = [1] * len(obj_times)
+      ax2.scatter(obj_times, y_positions, alpha=0.5, s=10, color="red", label="Objects")
+      ax2.set_ylabel("Objects", color="red")
+      ax2.set_yticks([])
+
+      plt.title("Object Timeline vs Audio Energy")
+      fig.tight_layout()
+      plt.savefig(self.parent_path / "object_timeline.png", dpi=150)
+      plt.close()
+
+    # -------------------------
+    # SUMMARY JSON
+    # -------------------------
+    summary = {
+      "total_objects": len(beatmap.hit_objects),
+      "circles": sum(1 for ho in beatmap.hit_objects if isinstance(ho, Circle)),
+      "sliders": sum(1 for ho in beatmap.hit_objects if isinstance(ho, Slider)),
+      "spinners": sum(1 for ho in beatmap.hit_objects if isinstance(ho, Spinner)),
+      "duration_ms": max(obj_times) - min(obj_times) if obj_times else 0,
+      "objects_per_second": len(obj_times) / total_duration_s if total_duration_s > 0 else 0,
+    }
+    if star_rating is not None:
+      summary["star_rating"] = star_rating
+
+    self.create_json("generation_summary.json", summary)
