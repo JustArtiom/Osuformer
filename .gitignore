@@ -1,12 +1,15 @@
-__pycache__/
-checkpoints/
-dataset/
-cache/
-old/
-scripts/frames_test
+# Ignore the following directories
+*/__pycache__/
+.codex/
+.vscode/
+.claude/
+
+# Ignore all files with the following extensions
 *.log
 *.mp3
+*.ogg
+*.wav
+*.flac
+*.opus
 *.osu
 *.pt
-job*
-config/size/custom.yaml
