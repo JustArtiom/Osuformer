@@ -3,5 +3,8 @@ def fmt(n: float) -> str:
         return "0"
     if n == int(n):
         return str(int(n))
-    result = f"{n:.10f}".rstrip("0").rstrip(".")
-    return "0" if result == "-0" else result
+    s = repr(n)
+    if "e" in s or "E" in s:
+        # Convert scientific notation to fixed-point, strip trailing zeros
+        return f"{n:.15f}".rstrip("0").rstrip(".")
+    return s
