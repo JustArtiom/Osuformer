@@ -4,7 +4,7 @@ import math
 from typing import List, Sequence, Tuple
 
 from ..beatmap import Beatmap
-from ..hit_object import Circle, Slider, Spinner
+from ..hit_object import Circle, Slider, Spinner, HoldNote
 from ..enums import Mods
 from .attributes import DifficultyAttributes, PerformanceAttributes
 from .base import DifficultyObject, DifficultyHitObject
@@ -293,7 +293,7 @@ def _generate_difficulty_objects(
 
 
 def _compute_stack_offsets(
-    hit_objects: Sequence[Circle | Slider | Spinner],
+    hit_objects: Sequence[Circle | Slider | Spinner | HoldNote],
     radius: float,
     approach_rate: float,
     stack_leniency: float,
@@ -360,7 +360,7 @@ def _get_slider_end_position(hit_object: Circle | Slider | Spinner) -> Tuple[flo
     return float(hit_object.x), float(hit_object.y)
 
 
-def _get_end_time(hit_object: Circle | Slider | Spinner) -> float:
+def _get_end_time(hit_object: Circle | Slider | Spinner | HoldNote) -> float:
     if isinstance(hit_object, Slider):
         duration = float(getattr(hit_object.object_params, "duration", 0.0) or 0.0)
         return float(hit_object.time) + duration

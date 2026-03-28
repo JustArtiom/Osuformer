@@ -18,7 +18,7 @@ def normalise_mods(mods: Sequence[Mods | str] | None) -> List[str]:
     result: List[str] = []
     for mod in mods:
         if isinstance(mod, Mods):
-            result.append(mod.name)
+            result.append(mod.name or "")
         elif isinstance(mod, str):
             result.append(mod.strip())
         else:
