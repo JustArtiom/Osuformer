@@ -1,5 +1,5 @@
 # Ignore the following directories
-*/__pycache__/
+**/__pycache__/
 .codex/
 .vscode/
 .claude/
