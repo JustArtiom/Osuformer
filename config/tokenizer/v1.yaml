@@ -1,0 +1,5 @@
+tokenizer:
+  version: "v1"
+  dt_bin_ms: 10
+  coordinate_step: 4 # 512/4=128 x-values, 384/4=96 y-values
+  coordinate_padding: 128 # pixels outside playfield allowed on each side

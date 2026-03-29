@@ -1,0 +1,7 @@
+_base_:
+  - dataset/v1.yaml
+  - paths/default.yaml
+  - audio/v1.yaml
+  - tokenizer/v1.yaml
+  - models/md.yaml
+  - training/default.yaml

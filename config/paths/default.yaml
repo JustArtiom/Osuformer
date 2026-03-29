@@ -1,0 +1,6 @@
+paths:
+  root: .
+  data: ${paths.root}/data/dataset
+  cache: ${paths.root}/data/cache
+  checkpoints: ${paths.root}/checkpoints
+  logs: ${paths.root}/logs

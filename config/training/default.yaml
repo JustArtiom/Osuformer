@@ -1,0 +1,15 @@
+training:
+  batch_size: 32
+  learning_rate: 1e-4
+  warmup_steps: 4000
+  max_steps: 200000
+  grad_clip: 1.0
+  weight_decay: 0.01
+  save_every_steps: 1000
+  keep_last_checkpoint: true
+  keep_best_checkpoint: true
+  best_metric: "val_loss"
+  lr_scheduler:
+    enabled: true
+    type: "cosine"
+    min_lr: 1e-6

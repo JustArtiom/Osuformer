@@ -1,0 +1,10 @@
+audio:
+  version: "v1"
+  sample_rate: 22050
+  hop_ms: 10
+  win_ms: 25
+  n_mels: 128
+  n_fft: 1024
+  context_ms: 5000
+  generate_ms: 10000
+  lookahead_ms: 5000

@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest numpy pyright
+          pip install pytest numpy pyright omegaconf click
 
       - name: Type check with Pyright
         run: pyright src/ tests/
