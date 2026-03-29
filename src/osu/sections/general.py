@@ -1,5 +1,7 @@
 import re
+from enum import IntEnum
 
+from ..enums import GameMode
 from ..utils import fmt
 
 
@@ -14,7 +16,7 @@ class General:
         countdown: int = 0,
         sample_set: str = "Normal",
         stack_leniency: float = 0.7,
-        mode: int = 0,
+        mode: GameMode = GameMode.STANDARD,
         letterbox_in_breaks: int = 0,
         use_skin_sprites: int = 0,
         overlay_position: str = "NoChange",
@@ -51,7 +53,8 @@ class General:
                 if hasattr(self, attr):
                     current_value = getattr(self, attr)
                     try:
-                        setattr(self, attr, type(current_value)(v))
+                        t = type(current_value)
+                        setattr(self, attr, t(int(v)) if issubclass(t, IntEnum) else t(v))
                     except (TypeError, ValueError):
                         setattr(self, attr, v)
 

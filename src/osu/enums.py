@@ -1,6 +1,13 @@
 from enum import Enum, IntEnum, IntFlag, auto
 
 
+class GameMode(IntEnum):
+    STANDARD = 0
+    TAIKO = 1
+    CATCH = 2
+    MANIA = 3
+
+
 class Mods(IntFlag):
     NoMod = 0
     NoFail = 1

@@ -1,0 +1,16 @@
+model:
+  version: "lg"
+  encoder:
+    d_model: 768
+    num_heads: 12
+    num_layers: 12
+    ffn_dim: 3072
+    conv_kernel: 31
+    dropout: 0.0
+
+  decoder:
+    d_model: 768
+    num_heads: 12
+    num_layers: 12
+    ffn_dim: 3072
+    dropout: 0.0
