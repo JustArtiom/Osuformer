@@ -1,7 +1,8 @@
-from typing import TypedDict
+from dataclasses import dataclass
 
 
-class TokenizerConfig(TypedDict):
+@dataclass
+class TokenizerConfig:
     version: str
     dt_bin_ms: int
     coordinate_step: int

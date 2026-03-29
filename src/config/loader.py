@@ -1,7 +1,13 @@
 from collections.abc import Mapping
+from dataclasses import fields as dc_fields, is_dataclass
 from pathlib import Path
+from typing import Any, TypeVar
 
 from omegaconf import DictConfig, OmegaConf
+
+from .schemas.app import AppConfig
+
+T = TypeVar("T")
 
 
 def _resolve_base(config_path: Path) -> DictConfig:
@@ -29,11 +35,21 @@ def _resolve_base(config_path: Path) -> DictConfig:
     return final
 
 
+def _from_dict(cls: type[T], data: Any) -> T:
+    from typing import get_type_hints
+
+    hints = get_type_hints(cls)
+    return cls(**{
+        f.name: _from_dict(hints[f.name], data[f.name]) if is_dataclass(hints[f.name]) else data[f.name]
+        for f in dc_fields(cls)  # type: ignore[arg-type]
+    })
+
+
 def load_config(
     config_path: str | Path,
     section_overrides: Mapping[str, str | Path] | None = None,
     dotlist: list[str] | None = None,
-) -> DictConfig:
+) -> AppConfig:
     cfg = _resolve_base(Path(config_path).resolve())
 
     if section_overrides:
@@ -49,5 +65,6 @@ def load_config(
         assert isinstance(merged, DictConfig)
         cfg = merged
 
-    OmegaConf.set_readonly(cfg, True)
-    return cfg
+    container = OmegaConf.to_container(cfg, resolve=True)
+    assert isinstance(container, dict)
+    return _from_dict(AppConfig, container)

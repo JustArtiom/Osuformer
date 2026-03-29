@@ -1,7 +1,8 @@
-from typing import TypedDict
+from dataclasses import dataclass
 
 
-class AudioConfig(TypedDict):
+@dataclass
+class AudioConfig:
     version: str
     sample_rate: int
     hop_ms: int

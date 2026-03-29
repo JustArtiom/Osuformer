@@ -1,3 +1,4 @@
+from .app import AppConfig
 from .audio import AudioConfig
 from .dataset import DatasetConfig, DatasetFiltersConfig
 from .model import DecoderConfig, EncoderConfig, ModelConfig
@@ -6,6 +7,7 @@ from .tokenizer import TokenizerConfig
 from .training import LrSchedulerConfig, TrainingConfig
 
 __all__ = [
+    "AppConfig",
     "AudioConfig",
     "DatasetConfig",
     "DatasetFiltersConfig",
