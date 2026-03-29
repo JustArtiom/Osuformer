@@ -5,6 +5,7 @@ from typing import Any, Callable, TypeVar
 import click
 
 from .loader import load_config
+from .schemas.app import AppConfig
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -22,7 +23,7 @@ _DEFAULT_CONFIG = "config.yaml"
 
 def with_config(fn: F) -> F:
     @functools.wraps(fn)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
+    def wrapper(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         config_path: str = kwargs.pop("config_path")
         set_overrides: tuple[str, ...] = kwargs.pop("set_overrides", ())
 
@@ -38,7 +39,7 @@ def with_config(fn: F) -> F:
             section_overrides=section_overrides or None,
             dotlist=list(set_overrides) or None,
         )
-        return fn(*args, config=cfg, **kwargs)
+        return fn(*args, cfg=cfg, **kwargs)
 
     wrapper.__click_params__ = list(getattr(wrapper, "__click_params__", []))  # type: ignore[attr-defined]
 

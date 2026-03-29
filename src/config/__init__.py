@@ -1,6 +1,7 @@
 from .loader import load_config
 from .options import with_config
 from .schemas import (
+    AppConfig,
     AudioConfig,
     DatasetConfig,
     DatasetFiltersConfig,
@@ -16,6 +17,7 @@ from .schemas import (
 __all__ = [
     "load_config",
     "with_config",
+    "AppConfig",
     "AudioConfig",
     "DatasetConfig",
     "DatasetFiltersConfig",

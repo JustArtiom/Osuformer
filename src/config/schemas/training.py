@@ -1,13 +1,15 @@
-from typing import TypedDict
+from dataclasses import dataclass
 
 
-class LrSchedulerConfig(TypedDict):
+@dataclass
+class LrSchedulerConfig:
     enabled: bool
     type: str
     min_lr: float
 
 
-class TrainingConfig(TypedDict):
+@dataclass
+class TrainingConfig:
     batch_size: int
     learning_rate: float
     warmup_steps: int

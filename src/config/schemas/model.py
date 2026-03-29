@@ -1,7 +1,8 @@
-from typing import TypedDict
+from dataclasses import dataclass
 
 
-class EncoderConfig(TypedDict):
+@dataclass
+class EncoderConfig:
     d_model: int
     num_heads: int
     num_layers: int
@@ -10,7 +11,8 @@ class EncoderConfig(TypedDict):
     dropout: float
 
 
-class DecoderConfig(TypedDict):
+@dataclass
+class DecoderConfig:
     d_model: int
     num_heads: int
     num_layers: int
@@ -18,7 +20,8 @@ class DecoderConfig(TypedDict):
     dropout: float
 
 
-class ModelConfig(TypedDict):
+@dataclass
+class ModelConfig:
     version: str
     encoder: EncoderConfig
     decoder: DecoderConfig

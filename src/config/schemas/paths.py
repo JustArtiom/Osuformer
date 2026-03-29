@@ -1,7 +1,8 @@
-from typing import TypedDict
+from dataclasses import dataclass
 
 
-class PathsConfig(TypedDict):
+@dataclass
+class PathsConfig:
     root: str
     data: str
     cache: str
