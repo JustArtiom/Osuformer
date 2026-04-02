@@ -16,3 +16,9 @@ config/**/local.yaml
 *.opus
 *.osu
 *.pt
+
+# ENV
+.env
+
+# Cache
+.cache/

@@ -1,4 +1,4 @@
-from . import sections, difficulty, hit_object
+from . import sections, hit_object
 from .sections import General, Difficulty, Editor, Metadata, Colours, Events
 from .sections.events import BackgroundEvent, VideoEvent, BreakEvent
 from .timing_point import TimingPoint
@@ -15,18 +15,10 @@ from .hit_object import (
     HoldNoteObjectParams,
 )
 from .beatmap import Beatmap
-from .difficulty import (
-    DifficultyAttributes,
-    PerformanceAttributes,
-    calculate_difficulty,
-    calculate_performance,
-)
-from .enums import CurveType, Mods, HitResult, SampleSet, HitSound, Effects
-from .style_classifier import MapStyle
+from .enums import GameMode, CurveType, Mods, SampleSet, HitSound, Effects
 
 __all__ = [
     "sections",
-    "difficulty",
     "hit_object",
     "General",
     "Editor",
@@ -49,15 +41,10 @@ __all__ = [
     "HoldNote",
     "HoldNoteObjectParams",
     "Beatmap",
-    "DifficultyAttributes",
-    "PerformanceAttributes",
-    "calculate_difficulty",
-    "calculate_performance",
+    "GameMode",
     "CurveType",
     "Mods",
-    "HitResult",
     "SampleSet",
     "HitSound",
     "Effects",
-    "MapStyle",
 ]
