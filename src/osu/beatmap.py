@@ -4,7 +4,7 @@ from typing import Callable, Optional, Union
 
 from .sections import General, Difficulty, Editor, Metadata, Colours, Events
 from .timing_point import TimingPoint
-from .hit_object import Circle, Slider, Spinner, HoldNote, HitObject
+from .hit_object import Circle, Slider, Spinner, HoldNote
 
 
 HitObjectType = Union[Circle, Slider, Spinner, HoldNote]
@@ -25,7 +25,6 @@ class Beatmap:
         timing_points: Optional[list[TimingPoint]] = None,
         colours: Optional[Colours] = None,
         hit_objects: Optional[list[HitObjectType]] = None,
-        with_styles: bool = True,
     ):
         self.file_path = file_path
         self.format_version = format_version
@@ -48,9 +47,6 @@ class Beatmap:
 
         self._apply_format_defaults()
         self._recalculate_slider_durations()
-        self.styles = self.get_style_classes(
-            parent_path=str(Path(file_path).parent) if file_path and with_styles else None
-        )
 
     def _parse_raw(self, raw: str) -> None:
         lines = raw.splitlines()
@@ -67,23 +63,23 @@ class Beatmap:
         for section, content in self._split_sections(raw).items():
             if section == "General":
                 self.general = General(raw=content)
-            if section == "Editor":
+            elif section == "Editor":
                 self.editor = Editor(raw=content)
-            if section == "Metadata":
+            elif section == "Metadata":
                 self.metadata = Metadata(raw=content)
-            if section == "Difficulty":
+            elif section == "Difficulty":
                 self.difficulty = Difficulty(raw=content)
-            if section == "Events":
+            elif section == "Events":
                 self.events = Events(raw=content)
-            if section == "Colours":
+            elif section == "Colours":
                 self.colours = Colours(raw=content)
-            if section == "TimingPoints":
+            elif section == "TimingPoints":
                 self.timing_points = [
                     TimingPoint(raw=line)
                     for line in content.splitlines()
                     if line.strip()
                 ]
-            if section == "HitObjects":
+            elif section == "HitObjects":
                 self.hit_objects = []
                 for line in content.splitlines():
                     if not line.strip():
@@ -190,18 +186,6 @@ class Beatmap:
                 sv_multiplier * self.difficulty.slider_multiplier,
                 inherited_tp.beat_length,
             )
-
-    def get_difficulty(self):
-        from .difficulty import calculate_difficulty
-        return calculate_difficulty(self)
-
-    def get_performance(self):
-        from .difficulty import calculate_performance
-        return calculate_performance(self.get_difficulty())
-
-    def get_style_classes(self, parent_path: Optional[str] = None):
-        from .style_classifier import classify_beatmap
-        return classify_beatmap(self, parent_path=parent_path)
 
     @staticmethod
     def get_mode(path: str) -> int:

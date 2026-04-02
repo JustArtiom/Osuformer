@@ -103,10 +103,10 @@ SliderTickRate:1
 
 class TestBeatmap:
     def test_format_version(self):
-        assert Beatmap(raw=FULL_BEATMAP, with_styles=False).format_version == 14
+        assert Beatmap(raw=FULL_BEATMAP).format_version == 14
 
     def test_sections_parsed(self):
-        bm = Beatmap(raw=FULL_BEATMAP, with_styles=False)
+        bm = Beatmap(raw=FULL_BEATMAP)
         assert bm.general.audio_filename == "audio.mp3"
         assert bm.metadata.title == "Test Song"
         assert bm.metadata.beatmap_id == 123
@@ -114,14 +114,14 @@ class TestBeatmap:
         assert bm.difficulty.slider_multiplier == 1.8
 
     def test_timing_points(self):
-        bm = Beatmap(raw=FULL_BEATMAP, with_styles=False)
+        bm = Beatmap(raw=FULL_BEATMAP)
         assert len(bm.timing_points) == 2
         assert bm.timing_points[0].is_uninherited is True
         assert bm.timing_points[1].is_uninherited is False
         assert bm.timing_points[1].is_kiai is True
 
     def test_hit_object_types(self):
-        bm = Beatmap(raw=FULL_BEATMAP, with_styles=False)
+        bm = Beatmap(raw=FULL_BEATMAP)
         assert len(bm.hit_objects) == 4
         assert isinstance(bm.hit_objects[0], Circle)
         assert isinstance(bm.hit_objects[1], Circle)
@@ -129,48 +129,48 @@ class TestBeatmap:
         assert isinstance(bm.hit_objects[3], Spinner)
 
     def test_colours(self):
-        bm = Beatmap(raw=FULL_BEATMAP, with_styles=False)
+        bm = Beatmap(raw=FULL_BEATMAP)
         assert bm.colours.combo_colours[1] == (255, 128, 0)
         assert bm.colours.slider_border == (255, 255, 255)
 
     def test_events(self):
-        bm = Beatmap(raw=FULL_BEATMAP, with_styles=False)
+        bm = Beatmap(raw=FULL_BEATMAP)
         assert bm.events.background is not None
         assert bm.events.background.filename == "bg.jpg"
         assert len(bm.events.breaks) == 1
         assert bm.events.breaks[0].end_time == 15000.0
 
     def test_get_bpm_at(self):
-        bm = Beatmap(raw=FULL_BEATMAP, with_styles=False)
+        bm = Beatmap(raw=FULL_BEATMAP)
         assert bm.get_bpm_at(0) == 120.0
         assert bm.get_bpm_at(3000) == 120.0
 
     def test_get_slider_velocity_multiplier_at(self):
-        bm = Beatmap(raw=FULL_BEATMAP, with_styles=False)
+        bm = Beatmap(raw=FULL_BEATMAP)
         assert bm.get_slider_velocity_multiplier_at(0) == 1.0
         assert bm.get_slider_velocity_multiplier_at(6000) == 1.0
 
     def test_slider_duration_calculated(self):
-        bm = Beatmap(raw=FULL_BEATMAP, with_styles=False)
+        bm = Beatmap(raw=FULL_BEATMAP)
         slider = bm.hit_objects[2]
         assert isinstance(slider, Slider)
         assert slider.object_params.duration > 0
 
     def test_new_combo_on_second_circle(self):
-        bm = Beatmap(raw=FULL_BEATMAP, with_styles=False)
+        bm = Beatmap(raw=FULL_BEATMAP)
         assert bm.hit_objects[1].is_new_combo() is True
 
     def test_v7_ar_defaults_to_od(self):
-        bm = Beatmap(raw=V7_BEATMAP, with_styles=False)
+        bm = Beatmap(raw=V7_BEATMAP)
         assert bm.format_version == 7
         assert bm.difficulty.approach_rate == bm.difficulty.overall_difficulty
 
     def test_v14_ar_not_overridden(self):
-        bm = Beatmap(raw=FULL_BEATMAP, with_styles=False)
+        bm = Beatmap(raw=FULL_BEATMAP)
         assert bm.difficulty.approach_rate == 9.0
 
     def test_default_beatmap_sections_initialized(self):
-        bm = Beatmap(with_styles=False)
+        bm = Beatmap()
         assert bm.general is not None
         assert bm.editor is not None
         assert bm.metadata is not None
@@ -179,23 +179,23 @@ class TestBeatmap:
         assert bm.colours is not None
 
     def test_str_contains_version(self):
-        assert str(Beatmap(raw=FULL_BEATMAP, with_styles=False)).startswith("osu file format v14")
+        assert str(Beatmap(raw=FULL_BEATMAP)).startswith("osu file format v14")
 
     def test_str_no_triple_newline_before_colours(self):
-        assert "\n\n\n[Colours]" not in str(Beatmap(raw=FULL_BEATMAP, with_styles=False))
+        assert "\n\n\n[Colours]" not in str(Beatmap(raw=FULL_BEATMAP))
 
     def test_hold_note_parsed(self):
-        bm = Beatmap(raw=MANIA_BEATMAP, with_styles=False)
+        bm = Beatmap(raw=MANIA_BEATMAP)
         assert len(bm.hit_objects) == 1
         assert isinstance(bm.hit_objects[0], HoldNote)
         assert bm.hit_objects[0].object_params.end_time == 2000.0
 
     def test_utf8_bom_handled(self):
-        bm = Beatmap(raw="\ufeff" + FULL_BEATMAP, with_styles=False)
+        bm = Beatmap(raw="\ufeff" + FULL_BEATMAP)
         assert bm.format_version == 14
 
     def test_get_previous_timing_point_alias(self):
-        bm = Beatmap(raw=FULL_BEATMAP, with_styles=False)
+        bm = Beatmap(raw=FULL_BEATMAP)
         tp = bm.get_previous_timing_point(3000)
         assert tp is not None
         assert tp.time == 0

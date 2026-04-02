@@ -1,4 +1,4 @@
-from enum import Enum, IntEnum, IntFlag, auto
+from enum import Enum, IntEnum, IntFlag
 
 
 class GameMode(IntEnum):
@@ -41,13 +41,6 @@ class Mods(IntFlag):
     Key2 = 268435456
     ScoreV2 = 536870912
     Mirror = 1073741824
-
-
-class HitResult(Enum):
-    Great = auto()
-    Ok = auto()
-    Meh = auto()
-    Miss = auto()
 
 
 class CurveType(Enum):
