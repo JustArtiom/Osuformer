@@ -6,6 +6,7 @@ import requests
 
 from .auth import TokenManager
 from .beatmaps import BeatmapsEndpoint
+from .tags import TagsEndpoint
 
 _BASE_URL = "https://osu.ppy.sh/api/v2"
 _DEFAULT_CACHE_PATH = Path(".cache/osu_token.json")
@@ -23,6 +24,7 @@ class OsuClient:
         self._token_manager = TokenManager(cid, csecret, cache_path)
         self._session = requests.Session()
         self.beatmaps = BeatmapsEndpoint(self)
+        self.tags = TagsEndpoint(self)
 
     def get(self, path: str, **kwargs: Any) -> Any:
         token = self._token_manager.get_token()

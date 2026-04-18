@@ -16,6 +16,7 @@ config/**/local.yaml
 *.opus
 *.osu
 *.pt
+**/.DS_Store
 
 # ENV
 .env
