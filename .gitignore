@@ -3,6 +3,7 @@
 .pytest_cache/
 config/**/_*.yaml
 config/**/local.yaml
+checkpoints/
 .codex/
 .vscode/
 .claude/

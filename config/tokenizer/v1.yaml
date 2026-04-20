@@ -1,5 +1,42 @@
 tokenizer:
   version: "v1"
+
   dt_bin_ms: 10
-  coordinate_step: 4 # 512/4=128 x-values, 384/4=96 y-values
-  coordinate_padding: 128 # pixels outside playfield allowed on each side
+  context_ms: 5000
+  generate_ms: 10000
+  lookahead_ms: 5000
+
+  coordinate_step: 32
+  coordinate_padding: 128
+
+  distance_max_px: 640
+  snap_max: 16
+
+  hitsound_count: 73
+  volume_max: 100
+
+  slider_slides_max: 8
+  scroll_speed_max: 360
+
+  difficulty_bins: 40
+  difficulty_max_star: 10.0
+
+  cs_step: 0.5
+  ar_step: 0.5
+  od_step: 0.5
+  hp_step: 0.5
+  stat_max: 10.0
+
+  year_min: 2007
+  year_max: 2077
+
+  song_length_buckets: 61
+  song_length_bucket_s: 10
+
+  song_position_min: -1
+  song_position_max: 101
+
+  global_sv_min: 40
+  global_sv_max: 360
+
+  history_event_budget: 512
