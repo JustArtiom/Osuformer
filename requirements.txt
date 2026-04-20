@@ -1,0 +1,10 @@
+click>=8.1
+numpy>=2.0
+omegaconf>=2.3
+pyarrow>=15.0
+python-dotenv>=1.0
+requests>=2.31
+soundfile>=0.12
+torch>=2.3
+tqdm>=4.66
+matplotlib>=3.8
