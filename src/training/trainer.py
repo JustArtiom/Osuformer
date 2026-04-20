@@ -194,9 +194,14 @@ def _masked_cross_entropy(
     mask: Tensor,
     weights: Tensor | None = None,
 ) -> Tensor:
+    vocab_out = logits.shape[-1]
+    in_range = (targets >= 0) & (targets < vocab_out)
+    safe_targets = targets.clamp(min=0, max=vocab_out - 1)
     log_probs = logits.log_softmax(dim=-1)
-    gathered = log_probs.gather(dim=-1, index=targets.clamp(min=0).unsqueeze(-1)).squeeze(-1)
-    token_weight = mask.float() if weights is None else mask.float() * weights
+    gathered = log_probs.gather(dim=-1, index=safe_targets.unsqueeze(-1)).squeeze(-1)
+    token_weight = mask.float() * in_range.float()
+    if weights is not None:
+        token_weight = token_weight * weights
     loss = -gathered * token_weight
     denom = token_weight.sum().clamp(min=1)
     return loss.sum() / denom
