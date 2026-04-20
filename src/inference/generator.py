@@ -113,15 +113,16 @@ class WindowGenerator:
         expecting_rel = False
 
         while len(tokens) < self.max_decoder_len:
+            if expecting_rel:
+                assert current_raw_abs is not None
+                rel = self._rel(last_raw_bin, current_raw_abs)
+                tokens.append(self.vocab.encode_event(Event(EventType.REL_TIME, rel)))
+                last_raw_bin = current_raw_abs
+                expecting_rel = False
+                continue
             input_ids = torch.tensor(tokens, dtype=torch.long, device=self.device).unsqueeze(0)
             output = self.model(mel=mel_tensor, input_ids=input_ids)
             logits = output.logits[0, -1, : self._vocab_out]
-            if expecting_rel:
-                assert current_raw_abs is not None and last_raw_bin is not None
-                rel = self._rel(last_raw_bin, current_raw_abs)
-                tokens.append(self.vocab.encode_event(Event(EventType.REL_TIME, rel)))
-                expecting_rel = False
-                continue
             is_time = self._abs_start <= (logits.argmax().item()) < self._abs_end
             next_id = sample_next_token(logits, self.sampling, is_time_token=is_time)
             if next_id == int(SpecialToken.EOS):
