@@ -26,6 +26,7 @@ from src.osu_tokenizer import Vocab
 @click.option("--out", "out_path", required=True, type=click.Path(path_type=Path))
 @click.option("--stars", default=None, type=float)
 @click.option("--year", default=None, type=int)
+@click.option("--bpm", default=180.0, type=float, help="Song BPM used for timing points + slider length math.")
 @click.option("--descriptors", default="", type=str, help="Comma-separated descriptor tags.")
 @click.option("--cs", default=4.0, type=float)
 @click.option("--ar", default=9.0, type=float)
@@ -48,6 +49,7 @@ def main(
     out_path: Path,
     stars: float | None,
     year: int | None,
+    bpm: float,
     descriptors: str,
     cs: float,
     ar: float,
@@ -124,6 +126,7 @@ def main(
         vocab=vocab,
         tokenizer_cfg=cfg.tokenizer,
         audio_filename=audio.name,
+        bpm=bpm,
         title=title,
         artist=artist,
         creator=creator,
