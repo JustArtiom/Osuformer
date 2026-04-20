@@ -28,7 +28,12 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
     print(f"run: {cfg.training.run_name}  cache: {cfg.training.cache_name}")
 
     vocab = Vocab(cfg.tokenizer)
-    reader = CacheReader(cache_root=Path(cfg.paths.cache), name=cfg.training.cache_name)
+    print(f"loading cache (preload={cfg.training.cache_preload})...", flush=True)
+    reader = CacheReader(
+        cache_root=Path(cfg.paths.cache),
+        name=cfg.training.cache_name,
+        preload=cfg.training.cache_preload,
+    )
     all_ids = reader.map_ids()
     if not all_ids:
         raise SystemExit(f"no maps in cache {cfg.paths.cache}/{cfg.training.cache_name}")
@@ -46,7 +51,7 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
         history_event_count=cfg.training.history_event_count,
         epoch_length=epoch_length,
         seed=cfg.training.seed,
-        preload=cfg.training.cache_preload,
+        reader=reader,
     )
     val_ds = OsuDataset(
         cache_root=Path(cfg.paths.cache),
@@ -59,7 +64,7 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
         history_event_count=cfg.training.history_event_count,
         epoch_length=max(32, epoch_length // 100),
         seed=cfg.training.seed + 1,
-        preload=cfg.training.cache_preload,
+        reader=reader,
     )
     collator = Collator(vocab=vocab)
 

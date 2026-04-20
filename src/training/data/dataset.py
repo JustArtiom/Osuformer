@@ -41,9 +41,10 @@ class OsuDataset(Dataset[OsuSample]):
         epoch_length: int,
         seed: int,
         preload: bool = False,
+        reader: CacheReader | None = None,
     ):
         self._paths = CachePaths(root=cache_root / cache_name)
-        self._reader = CacheReader(cache_root=cache_root, name=cache_name, preload=preload)
+        self._reader = reader if reader is not None else CacheReader(cache_root=cache_root, name=cache_name, preload=preload)
         self._metadata: dict[int, MetadataRecord] = read_metadata(self._paths)
         available = set(self._reader.map_ids())
         self._beatmap_ids = [bid for bid in beatmap_ids if bid in available]
