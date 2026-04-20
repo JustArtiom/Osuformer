@@ -168,7 +168,7 @@ class Trainer:
         return total / max(1, tokens)
 
     def _maybe_save(self, metric: float | None) -> None:
-        self.ckpt_manager.save(
+        ckpt_path = self.ckpt_manager.save(
             step=self.step,
             model=self.model,
             optimizer=self.optimizer,
@@ -177,6 +177,8 @@ class Trainer:
         )
         save_history(self._history_path, self.history)
         plot_history(self._plot_path, self.history, self.cfg.training.run_name)
+        metric_str = f" metric={metric:.4f}" if metric is not None else ""
+        print(f"[ckpt]   step={self.step}  -> {ckpt_path.name}{metric_str}", flush=True)
 
     def _log(self, metrics: StepMetrics) -> None:
         print(
