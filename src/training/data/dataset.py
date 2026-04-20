@@ -66,12 +66,11 @@ class OsuDataset(Dataset[OsuSample]):
         return self._epoch_length
 
     def __getitem__(self, index: int) -> OsuSample:
-        rng = random.Random(self._base_seed + index)
-        bm_id = rng.choice(self._beatmap_ids)
+        bm_id = random.choice(self._beatmap_ids)
         map_rec = self._reader.load_map(bm_id)
         duration_ms = float(map_rec["duration_ms"])
         max_start = max(0.0, duration_ms - self._total_ms)
-        window_start_ms = rng.uniform(0.0, max_start)
+        window_start_ms = random.uniform(0.0, max_start)
         sample = self._build_sample(map_rec, window_start_ms)
         return sample
 
