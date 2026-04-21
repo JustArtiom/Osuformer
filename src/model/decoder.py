@@ -28,7 +28,6 @@ class TransformerDecoderBlock(nn.Module):
         self,
         x: Tensor,
         memory: Tensor,
-        tgt_mask: Tensor | None = None,
         tgt_key_padding_mask: Tensor | None = None,
         memory_key_padding_mask: Tensor | None = None,
     ) -> Tensor:
@@ -36,9 +35,9 @@ class TransformerDecoderBlock(nn.Module):
         x_norm = self.self_norm(x)
         attn_out, _ = self.self_attn(
             x_norm, x_norm, x_norm,
-            attn_mask=tgt_mask,
             key_padding_mask=tgt_key_padding_mask,
             need_weights=False,
+            is_causal=True,
         )
         x = residual + self.dropout(attn_out)
 
@@ -84,14 +83,10 @@ class TransformerDecoder(nn.Module):
     ) -> Tensor:
         x = self.embed(input_ids)
         x = self.pos(x)
-        seq_len = x.size(1)
-        causal_mask = torch.zeros(seq_len, seq_len, dtype=torch.bool, device=x.device)
-        causal_mask = torch.triu(torch.ones_like(causal_mask), diagonal=1)
         for block in self.blocks:
             x = block(
                 x,
                 memory=memory,
-                tgt_mask=causal_mask,
                 tgt_key_padding_mask=tgt_key_padding_mask,
                 memory_key_padding_mask=memory_key_padding_mask,
             )
