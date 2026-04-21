@@ -40,6 +40,7 @@ from src.osu_tokenizer import EventType, Vocab
 @click.option("--circle-bias", default=0.0, type=float, help="Additive logit bias for CIRCLE marker; positive = more circles.")
 @click.option("--slider-bias", default=0.0, type=float, help="Additive logit bias for SLIDER_HEAD marker; negative = fewer sliders.")
 @click.option("--spinner-bias", default=0.0, type=float, help="Additive logit bias for SPINNER marker.")
+@click.option("--min-spacing-ms", default=30.0, type=float, help="Minimum gap between consecutive hit-object times in ms; prevents same-bin stacking.")
 @click.option("--title", default="Generated", type=str)
 @click.option("--artist", default="osuformer", type=str)
 @click.option("--creator", default="osuformer", type=str)
@@ -66,6 +67,7 @@ def main(
     circle_bias: float,
     slider_bias: float,
     spinner_bias: float,
+    min_spacing_ms: float,
     title: str,
     artist: str,
     creator: str,
@@ -101,12 +103,14 @@ def main(
     if spinner_bias != 0:
         event_bias[EventType.SPINNER] = spinner_bias
 
+    min_spacing_bins = max(0, int(round(min_spacing_ms / cfg.tokenizer.dt_bin_ms)))
     sampling = SamplingConfig(
         temperature=temperature,
         time_temperature=time_temperature,
         top_p=top_p,
         top_k=top_k,
         event_bias=event_bias,
+        min_abs_time_spacing_bins=min_spacing_bins,
     )
     generator = WindowGenerator(
         model=model,

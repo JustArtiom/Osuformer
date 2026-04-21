@@ -122,6 +122,8 @@ class WindowGenerator:
         current_group: list[Event] = []
         current_raw_abs: int | None = None
         expecting_rel = False
+        last_emitted_window_local: int | None = None
+        min_spacing = max(0, self.sampling.min_abs_time_spacing_bins)
 
         while len(tokens) < self.max_decoder_len:
             if expecting_rel:
@@ -138,6 +140,10 @@ class WindowGenerator:
             masked_logits = logits.masked_fill(~mask, float("-inf"))
             if self._bias_vector.abs().sum().item() > 0:
                 masked_logits = masked_logits + self._bias_vector.to(masked_logits.device)
+            if min_spacing > 0 and last_emitted_window_local is not None:
+                lo = self._abs_start + last_emitted_window_local
+                hi = min(self._abs_end, self._abs_start + last_emitted_window_local + min_spacing)
+                masked_logits[lo:hi] = float("-inf")
             is_time = self._abs_start <= (masked_logits.argmax().item()) < self._abs_end
             next_id = sample_next_token(masked_logits, self.sampling, is_time_token=is_time)
             grammar.update(next_id)
@@ -156,6 +162,7 @@ class WindowGenerator:
                 current_raw_abs = window_start_bin + window_local
                 current_group = []
                 expecting_rel = True
+                last_emitted_window_local = window_local
             else:
                 current_group.append(decoded)
 
