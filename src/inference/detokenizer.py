@@ -307,6 +307,12 @@ def _build_slider(
         abs_bin, group = groups[j]
         has_last_anchor = any(ev.type == EventType.LAST_ANCHOR for ev in group)
         has_slider_end = any(ev.type == EventType.SLIDER_END for ev in group)
+        has_foreign_marker = any(
+            ev.type in (EventType.CIRCLE, EventType.SLIDER_HEAD, EventType.SPINNER, EventType.SPINNER_END)
+            for ev in group
+        )
+        if has_foreign_marker and not has_last_anchor and not has_slider_end:
+            return None, max(1, j - start_index)
         if has_last_anchor:
             last_anchor_pos = _find_pos(group, vocab)
             last_anchor_time_ms = float(abs_bin * tokenizer_cfg.dt_bin_ms)

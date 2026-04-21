@@ -39,6 +39,40 @@ def test_multi_anchor_slider_roundtrip() -> None:
     assert isinstance(out[0], Slider)
 
 
+def test_unclosed_slider_does_not_swallow_next_object() -> None:
+    from src.config.loader import load_config
+    from src.osu_tokenizer import Event, EventType, SpecialToken, Vocab
+    from src.inference.detokenizer import events_to_beatmap
+
+    cfg = load_config("config/config.yaml").tokenizer
+    vocab = Vocab(cfg)
+
+    def enc(t: EventType, v: int = 0) -> Event:
+        return Event(type=t, value=v)
+
+    events: list[Event] = [
+        enc(EventType.ABS_TIME, 100),
+        enc(EventType.DISTANCE, 0),
+        enc(EventType.POS, 10),
+        enc(EventType.HITSOUND, 0),
+        enc(EventType.VOLUME, 80),
+        enc(EventType.SLIDER_HEAD, 0),
+        enc(EventType.BEZIER_ANCHOR, 0),
+        enc(EventType.POS, 20),
+        enc(EventType.ABS_TIME, 200),
+        enc(EventType.DISTANCE, 0),
+        enc(EventType.POS, 30),
+        enc(EventType.HITSOUND, 0),
+        enc(EventType.VOLUME, 80),
+        enc(EventType.CIRCLE, 0),
+    ]
+    beatmap = events_to_beatmap(events, vocab=vocab, tokenizer_cfg=cfg, audio_filename="x.mp3", bpm=180.0)
+    from src.osu.hit_object import Circle, Slider
+
+    assert sum(1 for h in beatmap.hit_objects if isinstance(h, Circle)) == 1, "circle after unclosed slider must survive"
+    _ = SpecialToken
+
+
 def test_mixed_roundtrip_preserves_counts() -> None:
     inputs = [
         make_circle(time=1000.0),

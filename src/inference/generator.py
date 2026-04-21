@@ -151,7 +151,7 @@ class WindowGenerator:
 
         if current_group and current_raw_abs is not None:
             out_groups.append((current_raw_abs, current_group))
-        return out_groups
+        return _drop_trailing_open_objects(out_groups)
 
     def _rel(self, last: int | None, current: int) -> int:
         if last is None:
@@ -169,3 +169,18 @@ class WindowGenerator:
             pad = np.zeros((self._frames_per_window - window.shape[0], window.shape[1]), dtype=window.dtype)
             window = np.concatenate([window, pad], axis=0)
         return window
+
+
+_CLOSE_MARKERS: frozenset[EventType] = frozenset(
+    {EventType.CIRCLE, EventType.SLIDER_END, EventType.SPINNER_END}
+)
+
+
+def _drop_trailing_open_objects(
+    out_groups: list[tuple[int, list[Event]]],
+) -> list[tuple[int, list[Event]]]:
+    last_safe = -1
+    for idx, (_, group) in enumerate(out_groups):
+        if any(ev.type in _CLOSE_MARKERS for ev in group):
+            last_safe = idx
+    return out_groups[: last_safe + 1]
