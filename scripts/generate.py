@@ -119,7 +119,7 @@ def main(
 
     print("generating...")
     result = generator.generate(mel=mel, prompt=prompt, song_duration_ms=song_duration_ms)
-    print(f"generated {sum(1 for e in result.events if e.type.value == 'abs_time')} hit-object groups across {len(result.window_starts_ms)} windows")
+    _print_event_breakdown(result.events, len(result.window_starts_ms))
 
     beatmap = events_to_beatmap(
         result.events,
@@ -139,7 +139,52 @@ def main(
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(str(beatmap))
-    print(f"wrote {out_path}  ({len(beatmap.hit_objects)} hit objects)")
+    _print_beatmap_breakdown(beatmap, out_path)
+
+
+def _print_event_breakdown(events: list, window_count: int) -> None:
+    from src.osu_tokenizer import EventType
+
+    total_groups = sum(1 for e in events if e.type == EventType.ABS_TIME)
+    circles = sum(1 for e in events if e.type == EventType.CIRCLE)
+    slider_heads = sum(1 for e in events if e.type == EventType.SLIDER_HEAD)
+    slider_ends = sum(1 for e in events if e.type == EventType.SLIDER_END)
+    last_anchors = sum(1 for e in events if e.type == EventType.LAST_ANCHOR)
+    spinners = sum(1 for e in events if e.type == EventType.SPINNER)
+    spinner_ends = sum(1 for e in events if e.type == EventType.SPINNER_END)
+    timing_points = sum(1 for e in events if e.type == EventType.TIMING_POINT)
+    scroll_speeds = sum(1 for e in events if e.type == EventType.SCROLL_SPEED)
+    anchors = sum(
+        1
+        for e in events
+        if e.type
+        in {
+            EventType.BEZIER_ANCHOR,
+            EventType.PERFECT_ANCHOR,
+            EventType.CATMULL_ANCHOR,
+            EventType.LINEAR_ANCHOR,
+            EventType.RED_ANCHOR,
+        }
+    )
+    print(f"generated across {window_count} windows ({len(events)} events, {total_groups} ABS_TIME groups)")
+    print(f"  markers: {circles} circles  {slider_heads} slider_heads  {spinners} spinners")
+    print(f"  closes:  {last_anchors} last_anchors  {slider_ends} slider_ends  {spinner_ends} spinner_ends")
+    print(f"  inside:  {anchors} anchor/red events")
+    print(f"  timing:  {timing_points} timing_points  {scroll_speeds} scroll_speeds")
+    open_sliders = slider_heads - slider_ends
+    open_spinners = spinners - spinner_ends
+    if open_sliders or open_spinners:
+        print(f"  WARN:    {open_sliders} unclosed sliders, {open_spinners} unclosed spinners")
+
+
+def _print_beatmap_breakdown(beatmap, out_path) -> None:
+    from src.osu.hit_object import Circle, Slider, Spinner
+
+    n_circles = sum(1 for h in beatmap.hit_objects if isinstance(h, Circle))
+    n_sliders = sum(1 for h in beatmap.hit_objects if isinstance(h, Slider))
+    n_spinners = sum(1 for h in beatmap.hit_objects if isinstance(h, Spinner))
+    total = len(beatmap.hit_objects)
+    print(f"wrote {out_path}  ({total} hit objects: {n_circles} circles, {n_sliders} sliders, {n_spinners} spinners, {len(beatmap.timing_points)} timing_points)")
 
 
 def _song_duration_ms(path: Path) -> float:
