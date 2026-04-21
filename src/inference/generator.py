@@ -53,6 +53,14 @@ class WindowGenerator:
         self._vocab_out = vocab.vocab_size_out
         order = [er.type for er in vocab.output_ranges] + [er.type for er in vocab.input_ranges]
         self._type_order = order
+        self._bias_vector = self._build_bias_vector()
+
+    def _build_bias_vector(self) -> torch.Tensor:
+        bias = torch.zeros(self._vocab_out)
+        for event_type, value in self.sampling.event_bias.items():
+            start, end = self.vocab.token_range(event_type)
+            bias[start:end] = value
+        return bias
 
     @torch.no_grad()
     def generate(
@@ -128,6 +136,8 @@ class WindowGenerator:
             logits = step_logits[0, -1, : self._vocab_out]
             mask = grammar.current_mask().to(logits.device)
             masked_logits = logits.masked_fill(~mask, float("-inf"))
+            if self._bias_vector.abs().sum().item() > 0:
+                masked_logits = masked_logits + self._bias_vector.to(masked_logits.device)
             is_time = self._abs_start <= (masked_logits.argmax().item()) < self._abs_end
             next_id = sample_next_token(masked_logits, self.sampling, is_time_token=is_time)
             grammar.update(next_id)

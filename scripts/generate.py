@@ -17,7 +17,7 @@ from src.inference import (
     events_to_beatmap,
 )
 from src.model import Osuformer
-from src.osu_tokenizer import Vocab
+from src.osu_tokenizer import EventType, Vocab
 
 
 @click.command()
@@ -37,6 +37,9 @@ from src.osu_tokenizer import Vocab
 @click.option("--time-temperature", default=0.6, type=float)
 @click.option("--top-p", default=0.95, type=float)
 @click.option("--top-k", default=0, type=int)
+@click.option("--circle-bias", default=0.0, type=float, help="Additive logit bias for CIRCLE marker; positive = more circles.")
+@click.option("--slider-bias", default=0.0, type=float, help="Additive logit bias for SLIDER_HEAD marker; negative = fewer sliders.")
+@click.option("--spinner-bias", default=0.0, type=float, help="Additive logit bias for SPINNER marker.")
 @click.option("--title", default="Generated", type=str)
 @click.option("--artist", default="osuformer", type=str)
 @click.option("--creator", default="osuformer", type=str)
@@ -60,6 +63,9 @@ def main(
     time_temperature: float,
     top_p: float,
     top_k: int,
+    circle_bias: float,
+    slider_bias: float,
+    spinner_bias: float,
     title: str,
     artist: str,
     creator: str,
@@ -87,11 +93,20 @@ def main(
     model.to(device)
     print(f"loaded checkpoint from step {ckpt.get('step', '?')}  ({model.num_parameters()/1e6:.1f}M params)")
 
+    event_bias: dict[EventType, float] = {}
+    if circle_bias != 0:
+        event_bias[EventType.CIRCLE] = circle_bias
+    if slider_bias != 0:
+        event_bias[EventType.SLIDER_HEAD] = slider_bias
+    if spinner_bias != 0:
+        event_bias[EventType.SPINNER] = spinner_bias
+
     sampling = SamplingConfig(
         temperature=temperature,
         time_temperature=time_temperature,
         top_p=top_p,
         top_k=top_k,
+        event_bias=event_bias,
     )
     generator = WindowGenerator(
         model=model,

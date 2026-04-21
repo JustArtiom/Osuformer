@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 from torch import Tensor
+
+from src.osu_tokenizer import EventType
 
 
 @dataclass
@@ -12,6 +14,7 @@ class SamplingConfig:
     top_k: int = 0
     top_p: float = 1.0
     time_temperature: float = 0.6
+    event_bias: dict[EventType, float] = field(default_factory=dict)
 
 
 def sample_next_token(
