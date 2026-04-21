@@ -124,6 +124,8 @@ class Trainer:
             total_tokens += n_tokens
         if total_tokens == 0:
             self.optimizer.zero_grad(set_to_none=True)
+            if self.scheduler is not None:
+                self.scheduler.step()
             self.step += 1
             return StepMetrics(step=self.step, loss=float("nan"), lr=self._current_lr(), tokens=0)
         if self.cfg.training.grad_clip > 0:
