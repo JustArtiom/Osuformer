@@ -52,8 +52,6 @@ class Trainer:
         self.val_loader = val_loader
 
         raw_model = model.to(device)
-        if self.dist_env.enabled and device.type == "cuda":
-            raw_model = nn.SyncBatchNorm.convert_sync_batchnorm(raw_model)
 
         self.optimizer = AdamW(
             raw_model.parameters(),

@@ -92,6 +92,17 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
         if dist_env.enabled
         else None
     )
+    val_sampler = (
+        DistributedSampler(
+            val_ds,
+            num_replicas=dist_env.world_size,
+            rank=dist_env.global_rank,
+            shuffle=False,
+            seed=cfg.training.seed,
+        )
+        if dist_env.enabled
+        else None
+    )
 
     train_loader = DataLoader(
         train_ds,
@@ -108,6 +119,7 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
         val_ds,
         batch_size=cfg.training.batch_size,
         shuffle=False,
+        sampler=val_sampler,
         num_workers=min(2, cfg.training.num_workers),
         prefetch_factor=cfg.training.prefetch_factor if cfg.training.num_workers > 0 else None,
         pin_memory=cfg.training.pin_memory,
