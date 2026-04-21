@@ -6,11 +6,11 @@ model:
     num_layers: 24
     ffn_dim: 4096
     conv_kernel: 31
-    dropout: 0.0
+    dropout: 0.1
 
   decoder:
     d_model: 1024
     num_heads: 16
     num_layers: 24
     ffn_dim: 4096
-    dropout: 0.0
+    dropout: 0.1
