@@ -233,6 +233,18 @@ def _find_value(group: list[Event], event_type: EventType) -> int | None:
     return None
 
 
+def _anchor_events_after_marker(group: list[Event], marker: EventType) -> list[Event]:
+    out: list[Event] = []
+    found = False
+    for ev in group:
+        if not found:
+            if ev.type == marker:
+                found = True
+            continue
+        out.append(ev)
+    return out
+
+
 def _find_spinner_end(groups: list[tuple[int, list[Event]]], start_index: int, cfg: TokenizerConfig) -> float:
     head_bin = groups[start_index][0]
     for abs_bin, group in groups[start_index + 1 :]:
@@ -262,16 +274,40 @@ def _build_slider(
     last_anchor_pos: tuple[float, float] | None = None
     last_anchor_time_ms: float | None = None
     slides = 1
+
+    head_group_events = groups[start_index][1]
+    head_anchors = _anchor_events_after_marker(head_group_events, EventType.SLIDER_HEAD)
+    idx = 0
+    while idx < len(head_anchors):
+        ev = head_anchors[idx]
+        if ev.type == EventType.RED_ANCHOR:
+            if current_points:
+                segments.append(current_points)
+                current_points = []
+            idx += 1
+            if idx < len(head_anchors) and head_anchors[idx].type == EventType.POS:
+                current_points.append(vocab.grid.decode(head_anchors[idx].value))
+                idx += 1
+            continue
+        if ev.type in _ANCHOR_TO_CURVE:
+            new_type = _ANCHOR_TO_CURVE[ev.type]
+            if new_type != current_curve_type and current_points:
+                segments.append(current_points)
+                current_points = []
+            current_curve_type = new_type
+            idx += 1
+            if idx < len(head_anchors) and head_anchors[idx].type == EventType.POS:
+                current_points.append(vocab.grid.decode(head_anchors[idx].value))
+                idx += 1
+            continue
+        idx += 1
+
     j = start_index + 1
     while j < len(groups):
         abs_bin, group = groups[j]
-        if any(ev.type == EventType.SLIDER_END for ev in group):
-            for ev in group:
-                if ev.type == EventType.SLIDER_SLIDES:
-                    slides = max(1, min(8, ev.value))
-            j += 1
-            break
-        if any(ev.type == EventType.LAST_ANCHOR for ev in group):
+        has_last_anchor = any(ev.type == EventType.LAST_ANCHOR for ev in group)
+        has_slider_end = any(ev.type == EventType.SLIDER_END for ev in group)
+        if has_last_anchor:
             last_anchor_pos = _find_pos(group, vocab)
             last_anchor_time_ms = float(abs_bin * tokenizer_cfg.dt_bin_ms)
             if current_points:
@@ -280,37 +316,18 @@ def _build_slider(
                 current_points = []
             else:
                 segments.append([last_anchor_pos])
+        if has_slider_end:
+            for ev in group:
+                if ev.type == EventType.SLIDER_SLIDES:
+                    slides = max(1, min(8, ev.value))
             j += 1
-            continue
-        anchor_type: EventType | None = None
-        pos_event: tuple[float, float] | None = None
-        red_anchor = False
-        for ev in group:
-            if ev.type == EventType.RED_ANCHOR:
-                red_anchor = True
-            if ev.type in _ANCHOR_TO_CURVE:
-                anchor_type = ev.type
-            if ev.type == EventType.POS:
-                pos_event = vocab.grid.decode(ev.value)
-        if pos_event is None:
-            j += 1
-            continue
-        if red_anchor and current_points:
-            segments.append(current_points)
-            current_points = []
-        if anchor_type is not None:
-            new_type = _ANCHOR_TO_CURVE[anchor_type]
-            if new_type != current_curve_type and current_points:
-                segments.append(current_points)
-                current_points = []
-            current_curve_type = new_type
-        current_points.append(pos_event)
+            break
         j += 1
 
-    if not segments:
-        return None, j - start_index
     if last_anchor_pos is None or last_anchor_time_ms is None:
-        return None, j - start_index
+        return None, max(1, j - start_index)
+    if not segments:
+        return None, max(1, j - start_index)
 
     curves = [SliderCurve(curve_type=_infer_curve_type(seg, current_curve_type), curve_points=seg) for seg in segments]
     intended_duration = max(1.0, last_anchor_time_ms - head_time_ms)
