@@ -62,7 +62,7 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
         audio_cfg=cfg.audio,
         max_decoder_len=cfg.training.max_decoder_len,
         history_event_count=cfg.training.history_event_count,
-        epoch_length=max(32, epoch_length // 100),
+        epoch_length=max(512, epoch_length // 20),
         seed=cfg.training.seed + 1,
         reader=reader,
     )

@@ -45,16 +45,33 @@ class Osuformer(nn.Module):
         mel_key_padding_mask: Tensor | None = None,
         token_key_padding_mask: Tensor | None = None,
     ) -> OsuformerOutput:
+        memory = self.encode(mel, mel_key_padding_mask=mel_key_padding_mask)
+        logits = self.decode(
+            input_ids,
+            memory=memory,
+            token_key_padding_mask=token_key_padding_mask,
+            memory_key_padding_mask=mel_key_padding_mask,
+        )
+        return OsuformerOutput(logits=logits, encoder_out=memory)
+
+    def encode(self, mel: Tensor, mel_key_padding_mask: Tensor | None = None) -> Tensor:
         memory = self.encoder(mel, key_padding_mask=mel_key_padding_mask)
-        memory = self.enc_to_dec(memory)
+        return self.enc_to_dec(memory)
+
+    def decode(
+        self,
+        input_ids: Tensor,
+        memory: Tensor,
+        token_key_padding_mask: Tensor | None = None,
+        memory_key_padding_mask: Tensor | None = None,
+    ) -> Tensor:
         dec = self.decoder(
             input_ids,
             memory=memory,
             tgt_key_padding_mask=token_key_padding_mask,
-            memory_key_padding_mask=mel_key_padding_mask,
+            memory_key_padding_mask=memory_key_padding_mask,
         )
-        logits = self.head(dec)
-        return OsuformerOutput(logits=logits, encoder_out=memory)
+        return self.head(dec)
 
     def num_parameters(self) -> int:
         return sum(p.numel() for p in self.parameters())

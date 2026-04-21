@@ -39,7 +39,6 @@ class TransformerDecoderBlock(nn.Module):
             attn_mask=tgt_mask,
             key_padding_mask=tgt_key_padding_mask,
             need_weights=False,
-            is_causal=tgt_mask is not None,
         )
         x = residual + self.dropout(attn_out)
 

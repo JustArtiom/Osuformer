@@ -89,20 +89,28 @@ class Trainer:
         print("warming up data pipeline + compiling model kernels (first step may take 30-120s on MPS)...", flush=True)
         data_iter = _infinite(self.train_loader)
         last_metrics: StepMetrics | None = None
+        saved_at_step = -1
         while self.step < self.cfg.training.max_steps:
             last_metrics = self._train_step(data_iter)
             if last_metrics.tokens > 0:
                 self.history.log_train(self.step, last_metrics.loss)
             if self.step % self.cfg.training.log_every_steps == 0:
                 self._log(last_metrics)
-            if self.step > 0 and self.step % self.cfg.training.save_every_steps == 0:
-                self._maybe_save(last_metrics.loss)
             if self.val_loader is not None and self.step > 0 and self.step % self.cfg.training.val_every_steps == 0:
                 val_loss = self._validate()
                 self.history.log_val(self.step, val_loss)
                 self._maybe_save(val_loss)
+                saved_at_step = self.step
                 self.model.train()
-        self._maybe_save(last_metrics.loss if last_metrics is not None else None)
+            if (
+                self.step > 0
+                and self.step % self.cfg.training.save_every_steps == 0
+                and saved_at_step != self.step
+            ):
+                self._maybe_save(None)
+                saved_at_step = self.step
+        if saved_at_step != self.step:
+            self._maybe_save(None)
 
     def _train_step(self, data_iter) -> StepMetrics:
         start = time.time()
