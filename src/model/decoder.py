@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import torch
 from torch import Tensor, nn
 
 from src.config.schemas.model import DecoderConfig
 
+from .attention import MultiHeadAttention
 from .positional import SinusoidalPositionalEncoding
 
 
@@ -12,9 +12,9 @@ class TransformerDecoderBlock(nn.Module):
     def __init__(self, d_model: int, num_heads: int, ffn_dim: int, dropout: float):
         super().__init__()
         self.self_norm = nn.LayerNorm(d_model)
-        self.self_attn = nn.MultiheadAttention(d_model, num_heads, dropout=dropout, batch_first=True)
+        self.self_attn = MultiHeadAttention(d_model, num_heads, dropout=dropout)
         self.cross_norm = nn.LayerNorm(d_model)
-        self.cross_attn = nn.MultiheadAttention(d_model, num_heads, dropout=dropout, batch_first=True)
+        self.cross_attn = MultiHeadAttention(d_model, num_heads, dropout=dropout)
         self.ffn_norm = nn.LayerNorm(d_model)
         self.ffn = nn.Sequential(
             nn.Linear(d_model, ffn_dim),
@@ -28,27 +28,28 @@ class TransformerDecoderBlock(nn.Module):
         self,
         x: Tensor,
         memory: Tensor,
-        tgt_mask: Tensor,
         tgt_key_padding_mask: Tensor | None = None,
         memory_key_padding_mask: Tensor | None = None,
     ) -> Tensor:
         residual = x
         x_norm = self.self_norm(x)
-        attn_out, _ = self.self_attn(
-            x_norm, x_norm, x_norm,
-            attn_mask=tgt_mask,
+        attn_out = self.self_attn(
+            x_norm,
+            x_norm,
+            x_norm,
             key_padding_mask=tgt_key_padding_mask,
-            need_weights=False,
             is_causal=True,
         )
         x = residual + self.dropout(attn_out)
 
         residual = x
         x_norm = self.cross_norm(x)
-        cross_out, _ = self.cross_attn(
-            x_norm, memory, memory,
+        cross_out = self.cross_attn(
+            x_norm,
+            memory,
+            memory,
             key_padding_mask=memory_key_padding_mask,
-            need_weights=False,
+            is_causal=False,
         )
         x = residual + self.dropout(cross_out)
 
@@ -85,16 +86,10 @@ class TransformerDecoder(nn.Module):
     ) -> Tensor:
         x = self.embed(input_ids)
         x = self.pos(x)
-        seq_len = x.size(1)
-        causal_mask = torch.triu(
-            torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device),
-            diagonal=1,
-        )
         for block in self.blocks:
             x = block(
                 x,
                 memory=memory,
-                tgt_mask=causal_mask,
                 tgt_key_padding_mask=tgt_key_padding_mask,
                 memory_key_padding_mask=memory_key_padding_mask,
             )

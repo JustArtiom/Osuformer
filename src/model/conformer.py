@@ -5,6 +5,7 @@ from torch import Tensor, nn
 
 from src.config.schemas.model import EncoderConfig
 
+from .attention import MultiHeadAttention
 from .positional import SinusoidalPositionalEncoding
 
 
@@ -54,7 +55,7 @@ class ConformerBlock(nn.Module):
         super().__init__()
         self.ffn1 = FeedForward(d_model, ffn_dim, dropout)
         self.attn_norm = nn.LayerNorm(d_model)
-        self.attn = nn.MultiheadAttention(d_model, num_heads, dropout=dropout, batch_first=True)
+        self.attn = MultiHeadAttention(d_model, num_heads, dropout=dropout)
         self.attn_dropout = nn.Dropout(dropout)
         self.conv = ConformerConvModule(d_model, conv_kernel, dropout)
         self.ffn2 = FeedForward(d_model, ffn_dim, dropout)
@@ -63,7 +64,7 @@ class ConformerBlock(nn.Module):
     def forward(self, x: Tensor, key_padding_mask: Tensor | None = None) -> Tensor:
         x = x + 0.5 * self.ffn1(x)
         attn_in = self.attn_norm(x)
-        attn_out, _ = self.attn(attn_in, attn_in, attn_in, key_padding_mask=key_padding_mask, need_weights=False)
+        attn_out = self.attn(attn_in, attn_in, attn_in, key_padding_mask=key_padding_mask, is_causal=False)
         x = x + self.attn_dropout(attn_out)
         x = self.conv(x)
         x = x + 0.5 * self.ffn2(x)
