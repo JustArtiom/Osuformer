@@ -6,12 +6,14 @@ from pathlib import Path
 
 import torch
 from torch import Tensor, nn
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 
 from src.config.schemas.app import AppConfig
 from src.training.checkpoint import CheckpointManager
+from src.training.distributed import DistEnv, all_reduce_mean, barrier
 from src.training.plotting import TrainingHistory, load_history, plot_history, save_history
 from src.training.scheduler import build_scheduler
 
@@ -39,15 +41,22 @@ class Trainer:
         train_loader: DataLoader,
         val_loader: DataLoader | None,
         device: torch.device,
+        dist_env: DistEnv | None = None,
     ):
         self.cfg = cfg
-        self.model = model.to(device)
+        self.dist_env = dist_env if dist_env is not None else DistEnv(
+            world_size=1, global_rank=0, local_rank=0, is_main=True, enabled=False
+        )
+        self.device = device
         self.train_loader = train_loader
         self.val_loader = val_loader
-        self.device = device
+
+        raw_model = model.to(device)
+        if self.dist_env.enabled and device.type == "cuda":
+            raw_model = nn.SyncBatchNorm.convert_sync_batchnorm(raw_model)
 
         self.optimizer = AdamW(
-            model.parameters(),
+            raw_model.parameters(),
             lr=cfg.training.learning_rate,
             weight_decay=cfg.training.weight_decay,
             betas=(0.9, 0.95),
@@ -66,15 +75,27 @@ class Trainer:
 
         run_dir = Path(cfg.paths.checkpoints) / cfg.training.run_name
         self.run_dir = run_dir
-        self.ckpt_manager = CheckpointManager(
-            run_dir=run_dir,
-            keep_last_n=cfg.training.keep_last_n_checkpoints,
-            keep_best=cfg.training.keep_best_checkpoint,
-            best_metric_mode="min",
-        )
+        self.ckpt_manager: CheckpointManager | None = None
+        if self.dist_env.is_main:
+            self.ckpt_manager = CheckpointManager(
+                run_dir=run_dir,
+                keep_last_n=cfg.training.keep_last_n_checkpoints,
+                keep_best=cfg.training.keep_best_checkpoint,
+                best_metric_mode="min",
+            )
+        barrier()
+
         self.step = 0
         if cfg.training.resume:
-            self.step = self.ckpt_manager.load_latest(self.model, self.optimizer, self.scheduler, map_location=str(device))
+            self.step = self._load_latest(raw_model)
+
+        if self.dist_env.enabled and device.type == "cuda":
+            self.model: nn.Module = DDP(raw_model, device_ids=[device.index], output_device=device.index)
+            self.raw_model: nn.Module = raw_model
+        else:
+            self.model = raw_model
+            self.raw_model = raw_model
+
         self._history_path = run_dir / "history.json"
         self._plot_path = run_dir / "loss.png"
         self.history: TrainingHistory = load_history(self._history_path) if cfg.training.resume else TrainingHistory()
@@ -83,10 +104,23 @@ class Trainer:
         self._amp_enabled = self._amp_dtype != torch.float32 and device.type == "cuda"
         self._grad_accum = max(1, cfg.training.grad_accum_steps)
 
+    def _load_latest(self, raw_model: nn.Module) -> int:
+        latest_path = self.run_dir / "latest.pt"
+        if not latest_path.exists():
+            return 0
+        payload = torch.load(latest_path, map_location=str(self.device), weights_only=False)
+        raw_model.load_state_dict(payload["model"])
+        if payload.get("optimizer") is not None:
+            self.optimizer.load_state_dict(payload["optimizer"])
+        if self.scheduler is not None and payload.get("scheduler") is not None:
+            self.scheduler.load_state_dict(payload["scheduler"])
+        return int(payload.get("step", 0))
+
     def fit(self) -> None:
         self.model.train()
-        print(f"starting training at step {self.step} (target {self.cfg.training.max_steps})", flush=True)
-        print("warming up data pipeline + compiling model kernels (first step may take 30-120s on MPS)...", flush=True)
+        if self.dist_env.is_main:
+            print(f"starting training at step {self.step} (target {self.cfg.training.max_steps})", flush=True)
+            print("warming up data pipeline + compiling model kernels (first step may take 30-120s)...", flush=True)
         data_iter = _infinite(self.train_loader)
         last_metrics: StepMetrics | None = None
         saved_at_step = -1
@@ -94,7 +128,7 @@ class Trainer:
             last_metrics = self._train_step(data_iter)
             if last_metrics.tokens > 0:
                 self.history.log_train(self.step, last_metrics.loss)
-            if self.step % self.cfg.training.log_every_steps == 0:
+            if self.dist_env.is_main and self.step % self.cfg.training.log_every_steps == 0:
                 self._log(last_metrics)
             if self.val_loader is not None and self.step > 0 and self.step % self.cfg.training.val_every_steps == 0:
                 val_loss = self._validate()
@@ -175,12 +209,18 @@ class Trainer:
             n = int(loss_mask.sum().item())
             total += float(loss.item()) * n
             tokens += n
-        return total / max(1, tokens)
+        local_mean = total / max(1, tokens)
+        if self.dist_env.enabled:
+            return all_reduce_mean(local_mean, self.device)
+        return local_mean
 
     def _maybe_save(self, metric: float | None) -> None:
+        if not self.dist_env.is_main or self.ckpt_manager is None:
+            barrier()
+            return
         ckpt_path = self.ckpt_manager.save(
             step=self.step,
-            model=self.model,
+            model=self.raw_model,
             optimizer=self.optimizer,
             scheduler=self.scheduler,
             metric=metric,
@@ -189,6 +229,7 @@ class Trainer:
         plot_history(self._plot_path, self.history, self.cfg.training.run_name)
         metric_str = f" metric={metric:.4f}" if metric is not None else ""
         print(f"[ckpt]   step={self.step}  -> {ckpt_path.name}{metric_str}", flush=True)
+        barrier()
 
     def _log(self, metrics: StepMetrics) -> None:
         print(

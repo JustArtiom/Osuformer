@@ -6,6 +6,7 @@ import click
 import torch
 from dotenv import load_dotenv
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 from src.cache import CacheReader
 from src.config import with_config
@@ -13,6 +14,7 @@ from src.config.schemas.app import AppConfig
 from src.model import Osuformer
 from src.osu_tokenizer import Vocab
 from src.training.data import Collator, OsuDataset, split_beatmap_ids
+from src.training.distributed import destroy_distributed, setup_distributed
 from src.training.trainer import Trainer
 
 
@@ -22,13 +24,23 @@ from src.training.trainer import Trainer
 @with_config
 def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
     load_dotenv()
-    torch.manual_seed(cfg.training.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
-    print(f"device: {device}")
-    print(f"run: {cfg.training.run_name}  cache: {cfg.training.cache_name}")
+    dist_env = setup_distributed()
+    torch.manual_seed(cfg.training.seed + dist_env.global_rank)
+
+    if dist_env.enabled and torch.cuda.is_available():
+        device = torch.device(f"cuda:{dist_env.local_rank}")
+    else:
+        device = torch.device(
+            "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+        )
+
+    if dist_env.is_main:
+        print(f"device: {device}  world_size: {dist_env.world_size}")
+        print(f"run: {cfg.training.run_name}  cache: {cfg.training.cache_name}")
 
     vocab = Vocab(cfg.tokenizer)
-    print(f"loading cache (preload={cfg.training.cache_preload})...", flush=True)
+    if dist_env.is_main:
+        print(f"loading cache (preload={cfg.training.cache_preload})...", flush=True)
     reader = CacheReader(
         cache_root=Path(cfg.paths.cache),
         name=cfg.training.cache_name,
@@ -38,7 +50,8 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
     if not all_ids:
         raise SystemExit(f"no maps in cache {cfg.paths.cache}/{cfg.training.cache_name}")
     splits = split_beatmap_ids(all_ids, train_ratio=train_ratio, seed=cfg.training.seed)
-    print(f"train: {len(splits.train)} maps, val: {len(splits.val)} maps")
+    if dist_env.is_main:
+        print(f"train: {len(splits.train)} maps, val: {len(splits.val)} maps")
 
     train_ds = OsuDataset(
         cache_root=Path(cfg.paths.cache),
@@ -68,10 +81,23 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
     )
     collator = Collator(vocab=vocab)
 
+    train_sampler = (
+        DistributedSampler(
+            train_ds,
+            num_replicas=dist_env.world_size,
+            rank=dist_env.global_rank,
+            shuffle=True,
+            seed=cfg.training.seed,
+        )
+        if dist_env.enabled
+        else None
+    )
+
     train_loader = DataLoader(
         train_ds,
         batch_size=cfg.training.batch_size,
-        shuffle=True,
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
         num_workers=cfg.training.num_workers,
         prefetch_factor=cfg.training.prefetch_factor if cfg.training.num_workers > 0 else None,
         pin_memory=cfg.training.pin_memory,
@@ -95,10 +121,21 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
         vocab_size_out=vocab.vocab_size_out,
         max_decoder_len=cfg.training.max_decoder_len,
     )
-    print(f"model params: {model.num_parameters()/1e6:.1f}M")
+    if dist_env.is_main:
+        print(f"model params: {model.num_parameters()/1e6:.1f}M")
 
-    trainer = Trainer(cfg=cfg, model=model, train_loader=train_loader, val_loader=val_loader, device=device)
-    trainer.fit()
+    trainer = Trainer(
+        cfg=cfg,
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        device=device,
+        dist_env=dist_env,
+    )
+    try:
+        trainer.fit()
+    finally:
+        destroy_distributed()
 
 
 if __name__ == "__main__":
