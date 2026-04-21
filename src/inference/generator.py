@@ -11,6 +11,7 @@ from src.config.schemas.tokenizer import TokenizerConfig
 from src.model import Osuformer
 from src.osu_tokenizer import Event, EventType, SpecialToken, Vocab
 
+from .grammar import GrammarState
 from .prompt import GenerationPrompt, build_conditioning_tokens
 from .sampler import SamplingConfig, sample_next_token
 
@@ -91,6 +92,7 @@ class WindowGenerator:
         mel_slice = self._slice_mel(mel, window_start_ms)
         mel_tensor = torch.from_numpy(mel_slice.astype(np.float32)).unsqueeze(0).to(self.device)
         memory = self.model.encode(mel_tensor)
+        grammar = GrammarState(self.vocab)
 
         tokens: list[int] = list(prompt_conditioning_tokens)
         last_raw_bin: int | None = None
@@ -124,8 +126,11 @@ class WindowGenerator:
             input_ids = torch.tensor(tokens, dtype=torch.long, device=self.device).unsqueeze(0)
             step_logits = self.model.decode(input_ids, memory=memory)
             logits = step_logits[0, -1, : self._vocab_out]
-            is_time = self._abs_start <= (logits.argmax().item()) < self._abs_end
-            next_id = sample_next_token(logits, self.sampling, is_time_token=is_time)
+            mask = grammar.current_mask().to(logits.device)
+            masked_logits = logits.masked_fill(~mask, float("-inf"))
+            is_time = self._abs_start <= (masked_logits.argmax().item()) < self._abs_end
+            next_id = sample_next_token(masked_logits, self.sampling, is_time_token=is_time)
+            grammar.update(next_id)
             if next_id == int(SpecialToken.EOS):
                 break
             tokens.append(next_id)
