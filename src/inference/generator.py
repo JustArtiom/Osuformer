@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
 import torch
 from torch import Tensor
+from tqdm.auto import tqdm
 
 from src.config.schemas.audio import AudioConfig
 from src.config.schemas.tokenizer import TokenizerConfig
@@ -68,12 +70,15 @@ class WindowGenerator:
         mel: np.ndarray,
         prompt: GenerationPrompt,
         song_duration_ms: float,
+        show_progress: bool = True,
     ) -> GenerationResult:
         self.model.eval()
         events: list[tuple[int, list[Event]]] = []
         cond_tokens = build_conditioning_tokens(prompt, self.vocab, self.tokenizer_cfg)
         window_starts: list[float] = []
         window_start_ms = 0.0
+        total_windows = max(1, math.ceil(song_duration_ms / self.tokenizer_cfg.generate_ms))
+        pbar = tqdm(total=total_windows, desc="generating", unit="window", disable=not show_progress)
         while window_start_ms < song_duration_ms:
             window_starts.append(window_start_ms)
             window_events = self._generate_window(
@@ -84,6 +89,9 @@ class WindowGenerator:
             )
             events.extend(window_events)
             window_start_ms += self.tokenizer_cfg.generate_ms
+            pbar.set_postfix(events=len(events), refresh=False)
+            pbar.update(1)
+        pbar.close()
         max_abs_bin = int(round(song_duration_ms / self.tokenizer_cfg.dt_bin_ms))
         events = [(raw_abs, group) for raw_abs, group in events if raw_abs < max_abs_bin]
         flat: list[Event] = []
