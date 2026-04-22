@@ -135,7 +135,10 @@ def _build_timing_points(
     cfg: TokenizerConfig,
     bpm: float,
 ) -> list[TimingPoint]:
-    base_beat_length = 60000.0 / max(1.0, bpm)
+    inferred_beat_length = _infer_beat_length_ms(groups, cfg)
+    if bpm <= 0 and inferred_beat_length is None:
+        raise ValueError("No BPM provided and no BEAT tokens emitted to infer from.")
+    base_beat_length = inferred_beat_length if (bpm <= 0 and inferred_beat_length is not None) else 60000.0 / max(1.0, bpm)
     tps: list[TimingPoint] = [
         TimingPoint(time=0.0, beat_length=base_beat_length, uninherited=1, effects=Effects.NONE)
     ]
@@ -172,6 +175,25 @@ def _build_timing_points(
             seen_times.add(time_ms)
     tps.sort(key=lambda tp: tp.time)
     return tps
+
+
+def _infer_beat_length_ms(
+    groups: list[tuple[int, list[Event]]],
+    cfg: TokenizerConfig,
+) -> float | None:
+    beat_times_ms: list[float] = []
+    for abs_bin, group in groups:
+        if any(ev.type in (EventType.BEAT, EventType.MEASURE) for ev in group):
+            beat_times_ms.append(float(abs_bin * cfg.dt_bin_ms))
+    if len(beat_times_ms) < 5:
+        return None
+    beat_times_ms.sort()
+    deltas = [beat_times_ms[i + 1] - beat_times_ms[i] for i in range(len(beat_times_ms) - 1)]
+    deltas.sort()
+    median_delta = deltas[len(deltas) // 2]
+    if median_delta < 100.0 or median_delta > 2000.0:
+        return None
+    return median_delta
 
 
 def _state_at(time_ms: float, timing_points: list[TimingPoint]) -> _TimelineState:

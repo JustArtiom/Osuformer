@@ -26,7 +26,7 @@ from src.osu_tokenizer import EventType, Vocab
 @click.option("--out", "out_path", required=True, type=click.Path(path_type=Path))
 @click.option("--stars", default=None, type=float)
 @click.option("--year", default=None, type=int)
-@click.option("--bpm", default=180.0, type=float, help="Song BPM used for timing points + slider length math.")
+@click.option("--bpm", default=0.0, type=float, help="Song BPM. Use 0 to auto-infer from model's BEAT tokens (requires new-tokenizer model).")
 @click.option("--descriptors", default="", type=str, help="Comma-separated descriptor tags.")
 @click.option("--cs", default=4.0, type=float)
 @click.option("--ar", default=9.0, type=float)
@@ -143,16 +143,21 @@ def main(
 
     print("generating...")
     result = generator.generate(mel=mel, prompt=prompt, song_duration_ms=song_duration_ms)
-    if snap_subdivision > 0:
+    if snap_subdivision > 0 and bpm > 0:
         result.events[:] = _snap_events_to_beat(result.events, bpm=bpm, subdivision=snap_subdivision, dt_bin_ms=cfg.tokenizer.dt_bin_ms)
     _print_event_breakdown(result.events, len(result.window_starts_ms))
+    effective_bpm = _resolve_effective_bpm(result.events, cfg, bpm)
+    if effective_bpm is None:
+        raise SystemExit("Could not infer BPM from BEAT tokens and --bpm not set; rerun with --bpm <value>.")
+    if bpm <= 0:
+        print(f"inferred BPM: {effective_bpm:.2f}")
 
     beatmap = events_to_beatmap(
         result.events,
         vocab=vocab,
         tokenizer_cfg=cfg.tokenizer,
         audio_filename=audio.name,
-        bpm=bpm,
+        bpm=effective_bpm,
         title=title,
         artist=artist,
         creator=creator,
@@ -166,6 +171,18 @@ def main(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(str(beatmap))
     _print_beatmap_breakdown(beatmap, out_path)
+
+
+def _resolve_effective_bpm(events: list, cfg, explicit_bpm: float) -> float | None:
+    from src.inference.detokenizer import _group_by_abs_time, _infer_beat_length_ms
+
+    if explicit_bpm > 0:
+        return explicit_bpm
+    groups = _group_by_abs_time(events)
+    beat_length = _infer_beat_length_ms(groups, cfg.tokenizer)
+    if beat_length is None:
+        return None
+    return 60000.0 / beat_length
 
 
 def _snap_events_to_beat(events: list, bpm: float, subdivision: int, dt_bin_ms: int) -> list:
