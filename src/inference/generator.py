@@ -84,6 +84,8 @@ class WindowGenerator:
             )
             events.extend(window_events)
             window_start_ms += self.tokenizer_cfg.generate_ms
+        max_abs_bin = int(round(song_duration_ms / self.tokenizer_cfg.dt_bin_ms))
+        events = [(raw_abs, group) for raw_abs, group in events if raw_abs < max_abs_bin]
         flat: list[Event] = []
         for raw_abs, group in events:
             flat.append(Event(EventType.ABS_TIME, raw_abs))
