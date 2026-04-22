@@ -39,6 +39,7 @@ class SequenceBuilder:
         self._context_bin = tokenizer_cfg.context_ms // tokenizer_cfg.dt_bin_ms
         self._max_rel_bin = vocab.range_for(EventType.REL_TIME).max_value
         self._abs_token_start, self._abs_token_end = vocab.token_range(EventType.ABS_TIME)
+        self._rel_token_start, self._rel_token_end = vocab.token_range(EventType.REL_TIME)
 
     def build(
         self,
@@ -102,7 +103,7 @@ class SequenceBuilder:
             end = min(eos_idx, loss_mask.shape[0])
             loss_mask[start:end] = True
         if self.timing_jitter_bins > 0:
-            input_ids = self._jitter_abs_time(input_ids)
+            input_ids = self._jitter_time_tokens(input_ids)
         return SequenceSample(
             input_ids=input_ids,
             target_ids=target_ids,
@@ -110,14 +111,19 @@ class SequenceBuilder:
             length=input_ids.shape[0],
         )
 
-    def _jitter_abs_time(self, input_ids: Tensor) -> Tensor:
-        is_abs = (input_ids >= self._abs_token_start) & (input_ids < self._abs_token_end)
-        if not bool(is_abs.any().item()):
-            return input_ids
+    def _jitter_time_tokens(self, input_ids: Tensor) -> Tensor:
         jitter_hi = self.timing_jitter_bins + 1
         offsets = torch.randint(-self.timing_jitter_bins, jitter_hi, input_ids.shape, dtype=input_ids.dtype)
-        shifted = torch.clamp(input_ids + offsets, self._abs_token_start, self._abs_token_end - 1)
-        return torch.where(is_abs, shifted, input_ids)
+        is_abs = (input_ids >= self._abs_token_start) & (input_ids < self._abs_token_end)
+        is_rel = (input_ids >= self._rel_token_start) & (input_ids < self._rel_token_end)
+        out = input_ids
+        if bool(is_abs.any().item()):
+            shifted_abs = torch.clamp(out + offsets, self._abs_token_start, self._abs_token_end - 1)
+            out = torch.where(is_abs, shifted_abs, out)
+        if bool(is_rel.any().item()):
+            shifted_rel = torch.clamp(out + offsets, self._rel_token_start, self._rel_token_end - 1)
+            out = torch.where(is_rel, shifted_rel, out)
+        return out
 
     def _slice_groups(
         self,

@@ -51,23 +51,27 @@ def test_jitter_nonzero_changes_input_ids() -> None:
     assert not torch.equal(unjittered, jittered)
 
 
-def test_jitter_only_affects_abs_time_tokens() -> None:
+def test_jitter_only_affects_time_tokens() -> None:
     cfg = load_config("config/config.yaml").tokenizer
     vocab = Vocab(cfg)
     abs_start, abs_end = vocab.token_range(EventType.ABS_TIME)
+    rel_start, rel_end = vocab.token_range(EventType.REL_TIME)
     unjittered = _build_sample(0, seed=42)
     jittered = _build_sample(2, seed=42)
     diff_positions = (unjittered != jittered).nonzero(as_tuple=True)[0]
     assert len(diff_positions) > 0
     for pos in diff_positions:
         original_id = int(unjittered[pos].item())
-        assert abs_start <= original_id < abs_end, f"position {pos} was not ABS_TIME originally (id {original_id})"
+        is_abs = abs_start <= original_id < abs_end
+        is_rel = rel_start <= original_id < rel_end
+        assert is_abs or is_rel, f"position {pos} was not time-token originally (id {original_id})"
 
 
-def test_jitter_respects_max_bins() -> None:
+def test_jitter_respects_max_bins_and_ranges() -> None:
     cfg = load_config("config/config.yaml").tokenizer
     vocab = Vocab(cfg)
     abs_start, abs_end = vocab.token_range(EventType.ABS_TIME)
+    rel_start, rel_end = vocab.token_range(EventType.REL_TIME)
     unjittered = _build_sample(0, seed=42)
     jittered = _build_sample(2, seed=42)
     diff_positions = (unjittered != jittered).nonzero(as_tuple=True)[0]
@@ -76,7 +80,12 @@ def test_jitter_respects_max_bins() -> None:
         jitt = int(jittered[pos].item())
         offset = jitt - orig
         assert -2 <= offset <= 2
-        assert abs_start <= jitt < abs_end
+        if abs_start <= orig < abs_end:
+            assert abs_start <= jitt < abs_end
+        elif rel_start <= orig < rel_end:
+            assert rel_start <= jitt < rel_end
+        else:
+            raise AssertionError(f"jittered a non-time token at pos {pos} (orig id {orig})")
 
 
 def test_jitter_leaves_targets_unchanged() -> None:
