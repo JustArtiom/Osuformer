@@ -16,6 +16,7 @@ class SamplingConfig:
     time_temperature: float = 0.6
     event_bias: dict[EventType, float] = field(default_factory=dict)
     min_abs_time_spacing_bins: int = 0
+    eos_bias: float = 0.0
 
 
 def sample_next_token(

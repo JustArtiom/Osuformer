@@ -41,6 +41,8 @@ from src.osu_tokenizer import EventType, Vocab
 @click.option("--slider-bias", default=0.0, type=float, help="Additive logit bias for SLIDER_HEAD marker; negative = fewer sliders.")
 @click.option("--spinner-bias", default=0.0, type=float, help="Additive logit bias for SPINNER marker.")
 @click.option("--min-spacing-ms", default=30.0, type=float, help="Minimum gap between consecutive hit-object times in ms; prevents same-bin stacking.")
+@click.option("--eos-bias", default=0.0, type=float, help="Additive logit bias for EOS; negative = less likely to terminate windows early.")
+@click.option("--snap-subdivision", default=0, type=int, help="Post-process: snap event times to nearest 1/N beat subdivision (1/4=4, 1/8=8, 1/16=16). 0 disables.")
 @click.option("--title", default="Generated", type=str)
 @click.option("--artist", default="osuformer", type=str)
 @click.option("--creator", default="osuformer", type=str)
@@ -68,6 +70,8 @@ def main(
     slider_bias: float,
     spinner_bias: float,
     min_spacing_ms: float,
+    eos_bias: float,
+    snap_subdivision: int,
     title: str,
     artist: str,
     creator: str,
@@ -111,6 +115,7 @@ def main(
         top_k=top_k,
         event_bias=event_bias,
         min_abs_time_spacing_bins=min_spacing_bins,
+        eos_bias=eos_bias,
     )
     generator = WindowGenerator(
         model=model,
@@ -138,6 +143,8 @@ def main(
 
     print("generating...")
     result = generator.generate(mel=mel, prompt=prompt, song_duration_ms=song_duration_ms)
+    if snap_subdivision > 0:
+        result.events[:] = _snap_events_to_beat(result.events, bpm=bpm, subdivision=snap_subdivision, dt_bin_ms=cfg.tokenizer.dt_bin_ms)
     _print_event_breakdown(result.events, len(result.window_starts_ms))
 
     beatmap = events_to_beatmap(
@@ -159,6 +166,22 @@ def main(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(str(beatmap))
     _print_beatmap_breakdown(beatmap, out_path)
+
+
+def _snap_events_to_beat(events: list, bpm: float, subdivision: int, dt_bin_ms: int) -> list:
+    from src.osu_tokenizer import Event, EventType
+
+    beat_ms = 60000.0 / max(1.0, bpm)
+    tick_ms = beat_ms / max(1, subdivision)
+    tick_bins = tick_ms / dt_bin_ms
+    out: list = []
+    for ev in events:
+        if ev.type == EventType.ABS_TIME:
+            snapped = int(round(round(ev.value / tick_bins) * tick_bins))
+            out.append(Event(EventType.ABS_TIME, snapped))
+        else:
+            out.append(ev)
+    return out
 
 
 def _print_event_breakdown(events: list, window_count: int) -> None:

@@ -146,6 +146,10 @@ class WindowGenerator:
                 lo = self._abs_start + last_emitted_window_local
                 hi = min(self._abs_end, self._abs_start + last_emitted_window_local + min_spacing)
                 masked_logits[lo:hi] = float("-inf")
+            if self.sampling.eos_bias != 0.0:
+                eos_id = int(SpecialToken.EOS)
+                if 0 <= eos_id < self._vocab_out:
+                    masked_logits[eos_id] = masked_logits[eos_id] + self.sampling.eos_bias
             is_time = self._abs_start <= (masked_logits.argmax().item()) < self._abs_end
             next_id = sample_next_token(masked_logits, self.sampling, is_time_token=is_time)
             grammar.update(next_id)
