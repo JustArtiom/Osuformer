@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+import torch
 from torch import Tensor, nn
 
 from src.config.schemas.model import DecoderConfig
 
 from .attention import MultiHeadAttention
 from .positional import SinusoidalPositionalEncoding
+
+
+@dataclass
+class BlockCache:
+    self_kv: tuple[Tensor, Tensor] | None = None
+    cross_kv: tuple[Tensor, Tensor] | None = None
 
 
 class TransformerDecoderBlock(nn.Module):
@@ -58,6 +67,44 @@ class TransformerDecoderBlock(nn.Module):
         x = residual + self.dropout(self.ffn(x_norm))
         return x
 
+    def step(
+        self,
+        x: Tensor,
+        memory: Tensor,
+        cache: BlockCache,
+        memory_key_padding_mask: Tensor | None = None,
+    ) -> tuple[Tensor, BlockCache]:
+        residual = x
+        x_norm = self.self_norm(x)
+        q = self.self_attn.project_q(x_norm)
+        new_k, new_v = self.self_attn.project_kv(x_norm, x_norm)
+        if cache.self_kv is not None:
+            past_k, past_v = cache.self_kv
+            k = torch.cat([past_k, new_k], dim=2)
+            v = torch.cat([past_v, new_v], dim=2)
+            attn_out = self.self_attn.attend(q, k, v, key_padding_mask=None, is_causal=False)
+        else:
+            k, v = new_k, new_v
+            attn_out = self.self_attn.attend(q, k, v, key_padding_mask=None, is_causal=True)
+        x = residual + self.dropout(attn_out)
+
+        residual = x
+        x_norm = self.cross_norm(x)
+        q_cross = self.cross_attn.project_q(x_norm)
+        if cache.cross_kv is not None:
+            ck, cv = cache.cross_kv
+        else:
+            ck, cv = self.cross_attn.project_kv(memory, memory)
+        cross_out = self.cross_attn.attend(
+            q_cross, ck, cv, key_padding_mask=memory_key_padding_mask, is_causal=False
+        )
+        x = residual + self.dropout(cross_out)
+
+        residual = x
+        x_norm = self.ffn_norm(x)
+        x = residual + self.dropout(self.ffn(x_norm))
+        return x, BlockCache(self_kv=(k, v), cross_kv=(ck, cv))
+
 
 class TransformerDecoder(nn.Module):
     def __init__(self, config: DecoderConfig, vocab_size_in: int, max_len: int):
@@ -94,3 +141,26 @@ class TransformerDecoder(nn.Module):
                 memory_key_padding_mask=memory_key_padding_mask,
             )
         return self.final_norm(x)
+
+    def step(
+        self,
+        input_ids: Tensor,
+        memory: Tensor,
+        cache: list[BlockCache] | None,
+        start_pos: int,
+        memory_key_padding_mask: Tensor | None = None,
+    ) -> tuple[Tensor, list[BlockCache]]:
+        x = self.embed(input_ids)
+        x = self.pos(x, start_pos=start_pos)
+        new_cache: list[BlockCache] = []
+        for i, block in enumerate(self.blocks):
+            assert isinstance(block, TransformerDecoderBlock)
+            block_cache = cache[i] if cache is not None else BlockCache()
+            x, updated = block.step(
+                x,
+                memory=memory,
+                cache=block_cache,
+                memory_key_padding_mask=memory_key_padding_mask,
+            )
+            new_cache.append(updated)
+        return self.final_norm(x), new_cache

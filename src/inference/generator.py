@@ -135,50 +135,58 @@ class WindowGenerator:
         last_emitted_window_local: int | None = None
         min_spacing = max(0, self.sampling.min_abs_time_spacing_bins)
 
+        prompt_ids = torch.tensor(tokens, dtype=torch.long, device=self.device).unsqueeze(0)
+        step_logits, cache = self.model.decode_step(
+            prompt_ids, memory=memory, cache=None, start_pos=0
+        )
+        logits = step_logits[0, -1, : self._vocab_out]
+
         while len(tokens) < self.max_decoder_len:
             if expecting_rel:
                 assert current_raw_abs is not None
                 rel = self._rel(last_raw_bin, current_raw_abs)
-                tokens.append(self.vocab.encode_event(Event(EventType.REL_TIME, rel)))
+                next_id = self.vocab.encode_event(Event(EventType.REL_TIME, rel))
                 last_raw_bin = current_raw_abs
                 expecting_rel = False
-                continue
-            input_ids = torch.tensor(tokens, dtype=torch.long, device=self.device).unsqueeze(0)
-            step_logits = self.model.decode(input_ids, memory=memory)
-            logits = step_logits[0, -1, : self._vocab_out]
-            mask = grammar.current_mask().to(logits.device)
-            masked_logits = logits.masked_fill(~mask, float("-inf"))
-            if self._bias_vector.abs().sum().item() > 0:
-                masked_logits = masked_logits + self._bias_vector.to(masked_logits.device)
-            if min_spacing > 0 and last_emitted_window_local is not None:
-                lo = self._abs_start + last_emitted_window_local
-                hi = min(self._abs_end, self._abs_start + last_emitted_window_local + min_spacing)
-                masked_logits[lo:hi] = float("-inf")
-            if self.sampling.eos_bias != 0.0:
-                eos_id = int(SpecialToken.EOS)
-                if 0 <= eos_id < self._vocab_out:
-                    masked_logits[eos_id] = masked_logits[eos_id] + self.sampling.eos_bias
-            is_time = self._abs_start <= (masked_logits.argmax().item()) < self._abs_end
-            next_id = sample_next_token(masked_logits, self.sampling, is_time_token=is_time)
-            grammar.update(next_id)
-            if next_id == int(SpecialToken.EOS):
-                break
-            tokens.append(next_id)
-            decoded = self.vocab.decode_token(next_id)
-            if not isinstance(decoded, Event):
-                continue
-            if decoded.type == EventType.ABS_TIME:
-                if current_group and current_raw_abs is not None:
-                    out_groups.append((current_raw_abs, current_group))
-                window_local = decoded.value
-                if window_local >= generate_end_bin:
-                    break
-                current_raw_abs = window_start_bin + window_local
-                current_group = []
-                expecting_rel = True
-                last_emitted_window_local = window_local
             else:
-                current_group.append(decoded)
+                mask = grammar.current_mask().to(logits.device)
+                masked_logits = logits.masked_fill(~mask, float("-inf"))
+                if self._bias_vector.abs().sum().item() > 0:
+                    masked_logits = masked_logits + self._bias_vector.to(masked_logits.device)
+                if min_spacing > 0 and last_emitted_window_local is not None:
+                    lo = self._abs_start + last_emitted_window_local
+                    hi = min(self._abs_end, self._abs_start + last_emitted_window_local + min_spacing)
+                    masked_logits[lo:hi] = float("-inf")
+                if self.sampling.eos_bias != 0.0:
+                    eos_id = int(SpecialToken.EOS)
+                    if 0 <= eos_id < self._vocab_out:
+                        masked_logits[eos_id] = masked_logits[eos_id] + self.sampling.eos_bias
+                is_time = self._abs_start <= (masked_logits.argmax().item()) < self._abs_end
+                next_id = sample_next_token(masked_logits, self.sampling, is_time_token=is_time)
+                grammar.update(next_id)
+                if next_id == int(SpecialToken.EOS):
+                    break
+                decoded = self.vocab.decode_token(next_id)
+                if isinstance(decoded, Event):
+                    if decoded.type == EventType.ABS_TIME:
+                        if current_group and current_raw_abs is not None:
+                            out_groups.append((current_raw_abs, current_group))
+                        window_local = decoded.value
+                        if window_local >= generate_end_bin:
+                            break
+                        current_raw_abs = window_start_bin + window_local
+                        current_group = []
+                        expecting_rel = True
+                        last_emitted_window_local = window_local
+                    else:
+                        current_group.append(decoded)
+
+            tokens.append(next_id)
+            step_in = torch.tensor([[next_id]], dtype=torch.long, device=self.device)
+            step_logits, cache = self.model.decode_step(
+                step_in, memory=memory, cache=cache, start_pos=len(tokens) - 1
+            )
+            logits = step_logits[0, -1, : self._vocab_out]
 
         if current_group and current_raw_abs is not None:
             out_groups.append((current_raw_abs, current_group))

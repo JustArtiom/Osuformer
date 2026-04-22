@@ -19,20 +19,27 @@ class MultiHeadAttention(nn.Module):
         self.v_proj = nn.Linear(d_model, d_model)
         self.out_proj = nn.Linear(d_model, d_model)
 
-    def forward(
+    def project_q(self, query: Tensor) -> Tensor:
+        b, lq, _ = query.shape
+        return self.q_proj(query).view(b, lq, self.num_heads, self.head_dim).transpose(1, 2)
+
+    def project_kv(self, key: Tensor, value: Tensor) -> tuple[Tensor, Tensor]:
+        b, lk, _ = key.shape
+        k = self.k_proj(key).view(b, lk, self.num_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(value).view(b, lk, self.num_heads, self.head_dim).transpose(1, 2)
+        return k, v
+
+    def attend(
         self,
-        query: Tensor,
-        key: Tensor,
-        value: Tensor,
+        q: Tensor,
+        k: Tensor,
+        v: Tensor,
         key_padding_mask: Tensor | None = None,
         is_causal: bool = False,
     ) -> Tensor:
-        b, lq, _ = query.shape
-        lk = key.shape[1]
-        q = self.q_proj(query).view(b, lq, self.num_heads, self.head_dim).transpose(1, 2)
-        k = self.k_proj(key).view(b, lk, self.num_heads, self.head_dim).transpose(1, 2)
-        v = self.v_proj(value).view(b, lk, self.num_heads, self.head_dim).transpose(1, 2)
-
+        b = q.shape[0]
+        lq = q.shape[2]
+        lk = k.shape[2]
         dropout_p = self.dropout_p if self.training else 0.0
 
         if key_padding_mask is None:
@@ -65,3 +72,15 @@ class MultiHeadAttention(nn.Module):
 
         out = out.transpose(1, 2).contiguous().view(b, lq, self.d_model)
         return self.out_proj(out)
+
+    def forward(
+        self,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        key_padding_mask: Tensor | None = None,
+        is_causal: bool = False,
+    ) -> Tensor:
+        q = self.project_q(query)
+        k, v = self.project_kv(key, value)
+        return self.attend(q, k, v, key_padding_mask=key_padding_mask, is_causal=is_causal)

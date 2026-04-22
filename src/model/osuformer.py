@@ -9,7 +9,7 @@ from src.config.schemas.audio import AudioConfig
 from src.config.schemas.model import ModelConfig
 
 from .conformer import ConformerEncoder
-from .decoder import TransformerDecoder
+from .decoder import BlockCache, TransformerDecoder
 
 
 @dataclass
@@ -72,6 +72,23 @@ class Osuformer(nn.Module):
             memory_key_padding_mask=memory_key_padding_mask,
         )
         return self.head(dec)
+
+    def decode_step(
+        self,
+        input_ids: Tensor,
+        memory: Tensor,
+        cache: list[BlockCache] | None,
+        start_pos: int,
+        memory_key_padding_mask: Tensor | None = None,
+    ) -> tuple[Tensor, list[BlockCache]]:
+        dec, new_cache = self.decoder.step(
+            input_ids,
+            memory=memory,
+            cache=cache,
+            start_pos=start_pos,
+            memory_key_padding_mask=memory_key_padding_mask,
+        )
+        return self.head(dec), new_cache
 
     def num_parameters(self) -> int:
         return sum(p.numel() for p in self.parameters())

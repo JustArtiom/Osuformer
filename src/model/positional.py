@@ -16,6 +16,6 @@ class SinusoidalPositionalEncoding(nn.Module):
         pe[:, 1::2] = torch.cos(position * div_term)
         self.register_buffer("pe", pe.unsqueeze(0), persistent=False)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, start_pos: int = 0) -> Tensor:
         pe: Tensor = self.pe  # type: ignore[assignment]
-        return x + pe[:, : x.size(1)]
+        return x + pe[:, start_pos : start_pos + x.size(1)]
