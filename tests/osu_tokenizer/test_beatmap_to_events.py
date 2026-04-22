@@ -15,6 +15,7 @@ def test_circle_emits_expected_event_group() -> None:
     stream = beatmap_to_events(beatmap, window_start_ms=100.0, vocab=vocab, config=cfg)
     assert _types(stream.events) == [
         EventType.ABS_TIME,
+        EventType.SNAPPING,
         EventType.DISTANCE,
         EventType.POS,
         EventType.HITSOUND,

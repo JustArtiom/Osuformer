@@ -27,7 +27,7 @@ training:
   resume: true
 
   history_event_count: 256
-  max_decoder_len: 2048
+  max_decoder_len: 3072
 
   lr_scheduler:
     enabled: true

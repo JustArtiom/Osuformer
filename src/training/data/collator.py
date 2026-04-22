@@ -24,16 +24,17 @@ class Collator:
     def __init__(
         self,
         vocab: Vocab,
-        abs_time_weight: float = 3.0,
+        rhythm_weight: float = 3.0,
         default_weight: float = 1.0,
         pad_id: int = int(SpecialToken.PAD),
     ):
         self.pad_id = pad_id
-        self.abs_time_weight = abs_time_weight
+        self.rhythm_weight = rhythm_weight
         self.default_weight = default_weight
-        start, end = vocab.token_range(EventType.ABS_TIME)
-        self._abs_time_start = start
-        self._abs_time_end = end
+        self._rhythm_ranges: list[tuple[int, int]] = [
+            vocab.token_range(t)
+            for t in (EventType.ABS_TIME, EventType.BEAT, EventType.MEASURE, EventType.TIMING_POINT)
+        ]
 
     def __call__(self, samples: list[OsuSample]) -> Batch:
         mel = torch.stack([s.mel for s in samples], dim=0)
@@ -49,10 +50,12 @@ class Collator:
             target_ids[i, :n] = s.target_ids
             loss_mask[i, :n] = s.loss_mask
             token_pad_mask[i, :n] = False
-        is_abs_time = (target_ids >= self._abs_time_start) & (target_ids < self._abs_time_end)
+        is_rhythm = torch.zeros_like(target_ids, dtype=torch.bool)
+        for start, end in self._rhythm_ranges:
+            is_rhythm = is_rhythm | ((target_ids >= start) & (target_ids < end))
         loss_weights = torch.where(
-            is_abs_time,
-            torch.full_like(target_ids, fill_value=0, dtype=torch.float32).fill_(self.abs_time_weight),
+            is_rhythm,
+            torch.full_like(target_ids, fill_value=0, dtype=torch.float32).fill_(self.rhythm_weight),
             torch.full_like(target_ids, fill_value=0, dtype=torch.float32).fill_(self.default_weight),
         )
         return Batch(

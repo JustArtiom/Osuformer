@@ -29,6 +29,7 @@ def beatmap_to_events(
     grid = vocab.grid
     dt_bin = config.dt_bin_ms
     max_time_bin = vocab.range_for(EventType.ABS_TIME).max_value
+    snap_max = config.snap_max
 
     prev_x: float | None = None
     prev_y: float | None = None
@@ -38,6 +39,8 @@ def beatmap_to_events(
         abs_bin = int(round(obj_time_ms / dt_bin))
         if clamp_abs_time:
             abs_bin = max(0, min(max_time_bin, abs_bin))
+
+        snap = _compute_snap(float(obj.time), beatmap, snap_max)
 
         x, y = float(obj.x), float(obj.y)
         dist_px = 0
@@ -56,6 +59,7 @@ def beatmap_to_events(
                 _object_group(
                     marker=EventType.CIRCLE,
                     abs_bin=abs_bin,
+                    snap=snap,
                     dist_px=dist_px,
                     pos_value=pos_value,
                     hs_value=hs_value,
@@ -69,6 +73,7 @@ def beatmap_to_events(
                 _slider_group(
                     slider=obj,
                     abs_bin=abs_bin,
+                    snap=snap,
                     dist_px=dist_px,
                     pos_value=pos_value,
                     hs_value=hs_value,
@@ -78,6 +83,7 @@ def beatmap_to_events(
                     config=config,
                     window_start_ms=window_start_ms,
                     clamp_abs_time=clamp_abs_time,
+                    beatmap=beatmap,
                 )
             )
             end_x, end_y = _slider_end_position(obj)
@@ -87,6 +93,7 @@ def beatmap_to_events(
                 _spinner_group(
                     spinner=obj,
                     abs_bin=abs_bin,
+                    snap=snap,
                     dist_px=dist_px,
                     pos_value=pos_value,
                     hs_value=hs_value,
@@ -96,6 +103,7 @@ def beatmap_to_events(
                     config=config,
                     window_start_ms=window_start_ms,
                     clamp_abs_time=clamp_abs_time,
+                    beatmap=beatmap,
                 )
             )
             prev_x, prev_y = 256.0, 192.0
@@ -103,10 +111,38 @@ def beatmap_to_events(
     return EventStream(events=events)
 
 
+def _compute_snap(time_ms: float, beatmap: Beatmap, snap_max: int) -> int:
+    tp = _active_uninherited(time_ms, beatmap)
+    if tp is None or tp.beat_length <= 0:
+        return 0
+    beats = (time_ms - float(tp.time)) / tp.beat_length
+    for i in range(1, snap_max + 1):
+        if abs(beats - round(beats * i) / i) * tp.beat_length < 2.0:
+            return i
+    return 0
+
+
+def _active_uninherited(time_ms: float, beatmap: Beatmap):
+    active = None
+    for tp in beatmap.timing_points:
+        if tp.uninherited != 1 or tp.beat_length <= 0:
+            continue
+        if float(tp.time) <= time_ms + 1e-6:
+            active = tp
+        else:
+            break
+    if active is None:
+        for tp in beatmap.timing_points:
+            if tp.uninherited == 1 and tp.beat_length > 0:
+                return tp
+    return active
+
+
 def _object_group(
     *,
     marker: EventType,
     abs_bin: int,
+    snap: int,
     dist_px: int,
     pos_value: int,
     hs_value: int,
@@ -115,6 +151,7 @@ def _object_group(
 ) -> list[Event]:
     out: list[Event] = [
         Event(type=EventType.ABS_TIME, value=abs_bin),
+        Event(type=EventType.SNAPPING, value=snap),
         Event(type=EventType.DISTANCE, value=dist_px),
         Event(type=EventType.POS, value=pos_value),
         Event(type=EventType.HITSOUND, value=hs_value),
@@ -130,6 +167,7 @@ def _spinner_group(
     *,
     spinner: Spinner,
     abs_bin: int,
+    snap: int,
     dist_px: int,
     pos_value: int,
     hs_value: int,
@@ -139,23 +177,28 @@ def _spinner_group(
     config: TokenizerConfig,
     window_start_ms: float,
     clamp_abs_time: bool = True,
+    beatmap: Beatmap,
 ) -> list[Event]:
     head = _object_group(
         marker=EventType.SPINNER,
         abs_bin=abs_bin,
+        snap=snap,
         dist_px=dist_px,
         pos_value=pos_value,
         hs_value=hs_value,
         volume=volume,
         new_combo=new_combo,
     )
-    end_time_ms = float(spinner.object_params.end_time) - window_start_ms
+    end_time_abs_ms = float(spinner.object_params.end_time)
+    end_snap = _compute_snap(end_time_abs_ms, beatmap, config.snap_max)
+    end_time_ms = end_time_abs_ms - window_start_ms
     end_bin = int(round(end_time_ms / config.dt_bin_ms))
     if clamp_abs_time:
         max_bin = vocab.range_for(EventType.ABS_TIME).max_value
         end_bin = max(0, min(max_bin, end_bin))
     return head + [
         Event(type=EventType.ABS_TIME, value=end_bin),
+        Event(type=EventType.SNAPPING, value=end_snap),
         Event(type=EventType.SPINNER_END, value=0),
     ]
 
@@ -164,6 +207,7 @@ def _slider_group(
     *,
     slider: Slider,
     abs_bin: int,
+    snap: int,
     dist_px: int,
     pos_value: int,
     hs_value: int,
@@ -173,10 +217,12 @@ def _slider_group(
     config: TokenizerConfig,
     window_start_ms: float,
     clamp_abs_time: bool = True,
+    beatmap: Beatmap,
 ) -> list[Event]:
     head = _object_group(
         marker=EventType.SLIDER_HEAD,
         abs_bin=abs_bin,
+        snap=snap,
         dist_px=dist_px,
         pos_value=pos_value,
         hs_value=hs_value,
@@ -210,7 +256,9 @@ def _slider_group(
         last_point = last_curve.curve_points[-1]
         last_xy = (float(last_point[0]), float(last_point[1]))
 
-    end_time_ms = float(slider.time) + float(slider.object_params.duration) - window_start_ms
+    end_time_abs_ms = float(slider.time) + float(slider.object_params.duration)
+    end_snap = _compute_snap(end_time_abs_ms, beatmap, config.snap_max)
+    end_time_ms = end_time_abs_ms - window_start_ms
     end_bin = int(round(end_time_ms / config.dt_bin_ms))
     if clamp_abs_time:
         max_bin = vocab.range_for(EventType.ABS_TIME).max_value
@@ -220,6 +268,7 @@ def _slider_group(
 
     last_anchor = [
         Event(type=EventType.ABS_TIME, value=end_bin),
+        Event(type=EventType.SNAPPING, value=end_snap),
         Event(type=EventType.DISTANCE, value=last_dist),
         Event(type=EventType.POS, value=grid.encode(*last_xy)),
         Event(type=EventType.LAST_ANCHOR, value=0),
@@ -281,14 +330,23 @@ def collect_timing_events(
     out: list[Event] = []
     dt_bin = config.dt_bin_ms
     max_bin = vocab.range_for(EventType.ABS_TIME).max_value
-    for tp in beatmap.timing_points:
-        t = float(tp.time) - window_start_ms
-        abs_bin = int(round(t / dt_bin))
+
+    def clamp_bin(t_ms: float) -> int | None:
+        bin_val = int(round(t_ms / dt_bin))
         if clamp_abs_time:
-            if t < 0 or abs_bin > max_bin:
-                continue
-            abs_bin = max(0, min(max_bin, abs_bin))
-        out.append(Event(type=EventType.ABS_TIME, value=abs_bin))
+            if t_ms < 0 or bin_val > max_bin:
+                return None
+            return max(0, min(max_bin, bin_val))
+        return bin_val
+
+    last_time_ms = _last_event_time_ms(beatmap)
+    uninherited = [tp for tp in beatmap.timing_points if tp.uninherited == 1 and tp.beat_length > 0]
+    for tp in beatmap.timing_points:
+        t_local = float(tp.time) - window_start_ms
+        bin_val = clamp_bin(t_local)
+        if bin_val is None:
+            continue
+        out.append(Event(type=EventType.ABS_TIME, value=bin_val))
         if tp.uninherited == 1:
             out.append(Event(type=EventType.TIMING_POINT, value=0))
         else:
@@ -296,7 +354,43 @@ def collect_timing_events(
             sv_value = max(0, min(config.scroll_speed_max, sv_value))
             out.append(Event(type=EventType.SCROLL_SPEED, value=sv_value))
         out.append(Event(type=EventType.KIAI, value=1 if tp.is_kiai else 0))
+
+    for idx, tp in enumerate(uninherited):
+        section_start_ms = float(tp.time)
+        section_end_ms = (
+            float(uninherited[idx + 1].time) if idx + 1 < len(uninherited) else last_time_ms + tp.beat_length
+        )
+        meter = max(1, int(tp.meter))
+        beat_index = 1
+        time_ms = section_start_ms + tp.beat_length
+        while time_ms < section_end_ms - 0.5:
+            t_local = time_ms - window_start_ms
+            bin_val = clamp_bin(t_local)
+            if bin_val is not None:
+                out.append(Event(type=EventType.ABS_TIME, value=bin_val))
+                if beat_index % meter == 0:
+                    out.append(Event(type=EventType.MEASURE, value=0))
+                else:
+                    out.append(Event(type=EventType.BEAT, value=0))
+            beat_index += 1
+            time_ms = section_start_ms + beat_index * tp.beat_length
+
     return out
+
+
+def _last_event_time_ms(beatmap: Beatmap) -> float:
+    last_ms = 0.0
+    for obj in beatmap.hit_objects:
+        last_ms = max(last_ms, float(obj.time))
+        end = getattr(getattr(obj, "object_params", None), "end_time", None)
+        if end is not None:
+            last_ms = max(last_ms, float(end))
+        duration = getattr(getattr(obj, "object_params", None), "duration", None)
+        if duration is not None:
+            last_ms = max(last_ms, float(obj.time) + float(duration))
+    for tp in beatmap.timing_points:
+        last_ms = max(last_ms, float(tp.time))
+    return last_ms
 
 
 def merge_by_time(*streams: list[Event]) -> list[Event]:

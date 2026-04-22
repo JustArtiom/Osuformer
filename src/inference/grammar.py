@@ -20,6 +20,7 @@ class GrammarPhase(Enum):
 
 
 _HEADER_MODIFIERS: tuple[EventType, ...] = (
+    EventType.SNAPPING,
     EventType.DISTANCE,
     EventType.POS,
     EventType.HITSOUND,
@@ -90,10 +91,10 @@ class GrammarState:
         masks[GrammarPhase.HEADER_FRESH] = mk(_HEADER_MODIFIERS + _HEADER_TIMING + _HEADER_MARKERS)
         masks[GrammarPhase.IN_SLIDER_ANCHORS] = mk(_ANCHOR_TYPES + (EventType.POS, EventType.ABS_TIME))
         masks[GrammarPhase.NEED_ANCHOR_POS] = mk((EventType.POS,))
-        masks[GrammarPhase.SLIDER_END_HEADER] = mk((EventType.DISTANCE, EventType.POS, EventType.LAST_ANCHOR))
+        masks[GrammarPhase.SLIDER_END_HEADER] = mk((EventType.SNAPPING, EventType.DISTANCE, EventType.POS, EventType.LAST_ANCHOR))
         masks[GrammarPhase.AFTER_LAST_ANCHOR] = mk((EventType.SLIDER_SLIDES, EventType.SLIDER_END))
         masks[GrammarPhase.SPINNER_BODY] = mk((EventType.ABS_TIME,))
-        masks[GrammarPhase.SPINNER_END_HEADER] = mk((EventType.SPINNER_END,))
+        masks[GrammarPhase.SPINNER_END_HEADER] = mk((EventType.SNAPPING, EventType.SPINNER_END))
         return masks
 
 

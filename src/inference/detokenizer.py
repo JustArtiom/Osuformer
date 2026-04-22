@@ -50,7 +50,9 @@ def events_to_beatmap(
     i = 0
     while i < len(groups):
         abs_bin, group = groups[i]
-        time_ms = abs_bin * tokenizer_cfg.dt_bin_ms
+        raw_time_ms = float(abs_bin * tokenizer_cfg.dt_bin_ms)
+        snap = _find_value(group, EventType.SNAPPING) or 0
+        time_ms = _resnap_time_to_divisor(raw_time_ms, snap, timing_points)
         marker = _find_marker(group)
         pos = _find_pos(group, vocab)
         hs_value = _find_value(group, EventType.HITSOUND) or 0
@@ -89,7 +91,7 @@ def events_to_beatmap(
                 hit_objects.append(slider)
             i += consumed
         elif marker == EventType.SPINNER:
-            end_time_ms = _find_spinner_end(groups, i, tokenizer_cfg)
+            end_time_ms = _find_spinner_end(groups, i, tokenizer_cfg, timing_points)
             hit_objects.append(
                 Spinner(
                     x=256.0,
@@ -233,6 +235,34 @@ def _find_value(group: list[Event], event_type: EventType) -> int | None:
     return None
 
 
+def _resnap_time_to_divisor(raw_time_ms: float, snap: int, timing_points: list[TimingPoint]) -> float:
+    if snap <= 0:
+        return raw_time_ms
+    tp = _active_uninherited_tp(raw_time_ms, timing_points)
+    if tp is None or tp.beat_length <= 0:
+        return raw_time_ms
+    tick_ms = tp.beat_length / snap
+    offset = raw_time_ms - tp.time
+    snapped_offset = round(offset / tick_ms) * tick_ms
+    return tp.time + snapped_offset
+
+
+def _active_uninherited_tp(time_ms: float, timing_points: list[TimingPoint]) -> TimingPoint | None:
+    active: TimingPoint | None = None
+    for tp in timing_points:
+        if tp.uninherited != 1 or tp.beat_length <= 0:
+            continue
+        if tp.time <= time_ms + 1e-6:
+            active = tp
+        else:
+            break
+    if active is None:
+        for tp in timing_points:
+            if tp.uninherited == 1 and tp.beat_length > 0:
+                return tp
+    return active
+
+
 def _anchor_events_after_marker(group: list[Event], marker: EventType) -> list[Event]:
     out: list[Event] = []
     found = False
@@ -245,13 +275,21 @@ def _anchor_events_after_marker(group: list[Event], marker: EventType) -> list[E
     return out
 
 
-def _find_spinner_end(groups: list[tuple[int, list[Event]]], start_index: int, cfg: TokenizerConfig) -> float:
+def _find_spinner_end(
+    groups: list[tuple[int, list[Event]]],
+    start_index: int,
+    cfg: TokenizerConfig,
+    timing_points: list[TimingPoint] | None = None,
+) -> float:
     head_bin = groups[start_index][0]
     for abs_bin, group in groups[start_index + 1 :]:
-        for ev in group:
-            if ev.type == EventType.SPINNER_END:
-                return abs_bin * cfg.dt_bin_ms
-    return (head_bin + 100) * cfg.dt_bin_ms
+        if any(ev.type == EventType.SPINNER_END for ev in group):
+            raw_ms = float(abs_bin * cfg.dt_bin_ms)
+            snap = _find_value(group, EventType.SNAPPING) or 0
+            if timing_points is not None:
+                return _resnap_time_to_divisor(raw_ms, snap, timing_points)
+            return raw_ms
+    return float((head_bin + 100) * cfg.dt_bin_ms)
 
 
 def _build_slider(
@@ -315,7 +353,9 @@ def _build_slider(
             return None, max(1, j - start_index)
         if has_last_anchor:
             last_anchor_pos = _find_pos(group, vocab)
-            last_anchor_time_ms = float(abs_bin * tokenizer_cfg.dt_bin_ms)
+            raw_end_ms = float(abs_bin * tokenizer_cfg.dt_bin_ms)
+            snap = _find_value(group, EventType.SNAPPING) or 0
+            last_anchor_time_ms = _resnap_time_to_divisor(raw_end_ms, snap, timing_points)
             if current_points:
                 current_points.append(last_anchor_pos)
                 segments.append(current_points)
