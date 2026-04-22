@@ -19,17 +19,26 @@ class SequenceSample:
 
 
 class SequenceBuilder:
-    def __init__(self, vocab: Vocab, tokenizer_cfg: TokenizerConfig, max_len: int, history_event_count: int):
+    def __init__(
+        self,
+        vocab: Vocab,
+        tokenizer_cfg: TokenizerConfig,
+        max_len: int,
+        history_event_count: int,
+        timing_jitter_bins: int = 0,
+    ):
         self.vocab = vocab
         self.cfg = tokenizer_cfg
         self.max_len = max_len
         self.history_event_count = history_event_count
+        self.timing_jitter_bins = max(0, timing_jitter_bins)
         self._type_order = [er.type for er in vocab.output_ranges] + [er.type for er in vocab.input_ranges]
         self._abs_type_idx = self._type_order.index(EventType.ABS_TIME)
         total_ms = tokenizer_cfg.context_ms + tokenizer_cfg.generate_ms + tokenizer_cfg.lookahead_ms
         self._window_bin_count = total_ms // tokenizer_cfg.dt_bin_ms
         self._context_bin = tokenizer_cfg.context_ms // tokenizer_cfg.dt_bin_ms
         self._max_rel_bin = vocab.range_for(EventType.REL_TIME).max_value
+        self._abs_token_start, self._abs_token_end = vocab.token_range(EventType.ABS_TIME)
 
     def build(
         self,
@@ -92,12 +101,23 @@ class SequenceBuilder:
             start = min(sos_idx, loss_mask.shape[0])
             end = min(eos_idx, loss_mask.shape[0])
             loss_mask[start:end] = True
+        if self.timing_jitter_bins > 0:
+            input_ids = self._jitter_abs_time(input_ids)
         return SequenceSample(
             input_ids=input_ids,
             target_ids=target_ids,
             loss_mask=loss_mask,
             length=input_ids.shape[0],
         )
+
+    def _jitter_abs_time(self, input_ids: Tensor) -> Tensor:
+        is_abs = (input_ids >= self._abs_token_start) & (input_ids < self._abs_token_end)
+        if not bool(is_abs.any().item()):
+            return input_ids
+        jitter_hi = self.timing_jitter_bins + 1
+        offsets = torch.randint(-self.timing_jitter_bins, jitter_hi, input_ids.shape, dtype=input_ids.dtype)
+        shifted = torch.clamp(input_ids + offsets, self._abs_token_start, self._abs_token_end - 1)
+        return torch.where(is_abs, shifted, input_ids)
 
     def _slice_groups(
         self,

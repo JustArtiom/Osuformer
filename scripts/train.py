@@ -65,6 +65,7 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
         epoch_length=epoch_length,
         seed=cfg.training.seed,
         reader=reader,
+        timing_jitter_bins=cfg.training.timing_jitter_bins,
     )
     val_ds = OsuDataset(
         cache_root=Path(cfg.paths.cache),
@@ -78,6 +79,7 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
         epoch_length=max(512, epoch_length // 20),
         seed=cfg.training.seed + 1,
         reader=reader,
+        timing_jitter_bins=0,
     )
     collator = Collator(vocab=vocab)
 

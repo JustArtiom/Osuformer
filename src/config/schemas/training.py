@@ -34,4 +34,5 @@ class TrainingConfig:
     cache_preload: bool
     history_event_count: int
     max_decoder_len: int
+    timing_jitter_bins: int
     lr_scheduler: LrSchedulerConfig
