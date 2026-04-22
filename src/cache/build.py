@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import signal
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +16,21 @@ from .discovery import BeatmapsetDir, discover_beatmapsets, find_audio_file
 from .maps import parse_and_tokenize
 from .paths import CachePaths
 from .writer import AudioWriter, MapsWriter
+
+
+class _PerSetTimeout(Exception):
+    pass
+
+
+def _install_alarm(seconds: int) -> bool:
+    if seconds <= 0 or not hasattr(signal, "SIGALRM"):
+        return False
+
+    def _handler(signum, frame):
+        raise _PerSetTimeout(f"set processing exceeded {seconds}s")
+
+    signal.signal(signal.SIGALRM, _handler)
+    return True
 
 
 @dataclass
@@ -35,6 +51,7 @@ def build_cache(
     audio_cfg: AudioConfig,
     tokenizer_cfg: TokenizerConfig,
     limit: int | None = None,
+    set_timeout_s: int = 120,
 ) -> BuildStats:
     paths = CachePaths(root=cache_root / name)
     paths.ensure()
@@ -45,14 +62,25 @@ def build_cache(
     if limit is not None:
         sets = sets[:limit]
 
+    alarm_enabled = _install_alarm(set_timeout_s)
+
     with AudioWriter(paths) as audio_writer, MapsWriter(paths) as maps_writer:
         for beatmapset in tqdm(sets, desc="sets"):
             stats.sets_seen += 1
+            if alarm_enabled:
+                signal.alarm(set_timeout_s)
             try:
                 _process_set(beatmapset, audio_writer, maps_writer, audio_cfg, tokenizer_cfg, vocab, stats)
+            except _PerSetTimeout:
+                stats.errors += 1
+                tqdm.write(f"  timeout on set {beatmapset.set_id} at {beatmapset.path}")
+                continue
             except Exception:
                 stats.errors += 1
                 continue
+            finally:
+                if alarm_enabled:
+                    signal.alarm(0)
         audio_writer.flush_index()
         maps_writer.flush()
 

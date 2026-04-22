@@ -22,6 +22,7 @@ from src.config.loader import load_config
     type=str,
     help="Name of existing cache to hardlink audio.bin/audio_index.parquet/metadata.parquet from; skips mel recomputation.",
 )
+@click.option("--set-timeout", default=120, type=int, help="Per-set processing timeout in seconds; forces skip on hang (Unix only).")
 def main(
     name: str,
     songs: Path | None,
@@ -29,6 +30,7 @@ def main(
     config_path: Path,
     limit: int | None,
     reuse_audio_from: str | None,
+    set_timeout: int,
 ) -> None:
     cfg = load_config(str(config_path))
     songs_root = songs if songs is not None else Path(cfg.paths.data)
@@ -45,6 +47,7 @@ def main(
         audio_cfg=cfg.audio,
         tokenizer_cfg=cfg.tokenizer,
         limit=limit,
+        set_timeout_s=set_timeout,
     )
     print("=== cache build stats ===")
     print(f"  sets seen      : {stats.sets_seen}")
