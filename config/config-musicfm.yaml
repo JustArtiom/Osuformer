@@ -1,0 +1,7 @@
+_base_:
+  - dataset/v1.yaml
+  - paths/default.yaml
+  - audio/v3-musicfm.yaml
+  - tokenizer/v1.yaml
+  - models/md-musicfm.yaml
+  - training/default.yaml

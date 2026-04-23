@@ -1,0 +1,21 @@
+model:
+  version: "md-musicfm"
+  encoder:
+    type: "musicfm"
+    d_model: 1024
+    num_heads: 16
+    num_layers: 12
+    ffn_dim: 4096
+    conv_kernel: 31
+    dropout: 0.1
+    musicfm_model_path: "data/musicfm/pretrained_msd.pt"
+    musicfm_stats_path: "data/musicfm/msd_stats.json"
+    musicfm_layer: 12
+    freeze_first_n_layers: 0
+
+  decoder:
+    d_model: 768
+    num_heads: 12
+    num_layers: 12
+    ffn_dim: 3072
+    dropout: 0.1

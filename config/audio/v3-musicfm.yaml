@@ -1,0 +1,12 @@
+audio:
+  version: "v3-musicfm"
+  preset: "musicfm"
+  sample_rate: 24000
+  hop_ms: 10
+  win_ms: 85
+  n_mels: 128
+  n_fft: 2048
+  context_ms: 5000
+  generate_ms: 10000
+  lookahead_ms: 5000
+  stats_path: "data/musicfm/msd_stats.json"
