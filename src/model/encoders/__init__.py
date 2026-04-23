@@ -16,6 +16,10 @@ def build_audio_encoder(
 ) -> nn.Module:
     if encoder_cfg.type == "conformer_scratch":
         return ConformerScratchEncoder(encoder_cfg, audio_cfg, max_len=max_len)
+    if encoder_cfg.type == "musicfm":
+        from .musicfm import MusicFMEncoder
+
+        return MusicFMEncoder(encoder_cfg, audio_cfg)
     raise ValueError(f"unknown encoder type: {encoder_cfg.type!r}")
 
 
