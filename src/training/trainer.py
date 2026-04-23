@@ -117,6 +117,16 @@ class Trainer:
         self.model.train()
         if self.dist_env.is_main:
             print(f"starting training at step {self.step} (target {self.cfg.training.max_steps})", flush=True)
+        if self.step >= self.cfg.training.max_steps:
+            if self.dist_env.is_main:
+                print(
+                    f"nothing to do: current step {self.step} >= max_steps {self.cfg.training.max_steps}. "
+                    f"either (a) raise training.max_steps, (b) delete the checkpoints dir at {self.run_dir}, "
+                    f"or (c) use a different training.run_name.",
+                    flush=True,
+                )
+            return
+        if self.dist_env.is_main:
             print("warming up data pipeline + compiling model kernels (first step may take 30-120s)...", flush=True)
         data_iter = _infinite(self.train_loader)
         last_metrics: StepMetrics | None = None
