@@ -81,7 +81,11 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
         reader=reader,
         timing_jitter_bins=0,
     )
-    collator = Collator(vocab=vocab)
+    collator = Collator(
+        vocab=vocab,
+        rhythm_weight=cfg.training.rhythm_loss_weight,
+        slider_weight=cfg.training.slider_loss_weight,
+    )
 
     train_sampler = (
         DistributedSampler(

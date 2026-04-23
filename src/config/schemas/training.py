@@ -37,3 +37,5 @@ class TrainingConfig:
     timing_jitter_bins: int
     lr_scheduler: LrSchedulerConfig
     encoder_lr_scale: float = 1.0
+    rhythm_loss_weight: float = 3.0
+    slider_loss_weight: float = 1.0
