@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -29,6 +31,14 @@ def hash_audio_file(path: Path, chunk_size: int = 1 << 20) -> str:
 
 
 def compute_mel(path: Path, audio_cfg: AudioConfig) -> np.ndarray:
+    if audio_cfg.preset == "musicfm":
+        return _compute_mel_musicfm(path, audio_cfg)
+    if audio_cfg.preset == "default":
+        return _compute_mel_default(path, audio_cfg)
+    raise ValueError(f"unknown audio preset: {audio_cfg.preset!r}")
+
+
+def _compute_mel_default(path: Path, audio_cfg: AudioConfig) -> np.ndarray:
     data, sr = sf.read(str(path), dtype="float32", always_2d=True)
     mono = data.mean(axis=1)
     if sr != audio_cfg.sample_rate:
@@ -44,6 +54,42 @@ def compute_mel(path: Path, audio_cfg: AudioConfig) -> np.ndarray:
     mel = mel_basis @ power
     log_mel = np.log10(mel + 1e-10)
     return log_mel.T.astype(np.float16)
+
+
+def _compute_mel_musicfm(path: Path, audio_cfg: AudioConfig) -> np.ndarray:
+    import torch
+
+    from src.model.encoders.third_party.musicfm_features import MelSTFT
+
+    if audio_cfg.stats_path is None:
+        raise ValueError("musicfm preset requires audio.stats_path pointing to msd_stats.json")
+    mean, std = _load_musicfm_stats(audio_cfg.stats_path)
+    data, sr = sf.read(str(path), dtype="float32", always_2d=True)
+    mono = data.mean(axis=1)
+    if sr != audio_cfg.sample_rate:
+        mono = _resample_linear(mono, sr, audio_cfg.sample_rate)
+    extractor = _get_musicfm_extractor(audio_cfg.sample_rate, audio_cfg.n_fft, audio_cfg.hop_ms, audio_cfg.n_mels)
+    with torch.no_grad():
+        wav = torch.from_numpy(mono).unsqueeze(0)
+        mel = extractor(wav)[..., :-1]
+        mel = (mel - mean) / std
+    arr = mel.squeeze(0).cpu().numpy()
+    return arr.T.astype(np.float16)
+
+
+@lru_cache(maxsize=4)
+def _load_musicfm_stats(stats_path: str) -> tuple[float, float]:
+    with open(stats_path, "r") as f:
+        stats = json.load(f)
+    return float(stats["melspec_2048_mean"]), float(stats["melspec_2048_std"])
+
+
+@lru_cache(maxsize=4)
+def _get_musicfm_extractor(sample_rate: int, n_fft: int, hop_ms: int, n_mels: int):
+    from src.model.encoders.third_party.musicfm_features import MelSTFT
+
+    hop_length = int(round(hop_ms * sample_rate / 1000.0))
+    return MelSTFT(sample_rate=sample_rate, n_fft=n_fft, hop_length=hop_length, n_mels=n_mels, is_db=True).eval()
 
 
 def _resample_linear(y: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
