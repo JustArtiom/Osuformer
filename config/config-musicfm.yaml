@@ -5,3 +5,7 @@ _base_:
   - tokenizer/v1.yaml
   - models/md-musicfm.yaml
   - training/default.yaml
+
+training:
+  cache_name: "osuformer-v3"
+  encoder_lr_scale: 0.1

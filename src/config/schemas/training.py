@@ -36,3 +36,4 @@ class TrainingConfig:
     max_decoder_len: int
     timing_jitter_bins: int
     lr_scheduler: LrSchedulerConfig
+    encoder_lr_scale: float = 1.0

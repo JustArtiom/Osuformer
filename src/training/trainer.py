@@ -54,8 +54,7 @@ class Trainer:
         raw_model = model.to(device)
 
         self.optimizer = AdamW(
-            raw_model.parameters(),
-            lr=cfg.training.learning_rate,
+            _build_param_groups(raw_model, cfg.training.learning_rate, cfg.training.encoder_lr_scale),
             weight_decay=cfg.training.weight_decay,
             betas=(0.9, 0.95),
         )
@@ -237,6 +236,24 @@ class Trainer:
 
     def _current_lr(self) -> float:
         return float(self.optimizer.param_groups[0]["lr"])
+
+
+def _build_param_groups(model: nn.Module, base_lr: float, encoder_lr_scale: float) -> list[dict[str, object]]:
+    encoder = getattr(model, "encoder", None)
+    encoder_params: list[nn.Parameter] = []
+    encoder_ids: set[int] = set()
+    if encoder is not None:
+        for p in encoder.parameters():
+            if p.requires_grad:
+                encoder_params.append(p)
+                encoder_ids.add(id(p))
+    other_params: list[nn.Parameter] = [
+        p for p in model.parameters() if p.requires_grad and id(p) not in encoder_ids
+    ]
+    groups: list[dict[str, object]] = [{"params": other_params, "lr": base_lr}]
+    if encoder_params:
+        groups.append({"params": encoder_params, "lr": base_lr * encoder_lr_scale})
+    return groups
 
 
 def _masked_cross_entropy(
