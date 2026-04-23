@@ -22,6 +22,12 @@ from src.config.loader import load_config
     type=str,
     help="Name of existing cache to hardlink audio.bin/audio_index.parquet/metadata.parquet from; skips mel recomputation.",
 )
+@click.option(
+    "--reuse-maps-from",
+    default=None,
+    type=str,
+    help="Name of existing cache to hardlink maps.bin/maps_index.parquet/metadata.parquet from; skips map parsing.",
+)
 @click.option("--set-timeout", default=120, type=int, help="Per-set processing timeout in seconds; forces skip on hang (Unix only).")
 def main(
     name: str,
@@ -30,6 +36,7 @@ def main(
     config_path: Path,
     limit: int | None,
     reuse_audio_from: str | None,
+    reuse_maps_from: str | None,
     set_timeout: int,
 ) -> None:
     cfg = load_config(str(config_path))
@@ -40,6 +47,8 @@ def main(
     print(f"cache name   : {name}")
     if reuse_audio_from is not None:
         _reuse_audio_from(cache_dest, reuse_audio_from, name)
+    if reuse_maps_from is not None:
+        _reuse_maps_from(cache_dest, reuse_maps_from, name)
     stats = build_cache(
         songs_root=songs_root,
         cache_root=cache_dest,
@@ -60,14 +69,43 @@ def main(
 
 
 def _reuse_audio_from(cache_root: Path, source_name: str, target_name: str) -> None:
+    _reuse_files(
+        cache_root,
+        source_name,
+        target_name,
+        files=("audio.bin", "audio_index.parquet", "metadata.parquet"),
+        clear=("maps.bin", "maps_index.parquet", "maps.parquet"),
+        flag="--reuse-audio-from",
+    )
+
+
+def _reuse_maps_from(cache_root: Path, source_name: str, target_name: str) -> None:
+    _reuse_files(
+        cache_root,
+        source_name,
+        target_name,
+        files=("maps.bin", "maps_index.parquet", "metadata.parquet"),
+        clear=("audio.bin", "audio_index.parquet"),
+        flag="--reuse-maps-from",
+    )
+
+
+def _reuse_files(
+    cache_root: Path,
+    source_name: str,
+    target_name: str,
+    files: tuple[str, ...],
+    clear: tuple[str, ...],
+    flag: str,
+) -> None:
     source_dir = cache_root / source_name
     target_dir = cache_root / target_name
     if not source_dir.exists():
         raise SystemExit(f"source cache not found: {source_dir}")
     if source_name == target_name:
-        raise SystemExit("--reuse-audio-from must differ from --name")
+        raise SystemExit(f"{flag} must differ from --name")
     target_dir.mkdir(parents=True, exist_ok=True)
-    for filename in ("audio.bin", "audio_index.parquet", "metadata.parquet"):
+    for filename in files:
         src = source_dir / filename
         dst = target_dir / filename
         if not src.exists():
@@ -81,7 +119,7 @@ def _reuse_audio_from(cache_root: Path, source_name: str, target_name: str) -> N
         except OSError:
             print(f"  hardlink failed, copying: {filename}")
             shutil.copy2(src, dst)
-    for stale in ("maps.bin", "maps_index.parquet", "maps.parquet"):
+    for stale in clear:
         p = target_dir / stale
         if p.exists():
             p.unlink()
