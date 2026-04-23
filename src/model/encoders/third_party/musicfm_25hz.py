@@ -91,6 +91,7 @@ class MusicFM25Hz(nn.Module):
             state = torch.load(model_path, map_location="cpu")
             sd = state["state_dict"] if "state_dict" in state else state
             sd = {k[6:] if k.startswith("model.") else k: v for k, v in sd.items()}
+            sd = {k: v for k, v in sd.items() if not k.startswith("preprocessor_melspec_2048.")}
             self.load_state_dict(sd, strict=True)
 
     @torch.no_grad()
