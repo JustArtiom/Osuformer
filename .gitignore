@@ -23,3 +23,6 @@ checkpoints/
 
 # Cache
 .cache/
+
+# Data (downloaded weights, stats, etc.)
+data/
