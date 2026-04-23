@@ -24,9 +24,12 @@ class MusicFMEncoder(nn.Module):
         )
         del self.musicfm.preprocessor_melspec_2048
         del self.musicfm.linear
-        for attr in list(vars(self.musicfm)):
+        del self.musicfm.cls_token
+        for attr in list(self.musicfm._modules.keys()):
             if attr.startswith("quantizer_"):
                 delattr(self.musicfm, attr)
+        if hasattr(self.musicfm.conformer, "pos_conv_embed"):
+            del self.musicfm.conformer.pos_conv_embed
         self.layer_ix = encoder_cfg.musicfm_layer
         if not 0 <= self.layer_ix <= 12:
             raise ValueError(f"musicfm_layer must be in [0, 12], got {self.layer_ix}")

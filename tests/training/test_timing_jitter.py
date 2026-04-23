@@ -42,13 +42,13 @@ def _build_sample(jitter_bins: int, seed: int = 0) -> torch.Tensor:
 def test_jitter_zero_produces_stable_output() -> None:
     a = _build_sample(0, seed=42)
     b = _build_sample(0, seed=7)
-    assert torch.equal(a, b)
+    assert bool((a == b).all())
 
 
 def test_jitter_nonzero_changes_input_ids() -> None:
     unjittered = _build_sample(0, seed=42)
     jittered = _build_sample(2, seed=42)
-    assert not torch.equal(unjittered, jittered)
+    assert not bool((unjittered == jittered).all())
 
 
 def test_jitter_only_affects_time_tokens() -> None:
@@ -117,6 +117,6 @@ def test_jitter_leaves_targets_unchanged() -> None:
         map_record={"hitsounded": True, "circle_size": 4.0, "approach_rate": 9.0, "overall_difficulty": 8.0, "hp_drain_rate": 6.0, "slider_multiplier": 1.4, "duration_ms": 5000.0},
         metadata=None, window_start_ms=0.0,
     )
-    assert torch.equal(clean.target_ids, jittered.target_ids)
-    assert torch.equal(clean.loss_mask, jittered.loss_mask)
-    assert not torch.equal(clean.input_ids, jittered.input_ids)
+    assert bool((clean.target_ids == jittered.target_ids).all())
+    assert bool((clean.loss_mask == jittered.loss_mask).all())
+    assert not bool((clean.input_ids == jittered.input_ids).all())
