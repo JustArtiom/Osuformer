@@ -39,10 +39,14 @@ def _from_dict(cls: type[T], data: Any) -> T:
     from typing import get_type_hints
 
     hints = get_type_hints(cls)
-    return cls(**{
-        f.name: _from_dict(hints[f.name], data[f.name]) if is_dataclass(hints[f.name]) else data[f.name]
-        for f in dc_fields(cls)  # type: ignore[arg-type]
-    })
+    kwargs: dict[str, Any] = {}
+    for f in dc_fields(cls):  # type: ignore[arg-type]
+        if f.name not in data:
+            continue
+        kwargs[f.name] = (
+            _from_dict(hints[f.name], data[f.name]) if is_dataclass(hints[f.name]) else data[f.name]
+        )
+    return cls(**kwargs)
 
 
 def load_config(

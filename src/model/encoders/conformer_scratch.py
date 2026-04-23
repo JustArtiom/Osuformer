@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import torch
 from torch import Tensor, nn
 
+from src.config.schemas.audio import AudioConfig
 from src.config.schemas.model import EncoderConfig
 
-from .attention import MultiHeadAttention
-from .positional import SinusoidalPositionalEncoding
+from ..attention import MultiHeadAttention
+from ..positional import SinusoidalPositionalEncoding
 
 
 class FeedForward(nn.Module):
@@ -71,27 +71,30 @@ class ConformerBlock(nn.Module):
         return self.final_norm(x)
 
 
-class ConformerEncoder(nn.Module):
-    def __init__(self, config: EncoderConfig, n_mels: int, max_len: int):
+class ConformerScratchEncoder(nn.Module):
+    def __init__(self, encoder_cfg: EncoderConfig, audio_cfg: AudioConfig, max_len: int):
         super().__init__()
-        self.input_proj = nn.Linear(n_mels, config.d_model)
-        self.pos = SinusoidalPositionalEncoding(config.d_model, max_len=max_len)
+        self.input_proj = nn.Linear(audio_cfg.n_mels, encoder_cfg.d_model)
+        self.pos = SinusoidalPositionalEncoding(encoder_cfg.d_model, max_len=max_len)
         self.blocks = nn.ModuleList(
             [
                 ConformerBlock(
-                    d_model=config.d_model,
-                    num_heads=config.num_heads,
-                    ffn_dim=config.ffn_dim,
-                    conv_kernel=config.conv_kernel,
-                    dropout=config.dropout,
+                    d_model=encoder_cfg.d_model,
+                    num_heads=encoder_cfg.num_heads,
+                    ffn_dim=encoder_cfg.ffn_dim,
+                    conv_kernel=encoder_cfg.conv_kernel,
+                    dropout=encoder_cfg.dropout,
                 )
-                for _ in range(config.num_layers)
+                for _ in range(encoder_cfg.num_layers)
             ]
         )
+        self.output_dim = encoder_cfg.d_model
+        self.feature_rate_hz = 1000.0 / audio_cfg.hop_ms
 
     def forward(self, mel: Tensor, key_padding_mask: Tensor | None = None) -> Tensor:
         x = self.input_proj(mel)
         x = self.pos(x)
         for block in self.blocks:
+            assert isinstance(block, ConformerBlock)
             x = block(x, key_padding_mask=key_padding_mask)
         return x

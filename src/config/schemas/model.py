@@ -9,6 +9,7 @@ class EncoderConfig:
     ffn_dim: int
     conv_kernel: int
     dropout: float
+    type: str = "conformer_scratch"
 
 
 @dataclass

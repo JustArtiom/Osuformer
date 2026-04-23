@@ -8,8 +8,8 @@ from torch import Tensor, nn
 from src.config.schemas.audio import AudioConfig
 from src.config.schemas.model import ModelConfig
 
-from .conformer import ConformerEncoder
 from .decoder import BlockCache, TransformerDecoder
+from .encoders import build_audio_encoder
 
 
 @dataclass
@@ -30,10 +30,11 @@ class Osuformer(nn.Module):
         super().__init__()
         total_ms = audio_cfg.context_ms + audio_cfg.generate_ms + audio_cfg.lookahead_ms
         max_audio_frames = int(total_ms / audio_cfg.hop_ms) + 16
-        self.encoder = ConformerEncoder(model_cfg.encoder, n_mels=audio_cfg.n_mels, max_len=max_audio_frames)
+        self.encoder = build_audio_encoder(model_cfg.encoder, audio_cfg, max_len=max_audio_frames)
         self.decoder = TransformerDecoder(model_cfg.decoder, vocab_size_in=vocab_size_in, max_len=max_decoder_len)
-        if model_cfg.encoder.d_model != model_cfg.decoder.d_model:
-            self.enc_to_dec = nn.Linear(model_cfg.encoder.d_model, model_cfg.decoder.d_model)
+        encoder_dim = int(getattr(self.encoder, "output_dim", model_cfg.encoder.d_model))
+        if encoder_dim != model_cfg.decoder.d_model:
+            self.enc_to_dec = nn.Linear(encoder_dim, model_cfg.decoder.d_model)
         else:
             self.enc_to_dec = nn.Identity()
         self.head = nn.Linear(model_cfg.decoder.d_model, vocab_size_out, bias=False)
