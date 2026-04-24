@@ -208,7 +208,7 @@ def _print_event_breakdown(events: list, window_count: int) -> None:
     circles = sum(1 for e in events if e.type == EventType.CIRCLE)
     slider_heads = sum(1 for e in events if e.type == EventType.SLIDER_HEAD)
     slider_ends = sum(1 for e in events if e.type == EventType.SLIDER_END)
-    last_anchors = sum(1 for e in events if e.type == EventType.LAST_ANCHOR)
+    last_anchors = 0
     spinners = sum(1 for e in events if e.type == EventType.SPINNER)
     spinner_ends = sum(1 for e in events if e.type == EventType.SPINNER_END)
     timing_points = sum(1 for e in events if e.type == EventType.TIMING_POINT)

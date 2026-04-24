@@ -41,7 +41,7 @@ class Collator:
             vocab.token_range(t)
             for t in (
                 EventType.SLIDER_END,
-                EventType.LAST_ANCHOR,
+                EventType.DURATION,
                 EventType.SLIDER_SLIDES,
                 EventType.SCROLL_SPEED,
             )

@@ -51,20 +51,20 @@ def test_unclosed_slider_does_not_swallow_next_object() -> None:
         return Event(type=t, value=v)
 
     events: list[Event] = [
+        enc(EventType.SLIDER_HEAD, 0),
         enc(EventType.ABS_TIME, 100),
         enc(EventType.DISTANCE, 0),
         enc(EventType.POS, 10),
         enc(EventType.HITSOUND, 0),
         enc(EventType.VOLUME, 80),
-        enc(EventType.SLIDER_HEAD, 0),
         enc(EventType.BEZIER_ANCHOR, 0),
         enc(EventType.POS, 20),
+        enc(EventType.CIRCLE, 0),
         enc(EventType.ABS_TIME, 200),
         enc(EventType.DISTANCE, 0),
         enc(EventType.POS, 30),
         enc(EventType.HITSOUND, 0),
         enc(EventType.VOLUME, 80),
-        enc(EventType.CIRCLE, 0),
     ]
     beatmap = events_to_beatmap(events, vocab=vocab, tokenizer_cfg=cfg, audio_filename="x.mp3", bpm=180.0)
     from src.osu.hit_object import Circle, Slider
@@ -87,3 +87,31 @@ def test_mixed_roundtrip_preserves_counts() -> None:
     n_circles = sum(1 for h in out if isinstance(h, Circle))
     assert n_sliders == 3, f"expected 3 sliders after roundtrip, got {n_sliders}"
     assert n_circles == 3, f"expected 3 circles after roundtrip, got {n_circles}"
+
+
+def test_slider_duration_survives_roundtrip_within_7_percent() -> None:
+    inputs = [
+        make_slider(time=1000.0, head=(100.0, 100.0), anchors=[(200.0, 150.0)], duration=500.0),
+        make_slider(time=3000.0, head=(300.0, 100.0), anchors=[(400.0, 200.0), (450.0, 100.0)], duration=1000.0),
+    ]
+    out = _roundtrip(inputs)
+    sliders = [h for h in out if isinstance(h, Slider)]
+    assert len(sliders) == 2
+    for orig, round_tripped in zip(inputs, sliders):
+        orig_dur = orig.object_params.duration
+        new_dur = round_tripped.object_params.duration
+        err_pct = abs(new_dur - orig_dur) / max(orig_dur, 1e-6) * 100
+        assert err_pct < 7.0, f"slider duration drift {err_pct:.1f}% (orig {orig_dur}ms, got {new_dur}ms)"
+
+
+def test_slider_time_and_position_survive_roundtrip() -> None:
+    inputs = [
+        make_slider(time=1500.0, head=(100.0, 100.0), anchors=[(250.0, 150.0)]),
+    ]
+    out = _roundtrip(inputs)
+    assert len(out) == 1
+    s = out[0]
+    assert isinstance(s, Slider)
+    assert abs(float(s.time) - 1500.0) <= 20.0
+    assert abs(s.x - 100.0) <= 32.0
+    assert abs(s.y - 100.0) <= 32.0

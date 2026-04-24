@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from src.config.schemas.tokenizer import TokenizerConfig
 
 from .descriptors import DESCRIPTOR_TAGS
+from .durations import DURATION_COUNT
 from .events import Event, EventType
 from .ranges import EventRange
 from .special_tokens import SPECIAL_COUNT, SpecialToken
@@ -28,8 +29,8 @@ _OUTPUT_ORDER: tuple[EventType, ...] = (
     EventType.CATMULL_ANCHOR,
     EventType.LINEAR_ANCHOR,
     EventType.RED_ANCHOR,
-    EventType.LAST_ANCHOR,
     EventType.SLIDER_SLIDES,
+    EventType.DURATION,
     EventType.BEAT,
     EventType.MEASURE,
     EventType.TIMING_POINT,
@@ -178,8 +179,8 @@ def _build_ranges(config: TokenizerConfig, grid: GridLayout) -> dict[EventType, 
         EventType.CATMULL_ANCHOR: EventRange(EventType.CATMULL_ANCHOR, 0, 0),
         EventType.LINEAR_ANCHOR: EventRange(EventType.LINEAR_ANCHOR, 0, 0),
         EventType.RED_ANCHOR: EventRange(EventType.RED_ANCHOR, 0, 0),
-        EventType.LAST_ANCHOR: EventRange(EventType.LAST_ANCHOR, 0, 0),
         EventType.SLIDER_SLIDES: EventRange(EventType.SLIDER_SLIDES, 1, config.slider_slides_max),
+        EventType.DURATION: EventRange(EventType.DURATION, 0, DURATION_COUNT - 1),
         EventType.BEAT: EventRange(EventType.BEAT, 0, 0),
         EventType.MEASURE: EventRange(EventType.MEASURE, 0, 0),
         EventType.TIMING_POINT: EventRange(EventType.TIMING_POINT, 0, 0),

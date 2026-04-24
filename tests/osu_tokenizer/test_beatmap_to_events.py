@@ -14,17 +14,17 @@ def test_circle_emits_expected_event_group() -> None:
     beatmap = build_beatmap([make_circle(time=100.0)], [make_timing_point()])
     stream = beatmap_to_events(beatmap, window_start_ms=100.0, vocab=vocab, config=cfg)
     assert _types(stream.events) == [
+        EventType.CIRCLE,
         EventType.ABS_TIME,
         EventType.SNAPPING,
         EventType.DISTANCE,
         EventType.POS,
         EventType.HITSOUND,
         EventType.VOLUME,
-        EventType.CIRCLE,
     ]
 
 
-def test_slider_emits_head_anchors_last_anchor_end() -> None:
+def test_slider_emits_head_anchors_duration_end() -> None:
     cfg = make_config()
     vocab = Vocab(cfg)
     slider = make_slider(
@@ -37,10 +37,10 @@ def test_slider_emits_head_anchors_last_anchor_end() -> None:
     beatmap = build_beatmap([slider], [make_timing_point()])
     stream = beatmap_to_events(beatmap, window_start_ms=1000.0, vocab=vocab, config=cfg)
     types = _types(stream.events)
-    assert types[0] == EventType.ABS_TIME
-    assert EventType.SLIDER_HEAD in types
-    assert types.count(EventType.BEZIER_ANCHOR) == 1
-    assert EventType.LAST_ANCHOR in types
+    assert types[0] == EventType.SLIDER_HEAD
+    assert types[1] == EventType.ABS_TIME
+    assert types.count(EventType.BEZIER_ANCHOR) == 2
+    assert EventType.DURATION in types
     assert types[-1] == EventType.SLIDER_END
 
 

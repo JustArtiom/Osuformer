@@ -11,51 +11,52 @@ def _encode(vocab: Vocab, event_type: EventType, value: int = 0) -> int:
     return vocab.encode_event(Event(type=event_type, value=value))
 
 
-def test_before_object_allows_abs_time_and_eos_only() -> None:
+def test_before_object_allows_markers_and_abs_time_and_eos() -> None:
     vocab = _vocab()
     g = GrammarState(vocab)
     mask = g.current_mask()
-    start, end = vocab.token_range(EventType.ABS_TIME)
-    assert mask[start:end].all()
+    for marker in (EventType.CIRCLE, EventType.SLIDER_HEAD, EventType.SPINNER):
+        start, end = vocab.token_range(marker)
+        assert mask[start:end].all()
+    abs_start, abs_end = vocab.token_range(EventType.ABS_TIME)
+    assert mask[abs_start:abs_end].all()
     assert mask[int(SpecialToken.EOS)]
-    circle_start, circle_end = vocab.token_range(EventType.CIRCLE)
-    assert not mask[circle_start:circle_end].any()
 
 
 def test_circle_flow() -> None:
     vocab = _vocab()
     g = GrammarState(vocab)
-    g.update(_encode(vocab, EventType.ABS_TIME, 100))
-    assert g.phase == GrammarPhase.HEADER_FRESH
-    for t in (EventType.DISTANCE, EventType.POS, EventType.HITSOUND, EventType.VOLUME):
-        g.update(_encode(vocab, t, 0))
-        assert g.phase == GrammarPhase.HEADER_FRESH
     g.update(_encode(vocab, EventType.CIRCLE, 0))
-    assert g.phase == GrammarPhase.BEFORE_OBJECT
+    assert g.phase == GrammarPhase.AFTER_MARKER
+    g.update(_encode(vocab, EventType.ABS_TIME, 100))
+    assert g.phase == GrammarPhase.CIRCLE_HEADER
+    for t in (EventType.SNAPPING, EventType.DISTANCE, EventType.POS, EventType.HITSOUND, EventType.VOLUME):
+        g.update(_encode(vocab, t, 0))
+        assert g.phase == GrammarPhase.CIRCLE_HEADER
+    g.update(_encode(vocab, EventType.CIRCLE, 0))
+    assert g.phase == GrammarPhase.AFTER_MARKER
 
 
 def test_slider_full_flow() -> None:
     vocab = _vocab()
     g = GrammarState(vocab)
-    g.update(_encode(vocab, EventType.ABS_TIME, 100))
-    g.update(_encode(vocab, EventType.DISTANCE, 0))
-    g.update(_encode(vocab, EventType.POS, 10))
     g.update(_encode(vocab, EventType.SLIDER_HEAD, 0))
-    assert g.phase == GrammarPhase.IN_SLIDER_ANCHORS
+    assert g.phase == GrammarPhase.AFTER_MARKER
+    g.update(_encode(vocab, EventType.ABS_TIME, 100))
+    assert g.phase == GrammarPhase.SLIDER_HEADER
+    for t in (EventType.SNAPPING, EventType.DISTANCE, EventType.POS, EventType.HITSOUND, EventType.VOLUME):
+        g.update(_encode(vocab, t, 0))
+        assert g.phase == GrammarPhase.SLIDER_HEADER
     g.update(_encode(vocab, EventType.BEZIER_ANCHOR, 0))
     assert g.phase == GrammarPhase.NEED_ANCHOR_POS
     g.update(_encode(vocab, EventType.POS, 20))
     assert g.phase == GrammarPhase.IN_SLIDER_ANCHORS
-    g.update(_encode(vocab, EventType.RED_ANCHOR, 0))
+    g.update(_encode(vocab, EventType.LINEAR_ANCHOR, 0))
     assert g.phase == GrammarPhase.NEED_ANCHOR_POS
     g.update(_encode(vocab, EventType.POS, 30))
     assert g.phase == GrammarPhase.IN_SLIDER_ANCHORS
-    g.update(_encode(vocab, EventType.ABS_TIME, 150))
-    assert g.phase == GrammarPhase.SLIDER_END_HEADER
-    g.update(_encode(vocab, EventType.DISTANCE, 0))
-    g.update(_encode(vocab, EventType.POS, 40))
-    g.update(_encode(vocab, EventType.LAST_ANCHOR, 0))
-    assert g.phase == GrammarPhase.AFTER_LAST_ANCHOR
+    g.update(_encode(vocab, EventType.DURATION, 5))
+    assert g.phase == GrammarPhase.AFTER_SLIDER_DURATION
     g.update(_encode(vocab, EventType.SLIDER_END, 0))
     assert g.phase == GrammarPhase.BEFORE_OBJECT
 
@@ -63,46 +64,55 @@ def test_slider_full_flow() -> None:
 def test_spinner_flow() -> None:
     vocab = _vocab()
     g = GrammarState(vocab)
-    g.update(_encode(vocab, EventType.ABS_TIME, 100))
     g.update(_encode(vocab, EventType.SPINNER, 0))
-    assert g.phase == GrammarPhase.SPINNER_BODY
-    g.update(_encode(vocab, EventType.ABS_TIME, 150))
-    assert g.phase == GrammarPhase.SPINNER_END_HEADER
+    assert g.phase == GrammarPhase.AFTER_MARKER
+    g.update(_encode(vocab, EventType.ABS_TIME, 100))
+    assert g.phase == GrammarPhase.SPINNER_HEADER
+    for t in (EventType.SNAPPING, EventType.POS, EventType.VOLUME):
+        g.update(_encode(vocab, t, 0))
+        assert g.phase == GrammarPhase.SPINNER_HEADER
+    g.update(_encode(vocab, EventType.DURATION, 10))
+    assert g.phase == GrammarPhase.SPINNER_AFTER_DURATION
     g.update(_encode(vocab, EventType.SPINNER_END, 0))
     assert g.phase == GrammarPhase.BEFORE_OBJECT
 
 
-def test_mask_in_slider_anchors_forbids_circle() -> None:
+def test_mask_in_slider_anchors_allows_anchors_and_duration() -> None:
     vocab = _vocab()
     g = GrammarState(vocab)
-    g.update(_encode(vocab, EventType.ABS_TIME, 100))
     g.update(_encode(vocab, EventType.SLIDER_HEAD, 0))
+    g.update(_encode(vocab, EventType.ABS_TIME, 100))
+    g.update(_encode(vocab, EventType.POS, 0))
+    g.update(_encode(vocab, EventType.BEZIER_ANCHOR, 0))
+    g.update(_encode(vocab, EventType.POS, 10))
+    assert g.phase == GrammarPhase.IN_SLIDER_ANCHORS
     mask = g.current_mask()
+    bez_start, bez_end = vocab.token_range(EventType.BEZIER_ANCHOR)
+    dur_start, dur_end = vocab.token_range(EventType.DURATION)
+    assert mask[bez_start:bez_end].all()
+    assert mask[dur_start:dur_end].all()
     circle_start, circle_end = vocab.token_range(EventType.CIRCLE)
     assert not mask[circle_start:circle_end].any()
-    bez_start, bez_end = vocab.token_range(EventType.BEZIER_ANCHOR)
-    assert mask[bez_start:bez_end].all()
 
 
 def test_need_anchor_pos_only_allows_pos() -> None:
     vocab = _vocab()
     g = GrammarState(vocab)
-    g.update(_encode(vocab, EventType.ABS_TIME, 100))
     g.update(_encode(vocab, EventType.SLIDER_HEAD, 0))
+    g.update(_encode(vocab, EventType.ABS_TIME, 100))
     g.update(_encode(vocab, EventType.BEZIER_ANCHOR, 0))
+    assert g.phase == GrammarPhase.NEED_ANCHOR_POS
     mask = g.current_mask()
     pos_start, pos_end = vocab.token_range(EventType.POS)
     assert mask[pos_start:pos_end].all()
     bez_start, bez_end = vocab.token_range(EventType.BEZIER_ANCHOR)
     assert not mask[bez_start:bez_end].any()
-    circle_start, circle_end = vocab.token_range(EventType.CIRCLE)
-    assert not mask[circle_start:circle_end].any()
 
 
-def test_after_last_anchor_allows_slides_and_end_only() -> None:
+def test_after_duration_allows_slides_and_end_only() -> None:
     vocab = _vocab()
     g = GrammarState(vocab)
-    g.phase = GrammarPhase.AFTER_LAST_ANCHOR
+    g.phase = GrammarPhase.AFTER_SLIDER_DURATION
     mask = g.current_mask()
     slides_start, slides_end = vocab.token_range(EventType.SLIDER_SLIDES)
     end_start, end_end = vocab.token_range(EventType.SLIDER_END)
@@ -115,8 +125,8 @@ def test_after_last_anchor_allows_slides_and_end_only() -> None:
 def test_reset_returns_to_before_object() -> None:
     vocab = _vocab()
     g = GrammarState(vocab)
-    g.update(_encode(vocab, EventType.ABS_TIME, 100))
     g.update(_encode(vocab, EventType.SLIDER_HEAD, 0))
-    assert g.phase == GrammarPhase.IN_SLIDER_ANCHORS
+    g.update(_encode(vocab, EventType.ABS_TIME, 100))
+    assert g.phase == GrammarPhase.SLIDER_HEADER
     g.reset()
     assert g.phase == GrammarPhase.BEFORE_OBJECT

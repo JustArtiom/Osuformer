@@ -10,13 +10,14 @@ from src.osu_tokenizer import Event, EventType, SpecialToken, Vocab
 
 class GrammarPhase(Enum):
     BEFORE_OBJECT = "before_object"
-    HEADER_FRESH = "header_fresh"
+    AFTER_MARKER = "after_marker"
+    CIRCLE_HEADER = "circle_header"
+    SLIDER_HEADER = "slider_header"
+    SPINNER_HEADER = "spinner_header"
     IN_SLIDER_ANCHORS = "in_slider_anchors"
     NEED_ANCHOR_POS = "need_anchor_pos"
-    SLIDER_END_HEADER = "slider_end_header"
-    AFTER_LAST_ANCHOR = "after_last_anchor"
-    SPINNER_BODY = "spinner_body"
-    SPINNER_END_HEADER = "spinner_end_header"
+    AFTER_SLIDER_DURATION = "after_slider_duration"
+    SPINNER_AFTER_DURATION = "spinner_after_duration"
 
 
 _HEADER_MODIFIERS: tuple[EventType, ...] = (
@@ -27,14 +28,14 @@ _HEADER_MODIFIERS: tuple[EventType, ...] = (
     EventType.VOLUME,
     EventType.NEW_COMBO,
 )
-_HEADER_TIMING: tuple[EventType, ...] = (
+_TIMING_EVENTS: tuple[EventType, ...] = (
     EventType.TIMING_POINT,
     EventType.SCROLL_SPEED,
     EventType.KIAI,
     EventType.BEAT,
     EventType.MEASURE,
 )
-_HEADER_MARKERS: tuple[EventType, ...] = (
+_OBJECT_MARKERS: tuple[EventType, ...] = (
     EventType.CIRCLE,
     EventType.SPINNER,
     EventType.SLIDER_HEAD,
@@ -54,9 +55,11 @@ class GrammarState:
         self._vocab_out = vocab.vocab_size_out
         self._masks: dict[GrammarPhase, Tensor] = self._build_masks()
         self.phase: GrammarPhase = GrammarPhase.BEFORE_OBJECT
+        self._pending_marker: EventType | None = None
 
     def reset(self) -> None:
         self.phase = GrammarPhase.BEFORE_OBJECT
+        self._pending_marker = None
 
     def current_mask(self) -> Tensor:
         return self._masks[self.phase]
@@ -70,6 +73,19 @@ class GrammarState:
         if not isinstance(decoded, Event):
             return
         et = decoded.type
+        if self.phase == GrammarPhase.BEFORE_OBJECT and et in _OBJECT_MARKERS:
+            self._pending_marker = et
+            self.phase = GrammarPhase.AFTER_MARKER
+            return
+        if self.phase == GrammarPhase.AFTER_MARKER and et == EventType.ABS_TIME:
+            if self._pending_marker == EventType.CIRCLE:
+                self.phase = GrammarPhase.CIRCLE_HEADER
+            elif self._pending_marker == EventType.SLIDER_HEAD:
+                self.phase = GrammarPhase.SLIDER_HEADER
+            elif self._pending_marker == EventType.SPINNER:
+                self.phase = GrammarPhase.SPINNER_HEADER
+            self._pending_marker = None
+            return
         self.phase = _transition(self.phase, et)
 
     def _build_masks(self) -> dict[GrammarPhase, Tensor]:
@@ -87,53 +103,53 @@ class GrammarState:
                     m[sid] = True
             return m
 
-        masks[GrammarPhase.BEFORE_OBJECT] = mk((EventType.ABS_TIME,), (SpecialToken.EOS,))
-        masks[GrammarPhase.HEADER_FRESH] = mk(_HEADER_MODIFIERS + _HEADER_TIMING + _HEADER_MARKERS)
-        masks[GrammarPhase.IN_SLIDER_ANCHORS] = mk(_ANCHOR_TYPES + (EventType.POS, EventType.ABS_TIME))
+        masks[GrammarPhase.BEFORE_OBJECT] = mk(
+            _OBJECT_MARKERS + (EventType.ABS_TIME,), (SpecialToken.EOS,)
+        )
+        masks[GrammarPhase.AFTER_MARKER] = mk((EventType.ABS_TIME,))
+        masks[GrammarPhase.CIRCLE_HEADER] = mk(
+            _HEADER_MODIFIERS + _TIMING_EVENTS + _OBJECT_MARKERS + (EventType.ABS_TIME,),
+            (SpecialToken.EOS,),
+        )
+        masks[GrammarPhase.SLIDER_HEADER] = mk(_HEADER_MODIFIERS + _ANCHOR_TYPES)
+        masks[GrammarPhase.SPINNER_HEADER] = mk(_HEADER_MODIFIERS + (EventType.DURATION,))
+        masks[GrammarPhase.IN_SLIDER_ANCHORS] = mk(_ANCHOR_TYPES + (EventType.DURATION,))
         masks[GrammarPhase.NEED_ANCHOR_POS] = mk((EventType.POS,))
-        masks[GrammarPhase.SLIDER_END_HEADER] = mk((EventType.SNAPPING, EventType.DISTANCE, EventType.POS, EventType.LAST_ANCHOR))
-        masks[GrammarPhase.AFTER_LAST_ANCHOR] = mk((EventType.SLIDER_SLIDES, EventType.SLIDER_END))
-        masks[GrammarPhase.SPINNER_BODY] = mk((EventType.ABS_TIME,))
-        masks[GrammarPhase.SPINNER_END_HEADER] = mk((EventType.SNAPPING, EventType.SPINNER_END))
+        masks[GrammarPhase.AFTER_SLIDER_DURATION] = mk((EventType.SLIDER_SLIDES, EventType.SLIDER_END))
+        masks[GrammarPhase.SPINNER_AFTER_DURATION] = mk((EventType.SPINNER_END,))
         return masks
 
 
 def _transition(phase: GrammarPhase, event_type: EventType) -> GrammarPhase:
-    if phase == GrammarPhase.BEFORE_OBJECT:
+    if phase == GrammarPhase.CIRCLE_HEADER:
+        if event_type in _OBJECT_MARKERS:
+            return GrammarPhase.AFTER_MARKER
         if event_type == EventType.ABS_TIME:
-            return GrammarPhase.HEADER_FRESH
+            return GrammarPhase.CIRCLE_HEADER
         return phase
-    if phase == GrammarPhase.HEADER_FRESH:
-        if event_type == EventType.CIRCLE:
-            return GrammarPhase.BEFORE_OBJECT
-        if event_type == EventType.SPINNER:
-            return GrammarPhase.SPINNER_BODY
-        if event_type == EventType.SLIDER_HEAD:
-            return GrammarPhase.IN_SLIDER_ANCHORS
+    if phase == GrammarPhase.SLIDER_HEADER:
+        if event_type in _ANCHOR_TYPES:
+            return GrammarPhase.NEED_ANCHOR_POS
+        return phase
+    if phase == GrammarPhase.SPINNER_HEADER:
+        if event_type == EventType.DURATION:
+            return GrammarPhase.SPINNER_AFTER_DURATION
         return phase
     if phase == GrammarPhase.IN_SLIDER_ANCHORS:
         if event_type in _ANCHOR_TYPES:
             return GrammarPhase.NEED_ANCHOR_POS
-        if event_type == EventType.ABS_TIME:
-            return GrammarPhase.SLIDER_END_HEADER
+        if event_type == EventType.DURATION:
+            return GrammarPhase.AFTER_SLIDER_DURATION
         return phase
     if phase == GrammarPhase.NEED_ANCHOR_POS:
         if event_type == EventType.POS:
             return GrammarPhase.IN_SLIDER_ANCHORS
         return phase
-    if phase == GrammarPhase.SLIDER_END_HEADER:
-        if event_type == EventType.LAST_ANCHOR:
-            return GrammarPhase.AFTER_LAST_ANCHOR
-        return phase
-    if phase == GrammarPhase.AFTER_LAST_ANCHOR:
+    if phase == GrammarPhase.AFTER_SLIDER_DURATION:
         if event_type == EventType.SLIDER_END:
             return GrammarPhase.BEFORE_OBJECT
         return phase
-    if phase == GrammarPhase.SPINNER_BODY:
-        if event_type == EventType.ABS_TIME:
-            return GrammarPhase.SPINNER_END_HEADER
-        return phase
-    if phase == GrammarPhase.SPINNER_END_HEADER:
+    if phase == GrammarPhase.SPINNER_AFTER_DURATION:
         if event_type == EventType.SPINNER_END:
             return GrammarPhase.BEFORE_OBJECT
         return phase
