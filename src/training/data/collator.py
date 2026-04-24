@@ -39,7 +39,12 @@ class Collator:
         ]
         self._slider_ranges: list[tuple[int, int]] = [
             vocab.token_range(t)
-            for t in (EventType.SLIDER_END, EventType.LAST_ANCHOR, EventType.SLIDER_SLIDES)
+            for t in (
+                EventType.SLIDER_END,
+                EventType.LAST_ANCHOR,
+                EventType.SLIDER_SLIDES,
+                EventType.SCROLL_SPEED,
+            )
         ]
 
     def __call__(self, samples: list[OsuSample]) -> Batch:
