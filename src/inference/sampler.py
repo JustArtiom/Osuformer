@@ -17,6 +17,7 @@ class SamplingConfig:
     event_bias: dict[EventType, float] = field(default_factory=dict)
     min_abs_time_spacing_bins: int = 0
     eos_bias: float = 0.0
+    disable_grammar: bool = False
 
 
 def sample_next_token(

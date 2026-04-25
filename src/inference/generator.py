@@ -149,8 +149,11 @@ class WindowGenerator:
                 last_raw_bin = current_raw_abs
                 expecting_rel = False
             else:
-                mask = grammar.current_mask().to(logits.device)
-                masked_logits = logits.masked_fill(~mask, float("-inf"))
+                if self.sampling.disable_grammar:
+                    masked_logits = logits.clone()
+                else:
+                    mask = grammar.current_mask().to(logits.device)
+                    masked_logits = logits.masked_fill(~mask, float("-inf"))
                 if self._bias_vector.abs().sum().item() > 0:
                     masked_logits = masked_logits + self._bias_vector.to(masked_logits.device)
                 if min_spacing > 0 and last_emitted_window_local is not None:
@@ -163,7 +166,8 @@ class WindowGenerator:
                         masked_logits[eos_id] = masked_logits[eos_id] + self.sampling.eos_bias
                 is_time = self._abs_start <= (masked_logits.argmax().item()) < self._abs_end
                 next_id = sample_next_token(masked_logits, self.sampling, is_time_token=is_time)
-                grammar.update(next_id)
+                if not self.sampling.disable_grammar:
+                    grammar.update(next_id)
                 if next_id == int(SpecialToken.EOS):
                     break
                 decoded = self.vocab.decode_token(next_id)

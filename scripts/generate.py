@@ -42,6 +42,7 @@ from src.osu_tokenizer import EventType, Vocab
 @click.option("--spinner-bias", default=0.0, type=float, help="Additive logit bias for SPINNER marker.")
 @click.option("--min-spacing-ms", default=30.0, type=float, help="Minimum gap between consecutive hit-object times in ms; prevents same-bin stacking.")
 @click.option("--eos-bias", default=0.0, type=float, help="Additive logit bias for EOS; negative = less likely to terminate windows early.")
+@click.option("--no-grammar", "no_grammar", is_flag=True, default=False, help="Disable grammar-based logit masking and state tracking; lets the model emit any token freely. Debug only.")
 @click.option("--snap-subdivision", default=0, type=int, help="Post-process: snap event times to nearest 1/N beat subdivision (1/4=4, 1/8=8, 1/16=16). 0 disables.")
 @click.option("--title", default="Generated", type=str)
 @click.option("--artist", default="osuformer", type=str)
@@ -71,6 +72,7 @@ def main(
     spinner_bias: float,
     min_spacing_ms: float,
     eos_bias: float,
+    no_grammar: bool,
     snap_subdivision: int,
     title: str,
     artist: str,
@@ -116,6 +118,7 @@ def main(
         event_bias=event_bias,
         min_abs_time_spacing_bins=min_spacing_bins,
         eos_bias=eos_bias,
+        disable_grammar=no_grammar,
     )
     generator = WindowGenerator(
         model=model,
