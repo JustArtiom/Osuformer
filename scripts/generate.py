@@ -148,14 +148,21 @@ def main(
 
     print("generating...")
     result = generator.generate(mel=mel, prompt=prompt, song_duration_ms=song_duration_ms)
-    if snap_subdivision > 0 and bpm > 0:
-        result.events[:] = _snap_events_to_beat(result.events, bpm=bpm, subdivision=snap_subdivision, dt_bin_ms=cfg.tokenizer.dt_bin_ms)
-    _print_event_breakdown(result.events, len(result.window_starts_ms))
     effective_bpm = _resolve_effective_bpm(result.events, cfg, bpm)
     if effective_bpm is None:
         raise SystemExit("Could not infer BPM from BEAT tokens and --bpm not set; rerun with --bpm <value>.")
     if bpm <= 0:
-        print(f"inferred BPM: {effective_bpm:.2f}")
+        print(f"inferred BPM: {effective_bpm:.4f}")
+    snap_offset_ms = _resolve_offset_ms(result.events, cfg, effective_bpm) if auto_timing else 0.0
+    if snap_subdivision > 0:
+        result.events[:] = _snap_events_to_beat(
+            result.events,
+            bpm=effective_bpm,
+            subdivision=snap_subdivision,
+            dt_bin_ms=cfg.tokenizer.dt_bin_ms,
+            offset_ms=snap_offset_ms,
+        )
+    _print_event_breakdown(result.events, len(result.window_starts_ms))
 
     beatmap = events_to_beatmap(
         result.events,
@@ -191,20 +198,46 @@ def _resolve_effective_bpm(events: list, cfg, explicit_bpm: float) -> float | No
     return 60000.0 / beat_length
 
 
-def _snap_events_to_beat(events: list, bpm: float, subdivision: int, dt_bin_ms: int) -> list:
+def _snap_events_to_beat(
+    events: list, bpm: float, subdivision: int, dt_bin_ms: int, offset_ms: float = 0.0
+) -> list:
     from src.osu_tokenizer import Event, EventType
 
     beat_ms = 60000.0 / max(1.0, bpm)
     tick_ms = beat_ms / max(1, subdivision)
-    tick_bins = tick_ms / dt_bin_ms
     out: list = []
     for ev in events:
         if ev.type == EventType.ABS_TIME:
-            snapped = int(round(round(ev.value / tick_bins) * tick_bins))
-            out.append(Event(EventType.ABS_TIME, snapped))
+            t_ms = float(ev.value) * dt_bin_ms
+            snapped_ms = round((t_ms - offset_ms) / tick_ms) * tick_ms + offset_ms
+            snapped_bin = int(round(snapped_ms / dt_bin_ms))
+            out.append(Event(EventType.ABS_TIME, snapped_bin))
         else:
             out.append(ev)
     return out
+
+
+def _resolve_offset_ms(events: list, cfg, bpm: float) -> float:
+    from src.osu_tokenizer import EventType
+    from src.inference.detokenizer import _group_by_abs_time
+
+    groups = _group_by_abs_time(events)
+    measure_times: list[float] = []
+    beat_times: list[float] = []
+    for abs_bin, group in groups:
+        time_ms = float(abs_bin * cfg.tokenizer.dt_bin_ms)
+        if any(ev.type == EventType.MEASURE for ev in group):
+            measure_times.append(time_ms)
+        if any(ev.type == EventType.BEAT for ev in group):
+            beat_times.append(time_ms)
+    anchor = measure_times[0] if measure_times else (beat_times[0] if beat_times else 0.0)
+    if bpm <= 0:
+        return anchor
+    beat_ms = 60000.0 / bpm
+    offset = anchor
+    while offset - beat_ms * 4 >= 0:
+        offset -= beat_ms * 4
+    return offset
 
 
 def _print_event_breakdown(events: list, window_count: int) -> None:
