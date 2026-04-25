@@ -74,7 +74,10 @@ class GrammarState:
         if not isinstance(decoded, Event):
             return
         et = decoded.type
-        if self.phase in (GrammarPhase.BEFORE_OBJECT, GrammarPhase.TIMING_HEADER) and et in _OBJECT_MARKERS:
+        if (
+            self.phase in (GrammarPhase.BEFORE_OBJECT, GrammarPhase.TIMING_HEADER, GrammarPhase.CIRCLE_HEADER)
+            and et in _OBJECT_MARKERS
+        ):
             self._pending_marker = et
             self.phase = GrammarPhase.AFTER_MARKER
             return
@@ -87,7 +90,7 @@ class GrammarState:
                 self.phase = GrammarPhase.SPINNER_HEADER
             self._pending_marker = None
             return
-        if self.phase == GrammarPhase.BEFORE_OBJECT and et == EventType.ABS_TIME:
+        if self.phase in (GrammarPhase.BEFORE_OBJECT, GrammarPhase.CIRCLE_HEADER) and et == EventType.ABS_TIME:
             self.phase = GrammarPhase.TIMING_HEADER
             return
         self.phase = _transition(self.phase, et)
@@ -113,7 +116,7 @@ class GrammarState:
         masks[GrammarPhase.AFTER_MARKER] = mk((EventType.ABS_TIME,))
         masks[GrammarPhase.TIMING_HEADER] = mk(_TIMING_EVENTS + _OBJECT_MARKERS + (EventType.ABS_TIME,), (SpecialToken.EOS,))
         masks[GrammarPhase.CIRCLE_HEADER] = mk(
-            _HEADER_MODIFIERS + _TIMING_EVENTS + _OBJECT_MARKERS + (EventType.ABS_TIME,),
+            _HEADER_MODIFIERS + _OBJECT_MARKERS + (EventType.ABS_TIME,),
             (SpecialToken.EOS,),
         )
         masks[GrammarPhase.SLIDER_HEADER] = mk(_HEADER_MODIFIERS + _ANCHOR_TYPES)
