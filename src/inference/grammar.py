@@ -11,6 +11,7 @@ from src.osu_tokenizer import Event, EventType, SpecialToken, Vocab
 class GrammarPhase(Enum):
     BEFORE_OBJECT = "before_object"
     AFTER_MARKER = "after_marker"
+    TIMING_HEADER = "timing_header"
     CIRCLE_HEADER = "circle_header"
     SLIDER_HEADER = "slider_header"
     SPINNER_HEADER = "spinner_header"
@@ -86,6 +87,9 @@ class GrammarState:
                 self.phase = GrammarPhase.SPINNER_HEADER
             self._pending_marker = None
             return
+        if self.phase == GrammarPhase.BEFORE_OBJECT and et == EventType.ABS_TIME:
+            self.phase = GrammarPhase.TIMING_HEADER
+            return
         self.phase = _transition(self.phase, et)
 
     def _build_masks(self) -> dict[GrammarPhase, Tensor]:
@@ -107,6 +111,7 @@ class GrammarState:
             _OBJECT_MARKERS + (EventType.ABS_TIME,), (SpecialToken.EOS,)
         )
         masks[GrammarPhase.AFTER_MARKER] = mk((EventType.ABS_TIME,))
+        masks[GrammarPhase.TIMING_HEADER] = mk(_TIMING_EVENTS + _OBJECT_MARKERS + (EventType.ABS_TIME,), (SpecialToken.EOS,))
         masks[GrammarPhase.CIRCLE_HEADER] = mk(
             _HEADER_MODIFIERS + _TIMING_EVENTS + _OBJECT_MARKERS + (EventType.ABS_TIME,),
             (SpecialToken.EOS,),
@@ -121,6 +126,12 @@ class GrammarState:
 
 
 def _transition(phase: GrammarPhase, event_type: EventType) -> GrammarPhase:
+    if phase == GrammarPhase.TIMING_HEADER:
+        if event_type in _TIMING_EVENTS:
+            return GrammarPhase.BEFORE_OBJECT
+        if event_type == EventType.ABS_TIME:
+            return GrammarPhase.TIMING_HEADER
+        return phase
     if phase == GrammarPhase.CIRCLE_HEADER:
         if event_type in _OBJECT_MARKERS:
             return GrammarPhase.AFTER_MARKER
