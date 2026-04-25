@@ -236,6 +236,50 @@ def test_timing_point_followed_by_kiai_inside_timing_group() -> None:
     assert g.phase == GrammarPhase.CIRCLE_HEADER
 
 
+def test_consecutive_beats_each_with_own_abs_time() -> None:
+    vocab = _vocab()
+    seq: list[tuple[EventType, int]] = [
+        (EventType.ABS_TIME, 50),
+        (EventType.BEAT, 0),
+        (EventType.ABS_TIME, 100),
+        (EventType.BEAT, 0),
+        (EventType.ABS_TIME, 150),
+        (EventType.MEASURE, 0),
+        (EventType.CIRCLE, 0),
+        (EventType.ABS_TIME, 200),
+        (EventType.SNAPPING, 4),
+        (EventType.POS, 50),
+        (EventType.HITSOUND, 0),
+        (EventType.VOLUME, 80),
+    ]
+    g = _drive(vocab, seq)
+    assert g.phase == GrammarPhase.CIRCLE_HEADER
+
+
+def test_two_scroll_speed_groups_in_a_row() -> None:
+    vocab = _vocab()
+    seq: list[tuple[EventType, int]] = [
+        (EventType.ABS_TIME, 100),
+        (EventType.SCROLL_SPEED, 100),
+        (EventType.KIAI, 0),
+        (EventType.ABS_TIME, 200),
+        (EventType.SCROLL_SPEED, 80),
+        (EventType.KIAI, 1),
+    ]
+    g = _drive(vocab, seq)
+    assert g.phase == GrammarPhase.BEFORE_OBJECT
+
+
+def test_timing_header_does_not_loop_on_abs_time() -> None:
+    vocab = _vocab()
+    g = GrammarState(vocab)
+    g.update(_encode(vocab, EventType.ABS_TIME, 100))
+    assert g.phase == GrammarPhase.TIMING_HEADER
+    mask = g.current_mask()
+    abs_start, abs_end = vocab.token_range(EventType.ABS_TIME)
+    assert not mask[abs_start:abs_end].any(), "TIMING_HEADER must not allow ABS_TIME (would loop)"
+
+
 def test_scroll_speed_then_kiai_then_marker() -> None:
     vocab = _vocab()
     seq: list[tuple[EventType, int]] = [

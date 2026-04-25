@@ -12,6 +12,7 @@ class GrammarPhase(Enum):
     BEFORE_OBJECT = "before_object"
     AFTER_MARKER = "after_marker"
     TIMING_HEADER = "timing_header"
+    TIMING_AFTER_HEAD = "timing_after_head"
     CIRCLE_HEADER = "circle_header"
     SLIDER_HEADER = "slider_header"
     SPINNER_HEADER = "spinner_header"
@@ -75,7 +76,12 @@ class GrammarState:
             return
         et = decoded.type
         if (
-            self.phase in (GrammarPhase.BEFORE_OBJECT, GrammarPhase.TIMING_HEADER, GrammarPhase.CIRCLE_HEADER)
+            self.phase in (
+                GrammarPhase.BEFORE_OBJECT,
+                GrammarPhase.TIMING_HEADER,
+                GrammarPhase.TIMING_AFTER_HEAD,
+                GrammarPhase.CIRCLE_HEADER,
+            )
             and et in _OBJECT_MARKERS
         ):
             self._pending_marker = et
@@ -114,7 +120,11 @@ class GrammarState:
             _OBJECT_MARKERS + (EventType.ABS_TIME,), (SpecialToken.EOS,)
         )
         masks[GrammarPhase.AFTER_MARKER] = mk((EventType.ABS_TIME,))
-        masks[GrammarPhase.TIMING_HEADER] = mk(_TIMING_EVENTS + _OBJECT_MARKERS + (EventType.ABS_TIME,), (SpecialToken.EOS,))
+        masks[GrammarPhase.TIMING_HEADER] = mk(_TIMING_EVENTS + _OBJECT_MARKERS, (SpecialToken.EOS,))
+        masks[GrammarPhase.TIMING_AFTER_HEAD] = mk(
+            _OBJECT_MARKERS + (EventType.KIAI, EventType.ABS_TIME),
+            (SpecialToken.EOS,),
+        )
         masks[GrammarPhase.CIRCLE_HEADER] = mk(
             _HEADER_MODIFIERS + _OBJECT_MARKERS + (EventType.ABS_TIME,),
             (SpecialToken.EOS,),
@@ -130,8 +140,14 @@ class GrammarState:
 
 def _transition(phase: GrammarPhase, event_type: EventType) -> GrammarPhase:
     if phase == GrammarPhase.TIMING_HEADER:
-        if event_type in _TIMING_EVENTS:
-            return GrammarPhase.TIMING_HEADER
+        if event_type in (EventType.BEAT, EventType.MEASURE, EventType.KIAI):
+            return GrammarPhase.BEFORE_OBJECT
+        if event_type in (EventType.TIMING_POINT, EventType.SCROLL_SPEED):
+            return GrammarPhase.TIMING_AFTER_HEAD
+        return phase
+    if phase == GrammarPhase.TIMING_AFTER_HEAD:
+        if event_type == EventType.KIAI:
+            return GrammarPhase.BEFORE_OBJECT
         if event_type == EventType.ABS_TIME:
             return GrammarPhase.TIMING_HEADER
         return phase
