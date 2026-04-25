@@ -206,6 +206,9 @@ def _build_timing_points_from_beats(
     median_delta = deltas[len(deltas) // 2]
     if not 100.0 < median_delta < 2000.0:
         median_delta = 60000.0 / max(1.0, bpm) if bpm > 0 else 333.33
+    refined = _refine_beat_length(times, median_delta)
+    if refined is not None:
+        median_delta = refined
     measure_times = [t for t, m in beat_events if m]
     anchor_time = measure_times[0] if measure_times else times[0]
     offset = anchor_time
@@ -233,6 +236,34 @@ def _build_timing_points_from_beats(
     return tps
 
 
+def _refine_beat_length(times: list[float], coarse_beat_length: float) -> float | None:
+    if len(times) < 8 or coarse_beat_length <= 0:
+        return None
+    t0 = times[0]
+    span = times[-1] - t0
+    if span <= 0:
+        return None
+    n_steps = max(8, round(span / coarse_beat_length))
+    best_bl = coarse_beat_length
+    best_score = float("inf")
+    lo = coarse_beat_length * 0.95
+    hi = coarse_beat_length * 1.05
+    candidates = 4000
+    for k in range(candidates + 1):
+        bl = lo + (hi - lo) * k / candidates
+        score = 0.0
+        for t in times:
+            idx_f = (t - t0) / bl
+            residual = (idx_f - round(idx_f)) * bl
+            score += residual * residual
+        if score < best_score:
+            best_score = score
+            best_bl = bl
+    if not 100.0 < best_bl < 2000.0:
+        return None
+    return best_bl
+
+
 def _infer_beat_length_ms(
     groups: list[tuple[int, list[Event]]],
     cfg: TokenizerConfig,
@@ -249,7 +280,8 @@ def _infer_beat_length_ms(
     median_delta = deltas[len(deltas) // 2]
     if median_delta < 100.0 or median_delta > 2000.0:
         return None
-    return median_delta
+    refined = _refine_beat_length(beat_times_ms, median_delta)
+    return refined if refined is not None else median_delta
 
 
 def _state_at(time_ms: float, timing_points: list[TimingPoint]) -> _TimelineState:
