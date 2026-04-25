@@ -74,7 +74,7 @@ class GrammarState:
         if not isinstance(decoded, Event):
             return
         et = decoded.type
-        if self.phase == GrammarPhase.BEFORE_OBJECT and et in _OBJECT_MARKERS:
+        if self.phase in (GrammarPhase.BEFORE_OBJECT, GrammarPhase.TIMING_HEADER) and et in _OBJECT_MARKERS:
             self._pending_marker = et
             self.phase = GrammarPhase.AFTER_MARKER
             return
@@ -128,7 +128,7 @@ class GrammarState:
 def _transition(phase: GrammarPhase, event_type: EventType) -> GrammarPhase:
     if phase == GrammarPhase.TIMING_HEADER:
         if event_type in _TIMING_EVENTS:
-            return GrammarPhase.BEFORE_OBJECT
+            return GrammarPhase.TIMING_HEADER
         if event_type == EventType.ABS_TIME:
             return GrammarPhase.TIMING_HEADER
         return phase
