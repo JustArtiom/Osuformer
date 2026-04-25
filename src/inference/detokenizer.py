@@ -48,9 +48,13 @@ def events_to_beatmap(
     overall_difficulty: float = 8.0,
     hp_drain_rate: float = 6.0,
     slider_multiplier: float = 1.4,
+    auto_timing: bool = False,
 ) -> Beatmap:
     groups = _group_by_abs_time(events)
-    timing_points = _build_timing_points(groups, tokenizer_cfg, bpm)
+    if auto_timing:
+        timing_points = _build_timing_points_from_beats(groups, tokenizer_cfg, bpm)
+    else:
+        timing_points = _build_timing_points(groups, tokenizer_cfg, bpm)
     hit_objects: list = []
     i = 0
     while i < len(groups):
@@ -174,6 +178,55 @@ def _build_timing_points(
                     uninherited=0,
                     effects=effects,
                 )
+            )
+            seen_times.add(time_ms)
+    tps.sort(key=lambda tp: tp.time)
+    return tps
+
+
+def _build_timing_points_from_beats(
+    groups: list[tuple[int, list[Event]]],
+    cfg: TokenizerConfig,
+    bpm: float,
+) -> list[TimingPoint]:
+    beat_events: list[tuple[float, bool]] = []
+    for abs_bin, group in groups:
+        time_ms = float(abs_bin * cfg.dt_bin_ms)
+        is_measure = any(ev.type == EventType.MEASURE for ev in group)
+        is_beat = any(ev.type == EventType.BEAT for ev in group) or is_measure
+        if is_beat:
+            beat_events.append((time_ms, is_measure))
+    if len(beat_events) < 4:
+        if bpm <= 0:
+            raise ValueError("auto-timing needs at least 4 BEAT/MEASURE events or an explicit --bpm")
+        return [TimingPoint(time=0.0, beat_length=60000.0 / max(1.0, bpm), uninherited=1, effects=Effects.NONE)]
+    beat_events.sort(key=lambda x: x[0])
+    times = [t for t, _ in beat_events]
+    deltas = sorted(times[i + 1] - times[i] for i in range(len(times) - 1))
+    median_delta = deltas[len(deltas) // 2]
+    if not 100.0 < median_delta < 2000.0:
+        median_delta = 60000.0 / max(1.0, bpm) if bpm > 0 else 333.33
+    measure_times = [t for t, m in beat_events if m]
+    anchor_time = measure_times[0] if measure_times else times[0]
+    offset = anchor_time
+    while offset - median_delta * 4 >= 0:
+        offset -= median_delta * 4
+    tps: list[TimingPoint] = [
+        TimingPoint(time=offset, beat_length=median_delta, uninherited=1, effects=Effects.NONE)
+    ]
+    seen_times: set[float] = {offset}
+    for abs_bin, group in groups:
+        time_ms = float(abs_bin * cfg.dt_bin_ms)
+        if time_ms in seen_times:
+            continue
+        kiai = _find_value(group, EventType.KIAI) == 1
+        effects = Effects.KIAI if kiai else Effects.NONE
+        scroll_speed = _find_value(group, EventType.SCROLL_SPEED)
+        if scroll_speed is not None and scroll_speed > 0:
+            sv = scroll_speed / 100.0
+            beat_length = -100.0 / sv
+            tps.append(
+                TimingPoint(time=time_ms, beat_length=beat_length, uninherited=0, effects=effects)
             )
             seen_times.add(time_ms)
     tps.sort(key=lambda tp: tp.time)

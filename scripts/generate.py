@@ -43,6 +43,7 @@ from src.osu_tokenizer import EventType, Vocab
 @click.option("--min-spacing-ms", default=30.0, type=float, help="Minimum gap between consecutive hit-object times in ms; prevents same-bin stacking.")
 @click.option("--eos-bias", default=0.0, type=float, help="Additive logit bias for EOS; negative = less likely to terminate windows early.")
 @click.option("--no-grammar", "no_grammar", is_flag=True, default=False, help="Disable grammar-based logit masking and state tracking; lets the model emit any token freely. Debug only.")
+@click.option("--auto-timing", "auto_timing", is_flag=True, default=False, help="Derive BPM offset and beat_length from emitted BEAT/MEASURE events instead of trusting the model's TIMING_POINT placements. First MEASURE anchors the downbeat.")
 @click.option("--snap-subdivision", default=0, type=int, help="Post-process: snap event times to nearest 1/N beat subdivision (1/4=4, 1/8=8, 1/16=16). 0 disables.")
 @click.option("--title", default="Generated", type=str)
 @click.option("--artist", default="osuformer", type=str)
@@ -73,6 +74,7 @@ def main(
     min_spacing_ms: float,
     eos_bias: float,
     no_grammar: bool,
+    auto_timing: bool,
     snap_subdivision: int,
     title: str,
     artist: str,
@@ -170,6 +172,7 @@ def main(
         overall_difficulty=od,
         hp_drain_rate=hp,
         slider_multiplier=slider_multiplier,
+        auto_timing=auto_timing,
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(str(beatmap))
