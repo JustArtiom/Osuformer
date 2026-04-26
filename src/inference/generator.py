@@ -112,18 +112,25 @@ class WindowGenerator:
         memory = self.model.encode(mel_tensor)
         grammar = GrammarState(self.vocab)
 
-        tokens: list[int] = list(prompt_conditioning_tokens)
+        suffix: list[int] = []
         last_raw_bin: int | None = None
         history = history_groups[-self.history_event_count :] if self.history_event_count > 0 else []
         for raw_abs, group in history:
             rel = self._rel(last_raw_bin, raw_abs)
-            tokens.append(int(SpecialToken.TIME_ABS_NULL))
-            tokens.append(self.vocab.encode_event(Event(EventType.REL_TIME, rel)))
+            suffix.append(int(SpecialToken.TIME_ABS_NULL))
+            suffix.append(self.vocab.encode_event(Event(EventType.REL_TIME, rel)))
             for ev in group:
-                tokens.append(self.vocab.encode_event(ev))
+                suffix.append(self.vocab.encode_event(ev))
             last_raw_bin = raw_abs
-        tokens.append(int(SpecialToken.HISTORY_END))
-        tokens.append(int(SpecialToken.SOS))
+        suffix.append(int(SpecialToken.HISTORY_END))
+        suffix.append(int(SpecialToken.SOS))
+
+        cond_tokens: list[int] = list(prompt_conditioning_tokens) + suffix
+        guidance = self.sampling.guidance_scale
+        use_cfg = abs(guidance - 1.0) > 1e-6
+        uncond_tokens: list[int] = (
+            [int(SpecialToken.SOS_SEQ), int(SpecialToken.MAP_START)] + suffix if use_cfg else []
+        )
 
         window_start_bin = int(round(window_start_ms / self.tokenizer_cfg.dt_bin_ms))
         generate_end_bin = self._context_bins + (self.tokenizer_cfg.generate_ms // self.tokenizer_cfg.dt_bin_ms)
@@ -135,13 +142,26 @@ class WindowGenerator:
         last_emitted_window_local: int | None = None
         min_spacing = max(0, self.sampling.min_abs_time_spacing_bins)
 
-        prompt_ids = torch.tensor(tokens, dtype=torch.long, device=self.device).unsqueeze(0)
-        step_logits, cache = self.model.decode_step(
-            prompt_ids, memory=memory, cache=None, start_pos=0
+        cond_ids = torch.tensor(cond_tokens, dtype=torch.long, device=self.device).unsqueeze(0)
+        cond_step, cond_cache = self.model.decode_step(
+            cond_ids, memory=memory, cache=None, start_pos=0
         )
-        logits = step_logits[0, -1, : self._vocab_out]
+        cond_logits = cond_step[0, -1, : self._vocab_out]
+        if use_cfg:
+            uncond_ids = torch.tensor(uncond_tokens, dtype=torch.long, device=self.device).unsqueeze(0)
+            uncond_step, uncond_cache = self.model.decode_step(
+                uncond_ids, memory=memory, cache=None, start_pos=0
+            )
+            uncond_logits = uncond_step[0, -1, : self._vocab_out]
+            logits = uncond_logits + guidance * (cond_logits - uncond_logits)
+        else:
+            uncond_cache = None
+            logits = cond_logits
 
-        while len(tokens) < self.max_decoder_len:
+        cond_len = len(cond_tokens)
+        uncond_len = len(uncond_tokens)
+
+        while cond_len < self.max_decoder_len:
             if expecting_rel:
                 assert current_raw_abs is not None
                 rel = self._rel(last_raw_bin, current_raw_abs)
@@ -185,12 +205,21 @@ class WindowGenerator:
                     else:
                         current_group.append(decoded)
 
-            tokens.append(next_id)
             step_in = torch.tensor([[next_id]], dtype=torch.long, device=self.device)
-            step_logits, cache = self.model.decode_step(
-                step_in, memory=memory, cache=cache, start_pos=len(tokens) - 1
+            cond_step, cond_cache = self.model.decode_step(
+                step_in, memory=memory, cache=cond_cache, start_pos=cond_len
             )
-            logits = step_logits[0, -1, : self._vocab_out]
+            cond_len += 1
+            cond_logits = cond_step[0, -1, : self._vocab_out]
+            if use_cfg:
+                uncond_step, uncond_cache = self.model.decode_step(
+                    step_in, memory=memory, cache=uncond_cache, start_pos=uncond_len
+                )
+                uncond_len += 1
+                uncond_logits = uncond_step[0, -1, : self._vocab_out]
+                logits = uncond_logits + guidance * (cond_logits - uncond_logits)
+            else:
+                logits = cond_logits
 
         if current_group and current_raw_abs is not None:
             out_groups.append((current_raw_abs, current_group))

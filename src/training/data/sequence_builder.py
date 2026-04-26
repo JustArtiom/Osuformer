@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 
 import torch
@@ -26,12 +27,14 @@ class SequenceBuilder:
         max_len: int,
         history_event_count: int,
         timing_jitter_bins: int = 0,
+        cfg_dropout_prob: float = 0.0,
     ):
         self.vocab = vocab
         self.cfg = tokenizer_cfg
         self.max_len = max_len
         self.history_event_count = history_event_count
         self.timing_jitter_bins = max(0, timing_jitter_bins)
+        self.cfg_dropout_prob = max(0.0, min(1.0, cfg_dropout_prob))
         self._type_order = [er.type for er in vocab.output_ranges] + [er.type for er in vocab.input_ranges]
         self._abs_type_idx = self._type_order.index(EventType.ABS_TIME)
         total_ms = tokenizer_cfg.context_ms + tokenizer_cfg.generate_ms + tokenizer_cfg.lookahead_ms
@@ -53,8 +56,9 @@ class SequenceBuilder:
         history_groups, window_groups = self._slice_groups(event_types, event_values, window_start_bin)
 
         tokens: list[int] = [int(SpecialToken.SOS_SEQ)]
-        for ev in self._conditioning(map_record, metadata):
-            tokens.append(self.vocab.encode_event(ev))
+        if self.cfg_dropout_prob <= 0.0 or random.random() >= self.cfg_dropout_prob:
+            for ev in self._conditioning(map_record, metadata):
+                tokens.append(self.vocab.encode_event(ev))
         tokens.append(int(SpecialToken.MAP_START))
 
         history_trimmed = history_groups[-self.history_event_count :] if self.history_event_count > 0 else []

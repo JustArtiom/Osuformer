@@ -18,6 +18,7 @@ class SamplingConfig:
     min_abs_time_spacing_bins: int = 0
     eos_bias: float = 0.0
     disable_grammar: bool = False
+    guidance_scale: float = 1.0
 
 
 def sample_next_token(

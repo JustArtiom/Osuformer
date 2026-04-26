@@ -29,6 +29,7 @@ training:
   history_event_count: 256
   max_decoder_len: 3072
   timing_jitter_bins: 2
+  cfg_dropout_prob: 0.1
 
   lr_scheduler:
     enabled: true

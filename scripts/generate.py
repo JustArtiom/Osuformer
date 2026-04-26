@@ -42,6 +42,7 @@ from src.osu_tokenizer import EventType, Vocab
 @click.option("--spinner-bias", default=0.0, type=float, help="Additive logit bias for SPINNER marker.")
 @click.option("--min-spacing-ms", default=30.0, type=float, help="Minimum gap between consecutive hit-object times in ms; prevents same-bin stacking.")
 @click.option("--eos-bias", default=0.0, type=float, help="Additive logit bias for EOS; negative = less likely to terminate windows early.")
+@click.option("--guidance", "guidance_scale", default=1.0, type=float, help="Classifier-free guidance scale. 1.0 = off (cond only). >1.0 amplifies conditioning (e.g. 2.0–4.0). <1.0 dampens it. Requires a model trained with cfg_dropout_prob > 0.")
 @click.option("--no-grammar", "no_grammar", is_flag=True, default=False, help="Disable grammar-based logit masking and state tracking; lets the model emit any token freely. Debug only.")
 @click.option("--auto-timing", "auto_timing", is_flag=True, default=False, help="Derive BPM offset and beat_length from emitted BEAT/MEASURE events instead of trusting the model's TIMING_POINT placements. First MEASURE anchors the downbeat.")
 @click.option("--snap-subdivision", default=0, type=int, help="Post-process: snap event times to nearest 1/N beat subdivision (1/4=4, 1/8=8, 1/16=16). 0 disables.")
@@ -73,6 +74,7 @@ def main(
     spinner_bias: float,
     min_spacing_ms: float,
     eos_bias: float,
+    guidance_scale: float,
     no_grammar: bool,
     auto_timing: bool,
     snap_subdivision: int,
@@ -121,6 +123,7 @@ def main(
         min_abs_time_spacing_bins=min_spacing_bins,
         eos_bias=eos_bias,
         disable_grammar=no_grammar,
+        guidance_scale=guidance_scale,
     )
     generator = WindowGenerator(
         model=model,
