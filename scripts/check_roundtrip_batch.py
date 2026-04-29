@@ -334,7 +334,7 @@ def main(songs_root: str, limit: int = 50) -> None:
         mb_time_max = max(r["time_err_max"] for r in multi_bpm)
         print(f"  single-BPM time err mean: {sb_time:.2f}ms  (max across maps: {sb_time_max:.2f}ms)")
         print(f"  multi-BPM  time err mean: {mb_time:.2f}ms  (max across maps: {mb_time_max:.2f}ms)")
-        print(f"  -> multi-BPM degradation is expected: detokenizer reconstructs only one TP at window-start")
+        print(f"  -> remaining multi-BPM error from sections with too few BEAT events to derive BPM (falls back to global)")
 
     print()
     print("SLIDER TOPOLOGY")

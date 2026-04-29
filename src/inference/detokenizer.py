@@ -146,8 +146,17 @@ def _build_timing_points(
     if bpm <= 0 and inferred_beat_length is None:
         raise ValueError("No BPM provided and no BEAT tokens emitted to infer from.")
     base_beat_length = inferred_beat_length if (bpm <= 0 and inferred_beat_length is not None) else 60000.0 / max(1.0, bpm)
+
+    section_starts = [0.0] + [
+        float(abs_bin * cfg.dt_bin_ms)
+        for abs_bin, group in groups
+        if any(ev.type == EventType.TIMING_POINT for ev in group)
+    ]
+    section_starts = sorted(set(section_starts))
+    section_bpms = _per_section_beat_lengths(groups, cfg, section_starts, base_beat_length)
+
     tps: list[TimingPoint] = [
-        TimingPoint(time=0.0, beat_length=base_beat_length, uninherited=1, effects=Effects.NONE)
+        TimingPoint(time=0.0, beat_length=section_bpms[0.0], uninherited=1, effects=Effects.NONE)
     ]
     seen_times: set[float] = {0.0}
     for abs_bin, group in groups:
@@ -160,7 +169,7 @@ def _build_timing_points(
             tps.append(
                 TimingPoint(
                     time=time_ms,
-                    beat_length=base_beat_length,
+                    beat_length=section_bpms.get(time_ms, base_beat_length),
                     uninherited=1,
                     effects=effects,
                 )
@@ -182,6 +191,37 @@ def _build_timing_points(
             seen_times.add(time_ms)
     tps.sort(key=lambda tp: tp.time)
     return tps
+
+
+def _per_section_beat_lengths(
+    groups: list[tuple[int, list[Event]]],
+    cfg: TokenizerConfig,
+    section_starts: list[float],
+    fallback_beat_length: float,
+) -> dict[float, float]:
+    """For each TIMING_POINT section start, derive BPM from BEAT events in that section."""
+    beat_times: list[float] = []
+    for abs_bin, group in groups:
+        if any(ev.type in (EventType.BEAT, EventType.MEASURE) for ev in group):
+            beat_times.append(float(abs_bin * cfg.dt_bin_ms))
+    beat_times.sort()
+    if not section_starts:
+        return {}
+    out: dict[float, float] = {}
+    for i, start in enumerate(section_starts):
+        end = section_starts[i + 1] if i + 1 < len(section_starts) else float("inf")
+        section_beats = [t for t in beat_times if start <= t < end]
+        if len(section_beats) < 4:
+            out[start] = fallback_beat_length
+            continue
+        deltas = sorted(section_beats[j + 1] - section_beats[j] for j in range(len(section_beats) - 1))
+        median_delta = deltas[len(deltas) // 2]
+        if not 100.0 < median_delta < 2000.0:
+            out[start] = fallback_beat_length
+            continue
+        refined = _refine_beat_length(section_beats, median_delta)
+        out[start] = refined if refined is not None else median_delta
+    return out
 
 
 def _build_timing_points_from_beats(
