@@ -4,7 +4,6 @@ from dataclasses import dataclass
 
 from src.config.schemas.tokenizer import TokenizerConfig
 
-from .descriptors import DESCRIPTOR_TAGS
 from .durations import DURATION_COUNT
 from .events import Event, EventType
 from .ranges import EventRange
@@ -30,27 +29,19 @@ _OUTPUT_ORDER: tuple[EventType, ...] = (
     EventType.LINEAR_ANCHOR,
     EventType.RED_ANCHOR,
     EventType.SLIDER_SLIDES,
+    EventType.SLIDER_SUSTAIN,
+    EventType.SLIDER_REPEAT_SUSTAIN,
     EventType.DURATION,
     EventType.BEAT,
     EventType.MEASURE,
     EventType.TIMING_POINT,
     EventType.KIAI,
     EventType.SCROLL_SPEED,
+    EventType.SAMPLESET,
 )
 
 _INPUT_ORDER: tuple[EventType, ...] = (
     EventType.REL_TIME,
-    EventType.DIFFICULTY,
-    EventType.DESCRIPTOR,
-    EventType.YEAR,
-    EventType.HITSOUNDED,
-    EventType.CS,
-    EventType.AR,
-    EventType.OD,
-    EventType.HP,
-    EventType.GLOBAL_SV,
-    EventType.SONG_LENGTH,
-    EventType.SONG_POSITION,
 )
 
 
@@ -155,10 +146,6 @@ def _build_grid(config: TokenizerConfig) -> GridLayout:
 def _build_ranges(config: TokenizerConfig, grid: GridLayout) -> dict[EventType, EventRange]:
     window_ms = config.context_ms + config.generate_ms + config.lookahead_ms
     max_time_bin = window_ms // config.dt_bin_ms
-    stat_steps = int(round(config.stat_max / config.cs_step)) + 1
-    ar_steps = int(round(config.stat_max / config.ar_step)) + 1
-    od_steps = int(round(config.stat_max / config.od_step)) + 1
-    hp_steps = int(round(config.stat_max / config.hp_step)) + 1
 
     return {
         EventType.ABS_TIME: EventRange(EventType.ABS_TIME, 0, max_time_bin),
@@ -180,21 +167,13 @@ def _build_ranges(config: TokenizerConfig, grid: GridLayout) -> dict[EventType, 
         EventType.LINEAR_ANCHOR: EventRange(EventType.LINEAR_ANCHOR, 0, 0),
         EventType.RED_ANCHOR: EventRange(EventType.RED_ANCHOR, 0, 0),
         EventType.SLIDER_SLIDES: EventRange(EventType.SLIDER_SLIDES, 1, config.slider_slides_max),
+        EventType.SLIDER_SUSTAIN: EventRange(EventType.SLIDER_SUSTAIN, 0, 0),
+        EventType.SLIDER_REPEAT_SUSTAIN: EventRange(EventType.SLIDER_REPEAT_SUSTAIN, 0, 0),
         EventType.DURATION: EventRange(EventType.DURATION, 0, DURATION_COUNT - 1),
         EventType.BEAT: EventRange(EventType.BEAT, 0, 0),
         EventType.MEASURE: EventRange(EventType.MEASURE, 0, 0),
         EventType.TIMING_POINT: EventRange(EventType.TIMING_POINT, 0, 0),
         EventType.KIAI: EventRange(EventType.KIAI, 0, 1),
         EventType.SCROLL_SPEED: EventRange(EventType.SCROLL_SPEED, 0, config.scroll_speed_max),
-        EventType.DIFFICULTY: EventRange(EventType.DIFFICULTY, 0, config.difficulty_bins - 1),
-        EventType.DESCRIPTOR: EventRange(EventType.DESCRIPTOR, 0, len(DESCRIPTOR_TAGS) - 1),
-        EventType.YEAR: EventRange(EventType.YEAR, config.year_min, config.year_max),
-        EventType.HITSOUNDED: EventRange(EventType.HITSOUNDED, 0, 1),
-        EventType.CS: EventRange(EventType.CS, 0, stat_steps - 1),
-        EventType.AR: EventRange(EventType.AR, 0, ar_steps - 1),
-        EventType.OD: EventRange(EventType.OD, 0, od_steps - 1),
-        EventType.HP: EventRange(EventType.HP, 0, hp_steps - 1),
-        EventType.GLOBAL_SV: EventRange(EventType.GLOBAL_SV, config.global_sv_min, config.global_sv_max),
-        EventType.SONG_LENGTH: EventRange(EventType.SONG_LENGTH, 0, config.song_length_buckets - 1),
-        EventType.SONG_POSITION: EventRange(EventType.SONG_POSITION, config.song_position_min, config.song_position_max),
+        EventType.SAMPLESET: EventRange(EventType.SAMPLESET, 0, 2),
     }

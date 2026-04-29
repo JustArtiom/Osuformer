@@ -66,7 +66,6 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
         seed=cfg.training.seed,
         reader=reader,
         timing_jitter_bins=cfg.training.timing_jitter_bins,
-        cfg_dropout_prob=cfg.training.cfg_dropout_prob,
     )
     val_ds = OsuDataset(
         cache_root=Path(cfg.paths.cache),

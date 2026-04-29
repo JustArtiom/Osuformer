@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import random
 from dataclasses import dataclass
 
 import torch
@@ -27,14 +26,12 @@ class SequenceBuilder:
         max_len: int,
         history_event_count: int,
         timing_jitter_bins: int = 0,
-        cfg_dropout_prob: float = 0.0,
     ):
         self.vocab = vocab
         self.cfg = tokenizer_cfg
         self.max_len = max_len
         self.history_event_count = history_event_count
         self.timing_jitter_bins = max(0, timing_jitter_bins)
-        self.cfg_dropout_prob = max(0.0, min(1.0, cfg_dropout_prob))
         self._type_order = [er.type for er in vocab.output_ranges] + [er.type for er in vocab.input_ranges]
         self._abs_type_idx = self._type_order.index(EventType.ABS_TIME)
         total_ms = tokenizer_cfg.context_ms + tokenizer_cfg.generate_ms + tokenizer_cfg.lookahead_ms
@@ -55,11 +52,8 @@ class SequenceBuilder:
         window_start_bin = int(round(window_start_ms / self.cfg.dt_bin_ms))
         history_groups, window_groups = self._slice_groups(event_types, event_values, window_start_bin)
 
-        tokens: list[int] = [int(SpecialToken.SOS_SEQ)]
-        if self.cfg_dropout_prob <= 0.0 or random.random() >= self.cfg_dropout_prob:
-            for ev in self._conditioning(map_record, metadata):
-                tokens.append(self.vocab.encode_event(ev))
-        tokens.append(int(SpecialToken.MAP_START))
+        del map_record, metadata
+        tokens: list[int] = [int(SpecialToken.SOS_SEQ), int(SpecialToken.MAP_START)]
 
         history_trimmed = history_groups[-self.history_event_count :] if self.history_event_count > 0 else []
         last_raw_bin: int | None = None
@@ -174,39 +168,3 @@ class SequenceBuilder:
             return self._max_rel_bin
         return delta
 
-    def _conditioning(self, map_record: dict, metadata: MetadataRecord | None) -> list[Event]:
-        events: list[Event] = []
-        events.append(Event(EventType.HITSOUNDED, 1 if map_record.get("hitsounded", False) else 0))
-        events.append(self._cs_event(map_record.get("circle_size", 5.0)))
-        events.append(self._stat_event(EventType.AR, map_record.get("approach_rate", 5.0), self.cfg.ar_step))
-        events.append(self._stat_event(EventType.OD, map_record.get("overall_difficulty", 5.0), self.cfg.od_step))
-        events.append(self._stat_event(EventType.HP, map_record.get("hp_drain_rate", 5.0), self.cfg.hp_step))
-        sv = int(round(float(map_record.get("slider_multiplier", 1.4)) * 100))
-        sv = max(self.cfg.global_sv_min, min(self.cfg.global_sv_max, sv))
-        events.append(Event(EventType.GLOBAL_SV, sv))
-        duration_ms = float(map_record.get("duration_ms", 0.0))
-        bucket = int(duration_ms / (self.cfg.song_length_bucket_s * 1000.0))
-        bucket = max(0, min(self.cfg.song_length_buckets - 1, bucket))
-        events.append(Event(EventType.SONG_LENGTH, bucket))
-
-        if metadata is not None:
-            star = metadata.star_rating
-            bins = self.cfg.difficulty_bins
-            idx = int(round(star * (bins - 1) / self.cfg.difficulty_max_star))
-            idx = max(0, min(bins - 1, idx))
-            events.append(Event(EventType.DIFFICULTY, idx))
-            year = metadata.ranked_year
-            if year >= self.cfg.year_min and year <= self.cfg.year_max:
-                events.append(Event(EventType.YEAR, year))
-            for descriptor_idx in metadata.descriptor_indices:
-                events.append(Event(EventType.DESCRIPTOR, descriptor_idx))
-        return events
-
-    def _cs_event(self, value: float) -> Event:
-        return self._stat_event(EventType.CS, value, self.cfg.cs_step)
-
-    def _stat_event(self, event_type: EventType, value: float, step: float) -> Event:
-        idx = int(round(float(value) / step))
-        er = self.vocab.range_for(event_type)
-        idx = max(er.min_value, min(er.max_value, idx))
-        return Event(type=event_type, value=idx)

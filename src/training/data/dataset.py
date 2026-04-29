@@ -43,7 +43,6 @@ class OsuDataset(Dataset[OsuSample]):
         preload: bool = False,
         reader: CacheReader | None = None,
         timing_jitter_bins: int = 0,
-        cfg_dropout_prob: float = 0.0,
     ):
         self._paths = CachePaths(root=cache_root / cache_name)
         self._reader = reader if reader is not None else CacheReader(cache_root=cache_root, name=cache_name, preload=preload)
@@ -62,7 +61,6 @@ class OsuDataset(Dataset[OsuSample]):
             max_len=max_decoder_len,
             history_event_count=history_event_count,
             timing_jitter_bins=timing_jitter_bins,
-            cfg_dropout_prob=cfg_dropout_prob,
         )
         self._base_seed = seed
 
