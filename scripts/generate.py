@@ -96,6 +96,7 @@ def main(
     model = Osuformer(
         model_cfg=cfg.model,
         audio_cfg=cfg.audio,
+        tokenizer_cfg=cfg.tokenizer,
         vocab_size_in=vocab.vocab_size_in,
         vocab_size_out=vocab.vocab_size_out,
         max_decoder_len=cfg.training.max_decoder_len,

@@ -27,6 +27,7 @@ def _build_sample(jitter_bins: int, seed: int = 0) -> torch.Tensor:
         tokenizer_cfg=cfg,
         max_len=2048,
         history_event_count=32,
+        descriptor_count=8,
         timing_jitter_bins=jitter_bins,
     )
     seq = builder.build(
@@ -106,13 +107,13 @@ def test_jitter_leaves_targets_unchanged() -> None:
     event_values = [e.value for e in merged]
 
     torch.manual_seed(0)
-    clean = SB(vocab=vocab, tokenizer_cfg=cfg, max_len=2048, history_event_count=32, timing_jitter_bins=0).build(
+    clean = SB(vocab=vocab, tokenizer_cfg=cfg, max_len=2048, history_event_count=32, descriptor_count=8, timing_jitter_bins=0).build(
         event_types=event_types, event_values=event_values,
         map_record={"hitsounded": True, "circle_size": 4.0, "approach_rate": 9.0, "overall_difficulty": 8.0, "hp_drain_rate": 6.0, "slider_multiplier": 1.4, "duration_ms": 5000.0},
         metadata=None, window_start_ms=0.0,
     )
     torch.manual_seed(0)
-    jittered = SB(vocab=vocab, tokenizer_cfg=cfg, max_len=2048, history_event_count=32, timing_jitter_bins=2).build(
+    jittered = SB(vocab=vocab, tokenizer_cfg=cfg, max_len=2048, history_event_count=32, descriptor_count=8, timing_jitter_bins=2).build(
         event_types=event_types, event_values=event_values,
         map_record={"hitsounded": True, "circle_size": 4.0, "approach_rate": 9.0, "overall_difficulty": 8.0, "hp_drain_rate": 6.0, "slider_multiplier": 1.4, "duration_ms": 5000.0},
         metadata=None, window_start_ms=0.0,

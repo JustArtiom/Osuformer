@@ -12,6 +12,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 
 from src.config.schemas.app import AppConfig
+from src.model.conditioning import ConditionFeatures
 from src.training.checkpoint import CheckpointManager
 from src.training.distributed import DistEnv, all_reduce_mean, barrier
 from src.training.plotting import TrainingHistory, load_history, plot_history, save_history
@@ -181,20 +182,48 @@ class Trainer:
 
     def _forward_backward(self, batch, scale: float) -> tuple[float, int]:
         mel = batch.mel.to(self.device, non_blocking=True)
+        summary_mel = batch.summary_mel.to(self.device, non_blocking=True)
         input_ids = batch.input_ids.to(self.device, non_blocking=True)
         target_ids = batch.target_ids.to(self.device, non_blocking=True)
         loss_mask = batch.loss_mask.to(self.device, non_blocking=True)
         loss_weights = batch.loss_weights.to(self.device, non_blocking=True)
         token_pad_mask = batch.token_pad_mask.to(self.device, non_blocking=True)
+        cond_features = _move_cond_features(batch.cond_features, self.device)
+        star_target = batch.star_target.to(self.device, non_blocking=True)
+        descriptor_target = batch.descriptor_target.to(self.device, non_blocking=True)
+
+        cond_null_mask = self._sample_cond_null_mask(input_ids.shape[0])
 
         autocast_ctx = torch.autocast(device_type=self.device.type, dtype=self._amp_dtype, enabled=self._amp_enabled)
         with autocast_ctx:
-            output = self.model(mel=mel, input_ids=input_ids, token_key_padding_mask=token_pad_mask)
-            logits = output.logits
-            loss = _masked_cross_entropy(logits, target_ids, loss_mask, loss_weights)
-        scaled = loss * scale
+            output = self.model(
+                mel=mel,
+                input_ids=input_ids,
+                cond_features=cond_features,
+                summary_mel=summary_mel,
+                cond_null_mask=cond_null_mask,
+                token_key_padding_mask=token_pad_mask,
+            )
+            ce_loss = _masked_cross_entropy(output.logits, target_ids, loss_mask, loss_weights)
+            star_loss = nn.functional.smooth_l1_loss(output.aux.star, star_target)
+            descriptor_loss = nn.functional.binary_cross_entropy_with_logits(
+                output.aux.descriptor_logits, descriptor_target
+            )
+            total = (
+                ce_loss
+                + self.cfg.training.aux_star_weight * star_loss
+                + self.cfg.training.aux_descriptor_weight * descriptor_loss
+            )
+        scaled = total * scale
         scaled.backward()
-        return float(loss.detach().item()), int(loss_mask.sum().item())
+        return float(ce_loss.detach().item()), int(loss_mask.sum().item())
+
+    def _sample_cond_null_mask(self, batch_size: int) -> Tensor | None:
+        prob = float(self.cfg.training.cfg_dropout_prob)
+        if prob <= 0.0:
+            return None
+        rand = torch.rand(batch_size, device=self.device)
+        return rand < prob
 
     @torch.no_grad()
     def _validate(self) -> float:
@@ -204,14 +233,22 @@ class Trainer:
         tokens = 0
         for batch in self.val_loader:
             mel = batch.mel.to(self.device, non_blocking=True)
+            summary_mel = batch.summary_mel.to(self.device, non_blocking=True)
             input_ids = batch.input_ids.to(self.device, non_blocking=True)
             target_ids = batch.target_ids.to(self.device, non_blocking=True)
             loss_mask = batch.loss_mask.to(self.device, non_blocking=True)
             loss_weights = batch.loss_weights.to(self.device, non_blocking=True)
             token_pad_mask = batch.token_pad_mask.to(self.device, non_blocking=True)
+            cond_features = _move_cond_features(batch.cond_features, self.device)
             autocast_ctx = torch.autocast(device_type=self.device.type, dtype=self._amp_dtype, enabled=self._amp_enabled)
             with autocast_ctx:
-                output = self.model(mel=mel, input_ids=input_ids, token_key_padding_mask=token_pad_mask)
+                output = self.model(
+                    mel=mel,
+                    input_ids=input_ids,
+                    cond_features=cond_features,
+                    summary_mel=summary_mel,
+                    token_key_padding_mask=token_pad_mask,
+                )
                 loss = _masked_cross_entropy(output.logits, target_ids, loss_mask, loss_weights)
             n = int(loss_mask.sum().item())
             total += float(loss.item()) * n
@@ -289,3 +326,11 @@ def _infinite(loader: DataLoader):
     while True:
         for batch in loader:
             yield batch
+
+
+def _move_cond_features(features: ConditionFeatures, device: torch.device) -> ConditionFeatures:
+    return ConditionFeatures(
+        scalars=features.scalars.to(device, non_blocking=True),
+        year_idx=features.year_idx.to(device, non_blocking=True),
+        descriptors=features.descriptors.to(device, non_blocking=True),
+    )

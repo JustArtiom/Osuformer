@@ -14,17 +14,23 @@ from src.cache.paths import CachePaths
 from src.cache.reader import CacheReader
 from src.config.schemas.audio import AudioConfig
 from src.config.schemas.tokenizer import TokenizerConfig
+from src.model.conditioning import ConditionFeatures
 from src.osu_tokenizer import Vocab
+from src.outline import downsample_mel_to_summary
 
-from .sequence_builder import SequenceBuilder, SequenceSample
+from .sequence_builder import SequenceBuilder
 
 
 @dataclass
 class OsuSample:
     mel: Tensor
+    summary_mel: Tensor
     input_ids: Tensor
     target_ids: Tensor
     loss_mask: Tensor
+    cond_features: ConditionFeatures
+    star_target: Tensor
+    descriptor_target: Tensor
 
 
 class OsuDataset(Dataset[OsuSample]):
@@ -38,6 +44,8 @@ class OsuDataset(Dataset[OsuSample]):
         audio_cfg: AudioConfig,
         max_decoder_len: int,
         history_event_count: int,
+        descriptor_count: int,
+        summary_frames: int,
         epoch_length: int,
         seed: int,
         preload: bool = False,
@@ -54,12 +62,14 @@ class OsuDataset(Dataset[OsuSample]):
         self._audio_cfg = audio_cfg
         self._total_ms = tokenizer_cfg.context_ms + tokenizer_cfg.generate_ms + tokenizer_cfg.lookahead_ms
         self._frames_per_window = int(self._total_ms / audio_cfg.hop_ms)
+        self._summary_frames = summary_frames
         self._epoch_length = epoch_length
         self._builder = SequenceBuilder(
             vocab=vocab,
             tokenizer_cfg=tokenizer_cfg,
             max_len=max_decoder_len,
             history_event_count=history_event_count,
+            descriptor_count=descriptor_count,
             timing_jitter_bins=timing_jitter_bins,
         )
         self._base_seed = seed
@@ -85,16 +95,21 @@ class OsuDataset(Dataset[OsuSample]):
             metadata=metadata,
             window_start_ms=window_start_ms,
         )
-        mel = self._slice_mel(str(map_rec["audio_key"]), window_start_ms)
+        full = self._reader.load_audio(str(map_rec["audio_key"]))
+        mel = self._extract_window(full, window_start_ms)
+        summary = self._extract_summary(full)
         return OsuSample(
             mel=mel,
+            summary_mel=summary,
             input_ids=seq.input_ids,
             target_ids=seq.target_ids,
             loss_mask=seq.loss_mask,
+            cond_features=seq.cond_features,
+            star_target=seq.star_target,
+            descriptor_target=seq.descriptor_target,
         )
 
-    def _slice_mel(self, audio_key: str, window_start_ms: float) -> Tensor:
-        full = self._reader.load_audio(audio_key)
+    def _extract_window(self, full: np.ndarray, window_start_ms: float) -> Tensor:
         start_frame = int(round(window_start_ms / self._audio_cfg.hop_ms))
         end_frame = start_frame + self._frames_per_window
         window = full[start_frame:end_frame]
@@ -102,3 +117,7 @@ class OsuDataset(Dataset[OsuSample]):
             pad = np.zeros((self._frames_per_window - window.shape[0], window.shape[1]), dtype=np.float16)
             window = np.concatenate([window, pad], axis=0)
         return torch.from_numpy(window.astype(np.float32))
+
+    def _extract_summary(self, full: np.ndarray) -> Tensor:
+        full_tensor = torch.from_numpy(full.astype(np.float32))
+        return downsample_mel_to_summary(full_tensor, self._summary_frames).squeeze(0)

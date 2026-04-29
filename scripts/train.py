@@ -13,6 +13,7 @@ from src.config import with_config
 from src.config.schemas.app import AppConfig
 from src.model import Osuformer
 from src.osu_tokenizer import Vocab
+from src.osu_tokenizer.descriptors import DESCRIPTOR_TAGS
 from src.training.data import Collator, OsuDataset, split_beatmap_ids
 from src.training.distributed import destroy_distributed, setup_distributed
 from src.training.trainer import Trainer
@@ -53,6 +54,8 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
     if dist_env.is_main:
         print(f"train: {len(splits.train)} maps, val: {len(splits.val)} maps")
 
+    descriptor_count = len(DESCRIPTOR_TAGS)
+    summary_frames = cfg.model.outliner.summary_frames
     train_ds = OsuDataset(
         cache_root=Path(cfg.paths.cache),
         cache_name=cfg.training.cache_name,
@@ -62,6 +65,8 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
         audio_cfg=cfg.audio,
         max_decoder_len=cfg.training.max_decoder_len,
         history_event_count=cfg.training.history_event_count,
+        descriptor_count=descriptor_count,
+        summary_frames=summary_frames,
         epoch_length=epoch_length,
         seed=cfg.training.seed,
         reader=reader,
@@ -76,6 +81,8 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
         audio_cfg=cfg.audio,
         max_decoder_len=cfg.training.max_decoder_len,
         history_event_count=cfg.training.history_event_count,
+        descriptor_count=descriptor_count,
+        summary_frames=summary_frames,
         epoch_length=max(512, epoch_length // 20),
         seed=cfg.training.seed + 1,
         reader=reader,
@@ -135,6 +142,7 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
     model = Osuformer(
         model_cfg=cfg.model,
         audio_cfg=cfg.audio,
+        tokenizer_cfg=cfg.tokenizer,
         vocab_size_in=vocab.vocab_size_in,
         vocab_size_out=vocab.vocab_size_out,
         max_decoder_len=cfg.training.max_decoder_len,

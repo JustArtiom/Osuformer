@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
+from src.model.conditioning import ConditionFeatures
 from src.osu_tokenizer import EventType, SpecialToken, Vocab
 
 from .dataset import OsuSample
@@ -13,11 +14,15 @@ from .dataset import OsuSample
 @dataclass
 class Batch:
     mel: Tensor
+    summary_mel: Tensor
     input_ids: Tensor
     target_ids: Tensor
     loss_mask: Tensor
     loss_weights: Tensor
     token_pad_mask: Tensor
+    cond_features: ConditionFeatures
+    star_target: Tensor
+    descriptor_target: Tensor
 
 
 class Collator:
@@ -49,6 +54,7 @@ class Collator:
 
     def __call__(self, samples: list[OsuSample]) -> Batch:
         mel = torch.stack([s.mel for s in samples], dim=0)
+        summary_mel = torch.stack([s.summary_mel for s in samples], dim=0)
         max_len = max(s.input_ids.shape[0] for s in samples)
         b = len(samples)
         input_ids = torch.full((b, max_len), self.pad_id, dtype=torch.long)
@@ -78,11 +84,22 @@ class Collator:
             torch.full_like(loss_weights, self.rhythm_weight),
             loss_weights,
         )
+        cond_features = ConditionFeatures(
+            scalars=torch.stack([s.cond_features.scalars for s in samples], dim=0),
+            year_idx=torch.stack([s.cond_features.year_idx for s in samples], dim=0),
+            descriptors=torch.stack([s.cond_features.descriptors for s in samples], dim=0),
+        )
+        star_target = torch.stack([s.star_target for s in samples], dim=0)
+        descriptor_target = torch.stack([s.descriptor_target for s in samples], dim=0)
         return Batch(
             mel=mel,
+            summary_mel=summary_mel,
             input_ids=input_ids,
             target_ids=target_ids,
             loss_mask=loss_mask,
             loss_weights=loss_weights,
             token_pad_mask=token_pad_mask,
+            cond_features=cond_features,
+            star_target=star_target,
+            descriptor_target=descriptor_target,
         )

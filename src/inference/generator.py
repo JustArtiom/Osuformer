@@ -5,16 +5,16 @@ from dataclasses import dataclass
 
 import numpy as np
 import torch
-from torch import Tensor
 from tqdm.auto import tqdm
 
 from src.config.schemas.audio import AudioConfig
 from src.config.schemas.tokenizer import TokenizerConfig
 from src.model import Osuformer
 from src.osu_tokenizer import Event, EventType, SpecialToken, Vocab
+from src.outline import downsample_mel_to_summary
 
 from .grammar import GrammarState
-from .prompt import GenerationPrompt, build_conditioning_tokens
+from .prompt import GenerationPrompt, build_condition_features, condition_features_to_device
 from .sampler import SamplingConfig, sample_next_token
 
 
@@ -74,7 +74,19 @@ class WindowGenerator:
     ) -> GenerationResult:
         self.model.eval()
         events: list[tuple[int, list[Event]]] = []
-        cond_tokens = build_conditioning_tokens(prompt, self.vocab, self.tokenizer_cfg)
+        cond_features_cpu = build_condition_features(
+            prompt=prompt,
+            tokenizer_cfg=self.tokenizer_cfg,
+            descriptor_count=self.model.descriptor_count,
+        )
+        cond_features = condition_features_to_device(cond_features_cpu, self.device)
+        cond_vec = self.model.encode_condition(cond_features)
+        null_vec = self.model.null_condition(batch_size=1, device=self.device)
+        summary_mel_tensor: torch.Tensor | None = None
+        if self.model.outliner is not None:
+            full_tensor = torch.from_numpy(mel.astype(np.float32))
+            summary = downsample_mel_to_summary(full_tensor, self.model.outliner.config.summary_frames)
+            summary_mel_tensor = summary.to(self.device)
         window_starts: list[float] = []
         window_start_ms = 0.0
         total_windows = max(1, math.ceil(song_duration_ms / self.tokenizer_cfg.generate_ms))
@@ -83,7 +95,9 @@ class WindowGenerator:
             window_starts.append(window_start_ms)
             window_events = self._generate_window(
                 mel=mel,
-                prompt_conditioning_tokens=cond_tokens,
+                cond_vec=cond_vec,
+                null_vec=null_vec,
+                summary_mel=summary_mel_tensor,
                 window_start_ms=window_start_ms,
                 history_groups=events,
             )
@@ -103,34 +117,36 @@ class WindowGenerator:
     def _generate_window(
         self,
         mel: np.ndarray,
-        prompt_conditioning_tokens: list[int],
+        cond_vec: torch.Tensor,
+        null_vec: torch.Tensor,
+        summary_mel: torch.Tensor | None,
         window_start_ms: float,
         history_groups: list[tuple[int, list[Event]]],
     ) -> list[tuple[int, list[Event]]]:
         mel_slice = self._slice_mel(mel, window_start_ms)
         mel_tensor = torch.from_numpy(mel_slice.astype(np.float32)).unsqueeze(0).to(self.device)
-        memory = self.model.encode(mel_tensor)
+        if summary_mel is not None:
+            summary_batch = summary_mel.unsqueeze(0) if summary_mel.dim() == 2 else summary_mel
+            memory = self.model.encode(mel_tensor, summary_mel=summary_batch)
+        else:
+            memory = self.model.encode(mel_tensor)
         grammar = GrammarState(self.vocab)
 
-        suffix: list[int] = []
+        tokens: list[int] = [int(SpecialToken.SOS_SEQ), int(SpecialToken.MAP_START)]
         last_raw_bin: int | None = None
         history = history_groups[-self.history_event_count :] if self.history_event_count > 0 else []
         for raw_abs, group in history:
             rel = self._rel(last_raw_bin, raw_abs)
-            suffix.append(int(SpecialToken.TIME_ABS_NULL))
-            suffix.append(self.vocab.encode_event(Event(EventType.REL_TIME, rel)))
+            tokens.append(int(SpecialToken.TIME_ABS_NULL))
+            tokens.append(self.vocab.encode_event(Event(EventType.REL_TIME, rel)))
             for ev in group:
-                suffix.append(self.vocab.encode_event(ev))
+                tokens.append(self.vocab.encode_event(ev))
             last_raw_bin = raw_abs
-        suffix.append(int(SpecialToken.HISTORY_END))
-        suffix.append(int(SpecialToken.SOS))
+        tokens.append(int(SpecialToken.HISTORY_END))
+        tokens.append(int(SpecialToken.SOS))
 
-        cond_tokens: list[int] = list(prompt_conditioning_tokens) + suffix
         guidance = self.sampling.guidance_scale
         use_cfg = abs(guidance - 1.0) > 1e-6
-        uncond_tokens: list[int] = (
-            [int(SpecialToken.SOS_SEQ), int(SpecialToken.MAP_START)] + suffix if use_cfg else []
-        )
 
         window_start_bin = int(round(window_start_ms / self.tokenizer_cfg.dt_bin_ms))
         generate_end_bin = self._context_bins + (self.tokenizer_cfg.generate_ms // self.tokenizer_cfg.dt_bin_ms)
@@ -142,15 +158,14 @@ class WindowGenerator:
         last_emitted_window_local: int | None = None
         min_spacing = max(0, self.sampling.min_abs_time_spacing_bins)
 
-        cond_ids = torch.tensor(cond_tokens, dtype=torch.long, device=self.device).unsqueeze(0)
+        prompt_ids = torch.tensor(tokens, dtype=torch.long, device=self.device).unsqueeze(0)
         cond_step, cond_cache = self.model.decode_step(
-            cond_ids, memory=memory, cache=None, start_pos=0
+            prompt_ids, memory=memory, cond=cond_vec, cache=None, start_pos=0
         )
         cond_logits = cond_step[0, -1, : self._vocab_out]
         if use_cfg:
-            uncond_ids = torch.tensor(uncond_tokens, dtype=torch.long, device=self.device).unsqueeze(0)
             uncond_step, uncond_cache = self.model.decode_step(
-                uncond_ids, memory=memory, cache=None, start_pos=0
+                prompt_ids, memory=memory, cond=null_vec, cache=None, start_pos=0
             )
             uncond_logits = uncond_step[0, -1, : self._vocab_out]
             logits = uncond_logits + guidance * (cond_logits - uncond_logits)
@@ -158,10 +173,8 @@ class WindowGenerator:
             uncond_cache = None
             logits = cond_logits
 
-        cond_len = len(cond_tokens)
-        uncond_len = len(uncond_tokens)
-
-        while cond_len < self.max_decoder_len:
+        cur_len = len(tokens)
+        while cur_len < self.max_decoder_len:
             if expecting_rel:
                 assert current_raw_abs is not None
                 rel = self._rel(last_raw_bin, current_raw_abs)
@@ -207,15 +220,14 @@ class WindowGenerator:
 
             step_in = torch.tensor([[next_id]], dtype=torch.long, device=self.device)
             cond_step, cond_cache = self.model.decode_step(
-                step_in, memory=memory, cache=cond_cache, start_pos=cond_len
+                step_in, memory=memory, cond=cond_vec, cache=cond_cache, start_pos=cur_len
             )
-            cond_len += 1
+            cur_len += 1
             cond_logits = cond_step[0, -1, : self._vocab_out]
             if use_cfg:
                 uncond_step, uncond_cache = self.model.decode_step(
-                    step_in, memory=memory, cache=uncond_cache, start_pos=uncond_len
+                    step_in, memory=memory, cond=null_vec, cache=uncond_cache, start_pos=cur_len - 1
                 )
-                uncond_len += 1
                 uncond_logits = uncond_step[0, -1, : self._vocab_out]
                 logits = uncond_logits + guidance * (cond_logits - uncond_logits)
             else:

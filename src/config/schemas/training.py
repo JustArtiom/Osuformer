@@ -39,4 +39,6 @@ class TrainingConfig:
     encoder_lr_scale: float = 1.0
     rhythm_loss_weight: float = 3.0
     slider_loss_weight: float = 1.0
-    cfg_dropout_prob: float = 0.0
+    cfg_dropout_prob: float = 0.1
+    aux_star_weight: float = 0.05
+    aux_descriptor_weight: float = 0.05

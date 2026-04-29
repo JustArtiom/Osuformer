@@ -7,6 +7,7 @@ from torch import Tensor
 
 from src.cache.metadata import MetadataRecord
 from src.config.schemas.tokenizer import TokenizerConfig
+from src.model.conditioning import ConditionFeatures, encode_condition_features
 from src.osu_tokenizer import Event, EventType, SpecialToken, Vocab
 
 
@@ -15,7 +16,15 @@ class SequenceSample:
     input_ids: Tensor
     target_ids: Tensor
     loss_mask: Tensor
+    cond_features: ConditionFeatures
+    star_target: Tensor
+    descriptor_target: Tensor
     length: int
+
+
+_DROPPED_OUTPUT_TYPES: frozenset[EventType] = frozenset(
+    {EventType.POS, EventType.DISTANCE}
+)
 
 
 class SequenceBuilder:
@@ -25,12 +34,14 @@ class SequenceBuilder:
         tokenizer_cfg: TokenizerConfig,
         max_len: int,
         history_event_count: int,
+        descriptor_count: int,
         timing_jitter_bins: int = 0,
     ):
         self.vocab = vocab
         self.cfg = tokenizer_cfg
         self.max_len = max_len
         self.history_event_count = history_event_count
+        self.descriptor_count = descriptor_count
         self.timing_jitter_bins = max(0, timing_jitter_bins)
         self._type_order = [er.type for er in vocab.output_ranges] + [er.type for er in vocab.input_ranges]
         self._abs_type_idx = self._type_order.index(EventType.ABS_TIME)
@@ -52,25 +63,24 @@ class SequenceBuilder:
         window_start_bin = int(round(window_start_ms / self.cfg.dt_bin_ms))
         history_groups, window_groups = self._slice_groups(event_types, event_values, window_start_bin)
 
-        del map_record, metadata
         tokens: list[int] = [int(SpecialToken.SOS_SEQ), int(SpecialToken.MAP_START)]
 
         history_trimmed = history_groups[-self.history_event_count :] if self.history_event_count > 0 else []
         last_raw_bin: int | None = None
-        for group in history_trimmed:
-            raw_abs, events = group
+        for raw_abs, events in history_trimmed:
             rel = self._compute_rel(last_raw_bin, raw_abs)
             tokens.append(int(SpecialToken.TIME_ABS_NULL))
             tokens.append(self.vocab.encode_event(Event(EventType.REL_TIME, rel)))
             last_raw_bin = raw_abs
             for ev in events:
+                if ev.type in _DROPPED_OUTPUT_TYPES:
+                    continue
                 tokens.append(self.vocab.encode_event(ev))
 
         tokens.append(int(SpecialToken.HISTORY_END))
 
         sos_idx: int | None = None
-        for group in window_groups:
-            raw_abs, events = group
+        for raw_abs, events in window_groups:
             window_local = raw_abs - window_start_bin
             if sos_idx is None and window_local >= self._context_bin:
                 tokens.append(int(SpecialToken.SOS))
@@ -80,6 +90,8 @@ class SequenceBuilder:
             tokens.append(self.vocab.encode_event(Event(EventType.REL_TIME, rel)))
             last_raw_bin = raw_abs
             for ev in events:
+                if ev.type in _DROPPED_OUTPUT_TYPES:
+                    continue
                 tokens.append(self.vocab.encode_event(ev))
 
         if sos_idx is None:
@@ -102,12 +114,36 @@ class SequenceBuilder:
             loss_mask[start:end] = True
         if self.timing_jitter_bins > 0:
             input_ids = self._jitter_time_tokens(input_ids)
+
+        cond_features = encode_condition_features(
+            map_record=map_record,
+            metadata=metadata,
+            tokenizer_cfg=self.cfg,
+            descriptor_count=self.descriptor_count,
+        )
+        star_target = torch.tensor(
+            float(metadata.star_rating) if metadata is not None else 0.0,
+            dtype=torch.float32,
+        )
+        descriptor_target = self._descriptor_target(metadata)
         return SequenceSample(
             input_ids=input_ids,
             target_ids=target_ids,
             loss_mask=loss_mask,
+            cond_features=cond_features,
+            star_target=star_target,
+            descriptor_target=descriptor_target,
             length=input_ids.shape[0],
         )
+
+    def _descriptor_target(self, metadata: MetadataRecord | None) -> Tensor:
+        target = torch.zeros(self.descriptor_count, dtype=torch.float32)
+        if metadata is None:
+            return target
+        for idx in metadata.descriptor_indices:
+            if 0 <= idx < self.descriptor_count:
+                target[idx] = 1.0
+        return target
 
     def _jitter_time_tokens(self, input_ids: Tensor) -> Tensor:
         jitter_hi = self.timing_jitter_bins + 1
@@ -167,4 +203,3 @@ class SequenceBuilder:
         if delta < 0 or delta > self._max_rel_bin:
             return self._max_rel_bin
         return delta
-
