@@ -6,8 +6,8 @@ tokenizer:
   generate_ms: 10000
   lookahead_ms: 5000
 
-  coordinate_step: 32
-  coordinate_padding: 128
+  coordinate_step: 8
+  coordinate_padding: 64
 
   distance_max_px: 640
   snap_max: 16
