@@ -20,11 +20,16 @@ class SequenceSample:
     cond_features: ConditionFeatures
     star_target: Tensor
     descriptor_target: Tensor
+    density_target: Tensor
     length: int
 
 
 _DROPPED_OUTPUT_TYPES: frozenset[EventType] = frozenset(
     {EventType.POS, EventType.DISTANCE}
+)
+
+_DENSITY_MARKER_TYPES: frozenset[EventType] = frozenset(
+    {EventType.CIRCLE, EventType.SLIDER_HEAD, EventType.SPINNER}
 )
 
 
@@ -134,6 +139,11 @@ class SequenceBuilder:
             dtype=torch.float32,
         )
         descriptor_target = self._descriptor_target(metadata)
+        marker_count = sum(
+            1 for _, events in window_groups for ev in events if ev.type in _DENSITY_MARKER_TYPES
+        )
+        density_value = marker_count / max(1.0, self.cfg.generate_ms / 1000.0)
+        density_target = torch.tensor(density_value, dtype=torch.float32)
         return SequenceSample(
             input_ids=input_ids,
             target_ids=target_ids,
@@ -141,6 +151,7 @@ class SequenceBuilder:
             cond_features=cond_features,
             star_target=star_target,
             descriptor_target=descriptor_target,
+            density_target=density_target,
             length=input_ids.shape[0],
         )
 

@@ -23,6 +23,7 @@ class Batch:
     cond_features: ConditionFeatures
     star_target: Tensor
     descriptor_target: Tensor
+    density_target: Tensor
 
 
 class Collator:
@@ -92,6 +93,7 @@ class Collator:
         )
         star_target = torch.stack([s.star_target for s in samples], dim=0)
         descriptor_target = torch.stack([s.descriptor_target for s in samples], dim=0)
+        density_target = torch.stack([s.density_target for s in samples], dim=0)
         return Batch(
             mel=mel,
             summary_mel=summary_mel,
@@ -103,4 +105,5 @@ class Collator:
             cond_features=cond_features,
             star_target=star_target,
             descriptor_target=descriptor_target,
+            density_target=density_target,
         )

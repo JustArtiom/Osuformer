@@ -9,6 +9,7 @@ from torch import Tensor, nn
 class AuxOutputs:
     star: Tensor
     descriptor_logits: Tensor
+    density: Tensor
 
 
 class AuxHeads(nn.Module):
@@ -21,12 +22,14 @@ class AuxHeads(nn.Module):
         )
         self.star_head = nn.Linear(hidden_dim, 1)
         self.descriptor_head = nn.Linear(hidden_dim, descriptor_count)
+        self.density_head = nn.Linear(hidden_dim, 1)
 
     def forward(self, encoder_pool: Tensor) -> AuxOutputs:
         h = self.shared(self.norm(encoder_pool))
         star = self.star_head(h).squeeze(-1)
         descriptor_logits = self.descriptor_head(h)
-        return AuxOutputs(star=star, descriptor_logits=descriptor_logits)
+        density = self.density_head(h).squeeze(-1)
+        return AuxOutputs(star=star, descriptor_logits=descriptor_logits, density=density)
 
 
 def pool_encoder_output(memory: Tensor, key_padding_mask: Tensor | None) -> Tensor:

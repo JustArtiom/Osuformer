@@ -33,6 +33,7 @@ class OsuSample:
     cond_features: ConditionFeatures
     star_target: Tensor
     descriptor_target: Tensor
+    density_target: Tensor
 
 
 class OsuDataset(Dataset[OsuSample]):
@@ -111,6 +112,7 @@ class OsuDataset(Dataset[OsuSample]):
             cond_features=seq.cond_features,
             star_target=seq.star_target,
             descriptor_target=seq.descriptor_target,
+            density_target=seq.density_target,
         )
 
     def _extract_window(self, full: np.ndarray, window_start_ms: float) -> Tensor:

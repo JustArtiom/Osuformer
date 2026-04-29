@@ -42,4 +42,6 @@ class TrainingConfig:
     cfg_dropout_prob: float = 0.1
     aux_star_weight: float = 0.05
     aux_descriptor_weight: float = 0.05
+    aux_density_weight: float = 0.05
+    aux_warmup_steps: int = 2000
     z_loss_weight: float = 1.0e-4

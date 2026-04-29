@@ -191,8 +191,10 @@ class Trainer:
         cond_features = _move_cond_features(batch.cond_features, self.device)
         star_target = batch.star_target.to(self.device, non_blocking=True)
         descriptor_target = batch.descriptor_target.to(self.device, non_blocking=True)
+        density_target = batch.density_target.to(self.device, non_blocking=True)
 
         cond_null_mask = self._sample_cond_null_mask(input_ids.shape[0])
+        aux_warmup_factor = self._aux_warmup_factor()
 
         autocast_ctx = torch.autocast(device_type=self.device.type, dtype=self._amp_dtype, enabled=self._amp_enabled)
         with autocast_ctx:
@@ -209,11 +211,13 @@ class Trainer:
             descriptor_loss = nn.functional.binary_cross_entropy_with_logits(
                 output.aux.descriptor_logits, descriptor_target
             )
+            density_loss = nn.functional.smooth_l1_loss(output.aux.density, density_target)
             z_loss = _z_loss(output.logits, loss_mask)
             total = (
                 ce_loss
-                + self.cfg.training.aux_star_weight * star_loss
-                + self.cfg.training.aux_descriptor_weight * descriptor_loss
+                + aux_warmup_factor * self.cfg.training.aux_star_weight * star_loss
+                + aux_warmup_factor * self.cfg.training.aux_descriptor_weight * descriptor_loss
+                + aux_warmup_factor * self.cfg.training.aux_density_weight * density_loss
                 + self.cfg.training.z_loss_weight * z_loss
             )
         scaled = total * scale
@@ -226,6 +230,12 @@ class Trainer:
             return None
         rand = torch.rand(batch_size, device=self.device)
         return rand < prob
+
+    def _aux_warmup_factor(self) -> float:
+        warmup = max(1, int(self.cfg.training.aux_warmup_steps))
+        if self.step >= warmup:
+            return 1.0
+        return float(self.step) / float(warmup)
 
     @torch.no_grad()
     def _validate(self) -> float:
