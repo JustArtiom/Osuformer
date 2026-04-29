@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import torch
 from torch import Tensor, nn
+from torch.nn import functional as F
 
 from src.config.schemas.audio import AudioConfig
 from src.config.schemas.model import ModelConfig
@@ -50,7 +51,7 @@ class Osuformer(nn.Module):
             self.enc_to_dec = nn.Linear(encoder_dim, model_cfg.decoder.d_model)
         else:
             self.enc_to_dec = nn.Identity()
-        self.head = nn.Linear(model_cfg.decoder.d_model, vocab_size_out, bias=False)
+        self.vocab_size_out = vocab_size_out
         self.aux_heads = AuxHeads(
             encoder_dim=model_cfg.decoder.d_model,
             descriptor_count=cond_spec.descriptor_count,
@@ -138,7 +139,7 @@ class Osuformer(nn.Module):
             tgt_key_padding_mask=token_key_padding_mask,
             memory_key_padding_mask=memory_key_padding_mask,
         )
-        return self.head(dec)
+        return F.linear(dec, self._tied_head_weight())
 
     def decode_step(
         self,
@@ -157,7 +158,10 @@ class Osuformer(nn.Module):
             start_pos=start_pos,
             memory_key_padding_mask=memory_key_padding_mask,
         )
-        return self.head(dec), new_cache
+        return F.linear(dec, self._tied_head_weight()), new_cache
+
+    def _tied_head_weight(self) -> Tensor:
+        return self.decoder.embed.weight[: self.vocab_size_out]
 
     def num_parameters(self) -> int:
         return sum(p.numel() for p in self.parameters())

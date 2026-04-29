@@ -209,10 +209,12 @@ class Trainer:
             descriptor_loss = nn.functional.binary_cross_entropy_with_logits(
                 output.aux.descriptor_logits, descriptor_target
             )
+            z_loss = _z_loss(output.logits, loss_mask)
             total = (
                 ce_loss
                 + self.cfg.training.aux_star_weight * star_loss
                 + self.cfg.training.aux_descriptor_weight * descriptor_loss
+                + self.cfg.training.z_loss_weight * z_loss
             )
         scaled = total * scale
         scaled.backward()
@@ -320,6 +322,14 @@ def _masked_cross_entropy(
     loss = -gathered * token_weight
     denom = token_weight.sum().clamp(min=1)
     return loss.sum() / denom
+
+
+def _z_loss(logits: Tensor, mask: Tensor) -> Tensor:
+    log_z = torch.logsumexp(logits, dim=-1)
+    weight = mask.float()
+    sq = (log_z * weight).pow(2)
+    denom = weight.sum().clamp(min=1.0)
+    return sq.sum() / denom
 
 
 def _infinite(loader: DataLoader):
