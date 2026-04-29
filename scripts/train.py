@@ -12,6 +12,7 @@ from src.cache import CacheReader
 from src.config import with_config
 from src.config.schemas.app import AppConfig
 from src.model import Osuformer
+from src.model.mapper_vocab import MapperVocab, build_mapper_vocab
 from src.osu_tokenizer import Vocab
 from src.osu_tokenizer.descriptors import DESCRIPTOR_TAGS
 from src.training.data import Collator, OsuDataset, split_beatmap_ids
@@ -56,6 +57,11 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
 
     descriptor_count = len(DESCRIPTOR_TAGS)
     summary_frames = cfg.model.outliner.summary_frames
+    mapper_vocab_path = Path(cfg.paths.checkpoints) / cfg.training.run_name / "mapper_vocab.json"
+    mapper_vocab = _load_or_build_mapper_vocab(reader, splits.train, mapper_vocab_path, dist_env.is_main)
+    if dist_env.is_main:
+        print(f"mapper vocab: {len(mapper_vocab.creator_to_idx)} known mappers + UNK")
+
     train_ds = OsuDataset(
         cache_root=Path(cfg.paths.cache),
         cache_name=cfg.training.cache_name,
@@ -71,6 +77,7 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
         seed=cfg.training.seed,
         reader=reader,
         timing_jitter_bins=cfg.training.timing_jitter_bins,
+        mapper_lookup=mapper_vocab.encode,
     )
     val_ds = OsuDataset(
         cache_root=Path(cfg.paths.cache),
@@ -87,6 +94,7 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
         seed=cfg.training.seed + 1,
         reader=reader,
         timing_jitter_bins=0,
+        mapper_lookup=mapper_vocab.encode,
     )
     collator = Collator(
         vocab=vocab,
@@ -162,6 +170,21 @@ def main(cfg: AppConfig, epoch_length: int, train_ratio: float) -> None:
         trainer.fit()
     finally:
         destroy_distributed()
+
+
+def _load_or_build_mapper_vocab(reader: CacheReader, train_ids: list[int], path: Path, is_main: bool) -> MapperVocab:
+    if path.exists():
+        return MapperVocab.load(path)
+    if not is_main:
+        return MapperVocab(creator_to_idx={}, top_n=1024)
+    print(f"building mapper vocab from {len(train_ids)} maps...", flush=True)
+    creators: list[str] = []
+    for bid in train_ids:
+        rec = reader.load_map(bid)
+        creators.append(str(rec.get("creator", "")))
+    vocab = build_mapper_vocab(creators, top_n=1024)
+    vocab.save(path)
+    return vocab
 
 
 if __name__ == "__main__":
