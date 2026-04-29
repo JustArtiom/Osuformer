@@ -343,4 +343,5 @@ def _move_cond_features(features: ConditionFeatures, device: torch.device) -> Co
         scalars=features.scalars.to(device, non_blocking=True),
         year_idx=features.year_idx.to(device, non_blocking=True),
         descriptors=features.descriptors.to(device, non_blocking=True),
+        mapper_idx=features.mapper_idx.to(device, non_blocking=True),
     )

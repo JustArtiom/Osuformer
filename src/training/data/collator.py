@@ -88,6 +88,7 @@ class Collator:
             scalars=torch.stack([s.cond_features.scalars for s in samples], dim=0),
             year_idx=torch.stack([s.cond_features.year_idx for s in samples], dim=0),
             descriptors=torch.stack([s.cond_features.descriptors for s in samples], dim=0),
+            mapper_idx=torch.stack([s.cond_features.mapper_idx for s in samples], dim=0),
         )
         star_target = torch.stack([s.star_target for s in samples], dim=0)
         descriptor_target = torch.stack([s.descriptor_target for s in samples], dim=0)

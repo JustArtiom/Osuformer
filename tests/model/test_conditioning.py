@@ -20,6 +20,7 @@ def _features(spec, batch: int = 2) -> ConditionFeatures:
         scalars=torch.randn(batch, 8),
         year_idx=torch.zeros(batch, dtype=torch.long),
         descriptors=torch.zeros(batch, spec.descriptor_count),
+        mapper_idx=torch.zeros(batch, dtype=torch.long),
     )
 
 

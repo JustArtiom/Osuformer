@@ -62,4 +62,5 @@ def condition_features_to_device(features: ConditionFeatures, device: torch.devi
         scalars=features.scalars.unsqueeze(0).to(device),
         year_idx=features.year_idx.unsqueeze(0).to(device),
         descriptors=features.descriptors.unsqueeze(0).to(device),
+        mapper_idx=features.mapper_idx.unsqueeze(0).to(device),
     )

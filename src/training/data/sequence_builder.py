@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 import torch
 from torch import Tensor
@@ -36,6 +37,7 @@ class SequenceBuilder:
         history_event_count: int,
         descriptor_count: int,
         timing_jitter_bins: int = 0,
+        mapper_lookup: Callable[[str], int] | None = None,
     ):
         self.vocab = vocab
         self.cfg = tokenizer_cfg
@@ -43,6 +45,7 @@ class SequenceBuilder:
         self.history_event_count = history_event_count
         self.descriptor_count = descriptor_count
         self.timing_jitter_bins = max(0, timing_jitter_bins)
+        self.mapper_lookup = mapper_lookup
         self._type_order = [er.type for er in vocab.output_ranges] + [er.type for er in vocab.input_ranges]
         self._abs_type_idx = self._type_order.index(EventType.ABS_TIME)
         total_ms = tokenizer_cfg.context_ms + tokenizer_cfg.generate_ms + tokenizer_cfg.lookahead_ms
@@ -115,11 +118,16 @@ class SequenceBuilder:
         if self.timing_jitter_bins > 0:
             input_ids = self._jitter_time_tokens(input_ids)
 
+        mapper_idx = 0
+        if self.mapper_lookup is not None:
+            creator = str(map_record.get("creator", ""))
+            mapper_idx = self.mapper_lookup(creator)
         cond_features = encode_condition_features(
             map_record=map_record,
             metadata=metadata,
             tokenizer_cfg=self.cfg,
             descriptor_count=self.descriptor_count,
+            mapper_idx=mapper_idx,
         )
         star_target = torch.tensor(
             float(metadata.star_rating) if metadata is not None else 0.0,

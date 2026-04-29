@@ -9,6 +9,8 @@ import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 
+from typing import Callable
+
 from src.cache.metadata import MetadataRecord, read_metadata
 from src.cache.paths import CachePaths
 from src.cache.reader import CacheReader
@@ -51,6 +53,7 @@ class OsuDataset(Dataset[OsuSample]):
         preload: bool = False,
         reader: CacheReader | None = None,
         timing_jitter_bins: int = 0,
+        mapper_lookup: Callable[[str], int] | None = None,
     ):
         self._paths = CachePaths(root=cache_root / cache_name)
         self._reader = reader if reader is not None else CacheReader(cache_root=cache_root, name=cache_name, preload=preload)
@@ -71,6 +74,7 @@ class OsuDataset(Dataset[OsuSample]):
             history_event_count=history_event_count,
             descriptor_count=descriptor_count,
             timing_jitter_bins=timing_jitter_bins,
+            mapper_lookup=mapper_lookup,
         )
         self._base_seed = seed
 

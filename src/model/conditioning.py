@@ -20,10 +20,12 @@ class ConditionSpec:
     year_embed_dim: int
     descriptor_count: int
     descriptor_embed_dim: int
+    mapper_count: int
+    mapper_embed_dim: int
     hidden_dim: int
 
 
-def default_condition_spec(tokenizer_cfg: TokenizerConfig, cond_dim: int) -> ConditionSpec:
+def default_condition_spec(tokenizer_cfg: TokenizerConfig, cond_dim: int, mapper_count: int = 1024) -> ConditionSpec:
     return ConditionSpec(
         cond_dim=cond_dim,
         year_min=tokenizer_cfg.year_min,
@@ -31,6 +33,8 @@ def default_condition_spec(tokenizer_cfg: TokenizerConfig, cond_dim: int) -> Con
         year_embed_dim=64,
         descriptor_count=len(DESCRIPTOR_TAGS),
         descriptor_embed_dim=128,
+        mapper_count=mapper_count,
+        mapper_embed_dim=128,
         hidden_dim=cond_dim * 2,
     )
 
@@ -40,6 +44,7 @@ class ConditionFeatures:
     scalars: Tensor
     year_idx: Tensor
     descriptors: Tensor
+    mapper_idx: Tensor
 
 
 class ConditionEncoder(nn.Module):
@@ -49,7 +54,13 @@ class ConditionEncoder(nn.Module):
         year_count = spec.year_max - spec.year_min + 1
         self.year_embed = nn.Embedding(year_count + 1, spec.year_embed_dim)
         self.descriptor_proj = nn.Linear(spec.descriptor_count, spec.descriptor_embed_dim)
-        in_dim = SCALAR_FEATURE_COUNT + spec.year_embed_dim + spec.descriptor_embed_dim
+        self.mapper_embed = nn.Embedding(spec.mapper_count + 1, spec.mapper_embed_dim)
+        in_dim = (
+            SCALAR_FEATURE_COUNT
+            + spec.year_embed_dim
+            + spec.descriptor_embed_dim
+            + spec.mapper_embed_dim
+        )
         self.mlp = nn.Sequential(
             nn.Linear(in_dim, spec.hidden_dim),
             nn.SiLU(),
@@ -64,7 +75,8 @@ class ConditionEncoder(nn.Module):
     def forward(self, features: ConditionFeatures, null_mask: Tensor | None = None) -> Tensor:
         year_emb = self.year_embed(features.year_idx)
         desc_emb = self.descriptor_proj(features.descriptors)
-        combined = torch.cat([features.scalars, year_emb, desc_emb], dim=-1)
+        mapper_emb = self.mapper_embed(features.mapper_idx)
+        combined = torch.cat([features.scalars, year_emb, desc_emb, mapper_emb], dim=-1)
         encoded = self.mlp(combined)
         if null_mask is not None:
             null = self.null_embedding.unsqueeze(0).expand_as(encoded)
@@ -80,6 +92,7 @@ def encode_condition_features(
     metadata: MetadataRecord | None,
     tokenizer_cfg: TokenizerConfig,
     descriptor_count: int,
+    mapper_idx: int = 0,
 ) -> ConditionFeatures:
     scalars = torch.tensor(
         [
@@ -103,4 +116,10 @@ def encode_condition_features(
         for idx in metadata.descriptor_indices:
             if 0 <= idx < descriptor_count:
                 desc[idx] = 1.0
-    return ConditionFeatures(scalars=scalars, year_idx=year_idx, descriptors=desc)
+    mapper_tensor = torch.tensor(mapper_idx, dtype=torch.long)
+    return ConditionFeatures(
+        scalars=scalars,
+        year_idx=year_idx,
+        descriptors=desc,
+        mapper_idx=mapper_tensor,
+    )
