@@ -27,6 +27,7 @@ from src.osu_tokenizer import EventType, Vocab
 @click.option("--stars", default=None, type=float)
 @click.option("--year", default=None, type=int)
 @click.option("--bpm", default=0.0, type=float, help="Song BPM. Use 0 to auto-infer from model's BEAT tokens (requires new-tokenizer model).")
+@click.option("--offset", "offset_ms", default=None, type=float, help="Timing point offset in ms (the song's first downbeat). When set, overrides auto-timing's offset derivation and the model's TIMING_POINT placements. Use with --bpm for full manual override of the rhythm scaffold.")
 @click.option("--descriptors", default="", type=str, help="Comma-separated descriptor tags.")
 @click.option("--cs", default=4.0, type=float)
 @click.option("--ar", default=9.0, type=float)
@@ -59,6 +60,7 @@ def main(
     stars: float | None,
     year: int | None,
     bpm: float,
+    offset_ms: float | None,
     descriptors: str,
     cs: float,
     ar: float,
@@ -157,7 +159,12 @@ def main(
         raise SystemExit("Could not infer BPM from BEAT tokens and --bpm not set; rerun with --bpm <value>.")
     if bpm <= 0:
         print(f"inferred BPM: {effective_bpm:.4f}")
-    snap_offset_ms = _resolve_offset_ms(result.events, cfg, effective_bpm) if auto_timing else 0.0
+    if offset_ms is not None:
+        snap_offset_ms = float(offset_ms)
+    elif auto_timing:
+        snap_offset_ms = _resolve_offset_ms(result.events, cfg, effective_bpm)
+    else:
+        snap_offset_ms = 0.0
     if snap_subdivision > 0:
         result.events[:] = _snap_events_to_beat(
             result.events,
@@ -184,6 +191,7 @@ def main(
         hp_drain_rate=hp,
         slider_multiplier=slider_multiplier,
         auto_timing=auto_timing,
+        offset_ms=offset_ms,
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(str(beatmap))

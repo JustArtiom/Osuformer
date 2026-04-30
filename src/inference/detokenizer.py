@@ -49,12 +49,13 @@ def events_to_beatmap(
     hp_drain_rate: float = 6.0,
     slider_multiplier: float = 1.4,
     auto_timing: bool = False,
+    offset_ms: float | None = None,
 ) -> Beatmap:
     groups = _group_by_abs_time(events)
     if auto_timing:
-        timing_points = _build_timing_points_from_beats(groups, tokenizer_cfg, bpm)
+        timing_points = _build_timing_points_from_beats(groups, tokenizer_cfg, bpm, offset_ms)
     else:
-        timing_points = _build_timing_points(groups, tokenizer_cfg, bpm)
+        timing_points = _build_timing_points(groups, tokenizer_cfg, bpm, offset_ms)
     hit_objects: list = []
     i = 0
     while i < len(groups):
@@ -141,24 +142,35 @@ def _build_timing_points(
     groups: list[tuple[int, list[Event]]],
     cfg: TokenizerConfig,
     bpm: float,
+    offset_ms: float | None = None,
 ) -> list[TimingPoint]:
     inferred_beat_length = _infer_beat_length_ms(groups, cfg)
     if bpm <= 0 and inferred_beat_length is None:
         raise ValueError("No BPM provided and no BEAT tokens emitted to infer from.")
     base_beat_length = inferred_beat_length if (bpm <= 0 and inferred_beat_length is not None) else 60000.0 / max(1.0, bpm)
+    primary_offset = float(offset_ms) if offset_ms is not None else 0.0
+    user_override = offset_ms is not None and bpm > 0
 
-    section_starts = [0.0] + [
+    section_starts = [primary_offset] + [
         float(abs_bin * cfg.dt_bin_ms)
         for abs_bin, group in groups
         if any(ev.type == EventType.TIMING_POINT for ev in group)
     ]
     section_starts = sorted(set(section_starts))
-    section_bpms = _per_section_beat_lengths(groups, cfg, section_starts, base_beat_length)
+    if user_override:
+        section_bpms: dict[float, float] = {s: base_beat_length for s in section_starts}
+    else:
+        section_bpms = _per_section_beat_lengths(groups, cfg, section_starts, base_beat_length)
 
     tps: list[TimingPoint] = [
-        TimingPoint(time=0.0, beat_length=section_bpms[0.0], uninherited=1, effects=Effects.NONE)
+        TimingPoint(
+            time=primary_offset,
+            beat_length=section_bpms.get(primary_offset, base_beat_length),
+            uninherited=1,
+            effects=Effects.NONE,
+        )
     ]
-    seen_times: set[float] = {0.0}
+    seen_times: set[float] = {primary_offset}
     for abs_bin, group in groups:
         time_ms = float(abs_bin * cfg.dt_bin_ms)
         if time_ms in seen_times:
@@ -228,6 +240,7 @@ def _build_timing_points_from_beats(
     groups: list[tuple[int, list[Event]]],
     cfg: TokenizerConfig,
     bpm: float,
+    offset_ms: float | None = None,
 ) -> list[TimingPoint]:
     beat_events: list[tuple[float, bool]] = []
     for abs_bin, group in groups:
@@ -236,10 +249,20 @@ def _build_timing_points_from_beats(
         is_beat = any(ev.type == EventType.BEAT for ev in group) or is_measure
         if is_beat:
             beat_events.append((time_ms, is_measure))
+    if offset_ms is not None and bpm > 0:
+        beat_length = 60000.0 / max(1.0, bpm)
+        tps: list[TimingPoint] = [
+            TimingPoint(time=float(offset_ms), beat_length=beat_length, uninherited=1, effects=Effects.NONE)
+        ]
+        seen_times: set[float] = {float(offset_ms)}
+        _append_inherited_points(tps, groups, cfg, seen_times)
+        tps.sort(key=lambda tp: tp.time)
+        return tps
     if len(beat_events) < 4:
         if bpm <= 0:
             raise ValueError("auto-timing needs at least 4 BEAT/MEASURE events or an explicit --bpm")
-        return [TimingPoint(time=0.0, beat_length=60000.0 / max(1.0, bpm), uninherited=1, effects=Effects.NONE)]
+        primary_offset = float(offset_ms) if offset_ms is not None else 0.0
+        return [TimingPoint(time=primary_offset, beat_length=60000.0 / max(1.0, bpm), uninherited=1, effects=Effects.NONE)]
     beat_events.sort(key=lambda x: x[0])
     times = [t for t, _ in beat_events]
     deltas = sorted(times[i + 1] - times[i] for i in range(len(times) - 1))
@@ -249,15 +272,29 @@ def _build_timing_points_from_beats(
     refined = _refine_beat_length(times, median_delta)
     if refined is not None:
         median_delta = refined
-    measure_times = [t for t, m in beat_events if m]
-    anchor_time = measure_times[0] if measure_times else times[0]
-    offset = anchor_time
-    while offset - median_delta * 4 >= 0:
-        offset -= median_delta * 4
+    if offset_ms is not None:
+        offset = float(offset_ms)
+    else:
+        measure_times = [t for t, m in beat_events if m]
+        anchor_time = measure_times[0] if measure_times else times[0]
+        offset = anchor_time
+        while offset - median_delta * 4 >= 0:
+            offset -= median_delta * 4
     tps: list[TimingPoint] = [
         TimingPoint(time=offset, beat_length=median_delta, uninherited=1, effects=Effects.NONE)
     ]
     seen_times: set[float] = {offset}
+    _append_inherited_points(tps, groups, cfg, seen_times)
+    tps.sort(key=lambda tp: tp.time)
+    return tps
+
+
+def _append_inherited_points(
+    tps: list[TimingPoint],
+    groups: list[tuple[int, list[Event]]],
+    cfg: TokenizerConfig,
+    seen_times: set[float],
+) -> None:
     for abs_bin, group in groups:
         time_ms = float(abs_bin * cfg.dt_bin_ms)
         if time_ms in seen_times:
@@ -272,8 +309,6 @@ def _build_timing_points_from_beats(
                 TimingPoint(time=time_ms, beat_length=beat_length, uninherited=0, effects=effects)
             )
             seen_times.add(time_ms)
-    tps.sort(key=lambda tp: tp.time)
-    return tps
 
 
 def _refine_beat_length(times: list[float], coarse_beat_length: float) -> float | None:
