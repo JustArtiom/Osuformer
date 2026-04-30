@@ -51,19 +51,34 @@ _ANCHOR_TYPES: tuple[EventType, ...] = (
 )
 
 
+_HEADER_PREFIX_BEFORE_POS: tuple[EventType, ...] = (
+    EventType.SNAPPING,
+    EventType.DISTANCE,
+    EventType.POS,
+)
+
+
 class GrammarState:
     def __init__(self, vocab: Vocab):
         self.vocab = vocab
         self._vocab_out = vocab.vocab_size_out
         self._masks: dict[GrammarPhase, Tensor] = self._build_masks()
+        self._header_pos_required_mask: Tensor = self._build_header_pos_required_mask()
         self.phase: GrammarPhase = GrammarPhase.BEFORE_OBJECT
         self._pending_marker: EventType | None = None
+        self._header_needs_pos: bool = False
 
     def reset(self) -> None:
         self.phase = GrammarPhase.BEFORE_OBJECT
         self._pending_marker = None
+        self._header_needs_pos = False
 
     def current_mask(self) -> Tensor:
+        if self._header_needs_pos and self.phase in (
+            GrammarPhase.CIRCLE_HEADER,
+            GrammarPhase.SLIDER_HEADER,
+        ):
+            return self._header_pos_required_mask
         return self._masks[self.phase]
 
     def update(self, token_id: int) -> None:
@@ -86,19 +101,25 @@ class GrammarState:
         ):
             self._pending_marker = et
             self.phase = GrammarPhase.AFTER_MARKER
+            self._header_needs_pos = False
             return
         if self.phase == GrammarPhase.AFTER_MARKER and et == EventType.ABS_TIME:
             if self._pending_marker == EventType.CIRCLE:
                 self.phase = GrammarPhase.CIRCLE_HEADER
+                self._header_needs_pos = True
             elif self._pending_marker == EventType.SLIDER_HEAD:
                 self.phase = GrammarPhase.SLIDER_HEADER
+                self._header_needs_pos = True
             elif self._pending_marker == EventType.SPINNER:
                 self.phase = GrammarPhase.SPINNER_HEADER
             self._pending_marker = None
             return
         if self.phase in (GrammarPhase.BEFORE_OBJECT, GrammarPhase.CIRCLE_HEADER) and et == EventType.ABS_TIME:
             self.phase = GrammarPhase.TIMING_HEADER
+            self._header_needs_pos = False
             return
+        if self._header_needs_pos and et == EventType.POS:
+            self._header_needs_pos = False
         self.phase = _transition(self.phase, et)
 
     def _build_masks(self) -> dict[GrammarPhase, Tensor]:
@@ -136,6 +157,13 @@ class GrammarState:
         masks[GrammarPhase.AFTER_SLIDER_DURATION] = mk((EventType.SLIDER_SLIDES, EventType.SLIDER_END))
         masks[GrammarPhase.SPINNER_AFTER_DURATION] = mk((EventType.SPINNER_END,))
         return masks
+
+    def _build_header_pos_required_mask(self) -> Tensor:
+        m = torch.zeros(self._vocab_out, dtype=torch.bool)
+        for t in _HEADER_PREFIX_BEFORE_POS:
+            start, end = self.vocab.token_range(t)
+            m[start:end] = True
+        return m
 
 
 def _transition(phase: GrammarPhase, event_type: EventType) -> GrammarPhase:
